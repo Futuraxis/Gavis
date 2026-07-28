@@ -1,0 +1,15 @@
+[project]
+name = "moon-chess-binding-ppo"
+version = "0.1.0"
+description = "Binding Layer and PPO demo for Moon Chess"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy",
+  "opencv-python",
+  "pydantic>=2,<3",
+  "pytest",
+  "torch",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

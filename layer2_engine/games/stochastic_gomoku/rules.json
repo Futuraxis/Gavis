@@ -1,0 +1,224 @@
+{
+  "languageVersion": "4.1.0",
+  "constants": {
+    "board_size": 9,
+    "vanish_probability": 0.5,
+    "win_length": 5
+  },
+  "queries": {
+    "empty_cells": {
+      "description": "所有空格子",
+      "expr": {
+        "query": {"type": "board_cell"},
+        "filter": {
+          "eq": [{"get": ["$node", "props.occupant"]}, {"const": null}]
+        }
+      }
+    }
+  },
+  "actions": [
+    {
+      "id": "place_stone",
+      "type": "move",
+      "actorKind": "player",
+      "actor": {"var": "$env.turn.currentPlayerId"},
+      "phases": ["playing"],
+      "params": {
+        "cell": {
+          "type": "node",
+          "label": "落子位置",
+          "domain": {"ref": "empty_cells"}
+        }
+      },
+      "legal": {"const": true},
+      "effectRef": "do_place",
+      "canonicalKey": {"template": "place:{cell.props.x},{cell.props.y}"}
+    }
+  ],
+  "effects": {
+    "do_place": {
+      "description": "落子 + 进入消失判定阶段",
+      "params": {
+        "cell": {"type": "node"},
+        "actor": {"type": "node"}
+      },
+      "ops": [
+        {
+          "op": "set",
+          "path": "state.nodes.{cell.id}.props.occupant",
+          "value": {"get": ["$actor", "id"]}
+        },
+        {
+          "op": "set",
+          "path": "state.env.lastPlacedCell",
+          "value": {"get": ["$cell", "id"]}
+        },
+        {
+          "op": "set",
+          "path": "state.env.lastActor",
+          "value": {"get": ["$actor", "id"]}
+        },
+        {
+          "op": "set",
+          "path": "state.env.phase",
+          "value": {"const": "vanish_check"}
+        },
+        {
+          "op": "inc",
+          "path": "state.env.turn.round",
+          "by": {"const": 1}
+        }
+      ]
+    },
+    "do_vanish": {
+      "description": "棋子消失",
+      "ops": [
+        {
+          "op": "set",
+          "path": "state.nodes.{cell.id}.props.occupant",
+          "value": {"const": null}
+        },
+        {
+          "op": "set",
+          "path": "state.env.lastAction",
+          "value": {"const": "vanished"}
+        }
+      ]
+    },
+    "do_keep": {
+      "description": "棋子保留: 检查胜利条件",
+      "ops": [
+        {
+          "op": "set",
+          "path": "state.env.lastAction",
+          "value": {"const": "kept"}
+        },
+        {
+          "op": "branch",
+          "if": {"call": ["check_five_in_row", {"var": "$state"}, {"get": ["$env", "lastPlacedCell"]}]},
+          "then": [
+            {"op": "set", "path": "state.env.winner", "value": {"get": ["$env", "lastActor"]}},
+            {"op": "set", "path": "state.env.phase", "value": {"const": "game_over"}}
+          ],
+          "else": []
+        }
+      ]
+    },
+    "switch_turn": {
+      "description": "切换回合",
+      "ops": [
+        {
+          "op": "set",
+          "path": "state.env.turn.currentPlayerId",
+          "value": {
+            "if": {
+              "cond": {"eq": [{"get": ["$env.turn", "currentPlayerId"]}, {"const": "p_black"}]},
+              "then": {"const": "p_white"},
+              "else": {"const": "p_black"}
+            }
+          }
+        },
+        {
+          "op": "set",
+          "path": "state.env.phase",
+          "value": {"const": "playing"}
+        }
+      ]
+    }
+  },
+  "chance": [
+    {
+      "id": "vanish",
+      "phases": ["vanish_check"],
+      "params": {
+        "outcome": {
+          "type": "enum",
+          "domain": ["vanish", "keep"]
+        }
+      },
+      "probability": {
+        "explicit": [
+          {"value": {"const": "vanish"}, "probability": {"const": 0.5}},
+          {"value": {"const": "keep"}, "probability": {"const": 0.5}}
+        ]
+      },
+      "effectMap": {
+        "vanish": "do_vanish",
+        "keep": "do_keep"
+      },
+      "canonicalKey": {"template": "chance:{outcome}"}
+    }
+  ],
+  "phases": [
+    {
+      "id": "playing",
+      "actions": ["place_stone"],
+      "description": "玩家回合: 选择空格落子"
+    },
+    {
+      "id": "vanish_check",
+      "actions": [],
+      "description": "随机判定: 棋子可能消失"
+    }
+  ],
+  "terminal": [
+    {
+      "id": "five_in_row",
+      "condition": {"eq": [{"get": ["$env", "phase"]}, {"const": "game_over"}]}
+    },
+    {
+      "id": "board_full",
+      "condition": {
+        "and": [
+          {"eq": [{"get": ["$env", "phase"]}, {"const": "playing"}]},
+          {"eq": [{"count": {"query": {"type": "board_cell", "where": {"eq": [{"get": ["$node", "props.occupant"]}, {"const": null}]}}}}, {"const": 0}]}
+        ]
+      }
+    }
+  ],
+  "utility": [
+    {
+      "player": "p_black",
+      "value": {"const": 1},
+      "when": {"eq": [{"get": ["$env", "winner"]}, {"const": "p_black"}]}
+    },
+    {
+      "player": "p_black",
+      "value": {"const": -1},
+      "when": {"eq": [{"get": ["$env", "winner"]}, {"const": "p_white"}]}
+    },
+    {
+      "player": "p_black",
+      "value": {"const": 0},
+      "when": {"eq": [{"get": ["$env", "winner"]}, {"const": null}]}
+    },
+    {
+      "player": "p_white",
+      "value": {"const": 1},
+      "when": {"eq": [{"get": ["$env", "winner"]}, {"const": "p_white"}]}
+    },
+    {
+      "player": "p_white",
+      "value": {"const": -1},
+      "when": {"eq": [{"get": ["$env", "winner"]}, {"const": "p_black"}]}
+    },
+    {
+      "player": "p_white",
+      "value": {"const": 0},
+      "when": {"eq": [{"get": ["$env", "winner"]}, {"const": null}]}
+    }
+  ],
+  "functions": {
+    "check_five_in_row": {
+      "name": "check_five_in_row",
+      "args": [
+        {"name": "state", "type": "StateGraph"},
+        {"name": "cellId", "type": "string"}
+      ],
+      "returns": "boolean",
+      "pure": true,
+      "solverSafe": true,
+      "description": "检查从指定格子出发是否有五连"
+    }
+  }
+}
