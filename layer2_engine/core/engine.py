@@ -1,31 +1,34 @@
-"""Game engine — ties state, rules, and expression evaluation together.
+"""Game engine — interprets v5.0 rules JSON as a stochastic game model.
 
 Implements the ``SolverAdapter`` Protocol: all solvers in Layer 3 interact
 with the game exclusively through this engine.
+
+Two-layer state architecture:
+  - Ground state: compact arrays + env scalars
+  - Derived views: computed on-the-fly via derivation rules (grid, enum, literal)
 """
 
 from __future__ import annotations
 
 import json
 import random
-import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .state_graph import (
     ActionInstance,
     ChanceOutcome,
+    DerivedViewEngine,
+    BUILTIN_FUNCTIONS,
+    create_initial_state,
     clone_state,
-    create_gomoku_state,
-    check_five_in_row,
-    cell_index,
-    cell_xy,
 )
 from .expr_eval import ExprEvaluator
+from .rules_compiler import RulesCompiler
 
 
 class GameEngine:
-    """A game engine that interprets a v4.1 rules JSON.
+    """A game engine that interprets a v5.0 rules JSON.
 
     This is the canonical implementation of the ``SolverAdapter`` Protocol:
     all Layer 3 solvers consume the game through this class.
@@ -35,33 +38,65 @@ class GameEngine:
         self.rules = rules
         self.rng = random.Random(seed)
         self.expr = ExprEvaluator()
-        self._register_functions()
+        # Compiled query filters, keyed by id() of the filter expr object
+        # (rule dicts live for the engine's lifetime, so ids stay stable).
+        self._compiled_filters: dict[int, callable] = {}
+        # RulesCompiler artifacts; assigned at the end of __init__ so that
+        # probe validation runs against the pure interpreter.
+        self._compiled = None
 
-        self._actions_by_id: dict[str, dict] = {
-            a['id']: a for a in rules.get('actions', [])
+        # Register built-in functions
+        self._register_builtins()
+
+        # Parse schema
+        self._constants: dict = rules.get('constants', {})
+        self._players: list[dict] = self._parse_players(rules.get('players', []))
+        self._schema = {
+            'groundState': rules.get('groundState', {}),
+            'derivedViews': rules.get('derivedViews', {}),
         }
-        self._effects_by_name: dict[str, dict] = {
-            name: eff for name, eff in rules.get('effects', {}).items()
-        }
+
+        # Derived view engine (lazy)
+        self._view_engine = DerivedViewEngine(self._schema)
+
+        # Pre-parse effectors, actions, etc.
+        self._actions: list[dict] = rules.get('actions', [])
+        self._actions_by_id: dict[str, dict] = {a['id']: a for a in self._actions}
+        self._effectors: dict[str, dict] = rules.get('effectors', {})
+        self._phases: dict[str, dict] = {p['id']: p for p in rules.get('phases', [])}
         self._chance_templates: list[dict] = rules.get('chance', [])
         self._triggers: list[dict] = rules.get('triggers', [])
-        self._phases: dict[str, dict] = {
-            p['id']: p for p in rules.get('phases', [])
-        }
-        self._constants: dict = rules.get('constants', {})
+        self._queries: dict[str, dict] = rules.get('queries', {})
+        self._terminal: list[dict] = rules.get('terminal', [])
+        self._utility: list[dict] = rules.get('utility', [])
+        self._visibility: dict = rules.get('visibility', {'default': 'public'})
 
-    # ── SolverAdapter API ─────────────────────────────────────────
+        # Compile the rules into native functions, probe-validated against
+        # the interpreter.  Any artifact failing validation is disabled.
+        # Validation samples chance nodes, so the rng stream is saved and
+        # restored to keep engine construction side-effect free.
+        try:
+            artifacts = RulesCompiler().compile(rules)
+            rng_state = self.rng.getstate()
+            artifacts.validate(self)
+            self.rng.setstate(rng_state)
+            self._compiled = artifacts
+        except Exception:
+            self._compiled = None
+
+    # ── Initial state ─────────────────────────────────────────────────
 
     def create_initial_state(self) -> dict:
-        bs = self._constants.get('board_size', 9)
-        state = create_gomoku_state(bs)
-        state['_win_length'] = self._constants.get('win_length', 5)
-        return state
+        """Create initial ground state from schema."""
+        return create_initial_state(self._schema, self._constants, self._players)
+
+    # ── SolverAdapter API ─────────────────────────────────────────────
 
     def get_node_type(self, state: dict) -> str:
+        """Return 'player', 'chance', or 'terminal'."""
         if self.is_terminal(state):
             return 'terminal'
-        phase = state['env']['phase']
+        phase = state['env'].get('phase', '')
         for ct in self._chance_templates:
             if phase in ct.get('phases', []):
                 return 'chance'
@@ -71,76 +106,67 @@ class GameEngine:
         return 'terminal'
 
     def get_current_player(self, state: dict) -> Optional[str]:
+        """Return the current player ID, or None if not a player node."""
         if self.get_node_type(state) != 'player':
             return None
-        return state['env']['turn']['currentPlayerId']
+        return state['env'].get('turn')
 
     def get_legal_actions(self, state: dict) -> list[ActionInstance]:
+        """Expand action templates into concrete action instances."""
+        if self._compiled is not None and self._compiled.legal_actions is not None \
+                and '_arrays' in state:
+            return self._compiled.legal_actions(state)
+        return self._interp_legal_actions(state)
+
+    def _interp_legal_actions(self, state: dict) -> list[ActionInstance]:
+        """Interpreter-path legal actions (used by compiler validation)."""
         if self.get_node_type(state) != 'player':
             return []
-        phase = state['env']['phase']
+        phase = state['env'].get('phase', '')
         actions = []
-        for tmpl in self.rules.get('actions', []):
+        for tmpl in self._actions:
             if phase not in tmpl.get('phases', []):
                 continue
             actions.extend(self._expand_template(tmpl, state))
         return actions
 
     def apply_action(self, state: dict, action: ActionInstance) -> dict:
+        """Apply an action to a clone of the state."""
         new_state = clone_state(state)
         tmpl = self._actions_by_id.get(action.template_id)
         if tmpl is None:
             raise ValueError(f"Unknown action template: {action.template_id}")
         ctx = self._build_context(new_state, action)
-        self._execute_effect(tmpl['effectRef'], ctx, new_state)
+        self._execute_effector(tmpl['effectRef'], ctx, new_state)
         self._run_triggers(new_state)
         return new_state
 
     def get_chance_outcomes(self, state: dict) -> list[ChanceOutcome]:
-        phase = state['env']['phase']
+        """Return all chance outcomes with probabilities."""
+        if self._compiled is not None and self._compiled.chance_outcomes is not None \
+                and '_arrays' in state:
+            return self._compiled.chance_outcomes(state)
+        return self._interp_chance_outcomes(state)
+
+    def _interp_chance_outcomes(self, state: dict) -> list[ChanceOutcome]:
+        """Interpreter-path chance outcomes (used by compiler validation)."""
+        phase = state['env'].get('phase', '')
         for ct in self._chance_templates:
             if phase in ct.get('phases', []):
                 return self._expand_chance(ct, state)
         return []
 
     def apply_chance(self, state: dict, outcome: ChanceOutcome) -> dict:
+        """Apply a chance outcome to a clone of the state."""
         new_state = clone_state(state)
         ctx = self._build_context(new_state)
         ctx['outcome'] = outcome.key
-        # Inject last-placed-cell node so vanish/keep effects can reference $cell
-        last_cell_id = new_state['env'].get('lastPlacedCell')
-        if last_cell_id:
-            if last_cell_id in new_state['nodes']:
-                cell_node = new_state['nodes'][last_cell_id]
-            else:
-                # Rebuild node from cell_id since clone_state clears nodes
-                try:
-                    parts = last_cell_id.split('_')
-                    x, y = int(parts[-2]), int(parts[-1])
-                    bs = new_state['board_size']
-                    idx = y * bs + x
-                    cell_node = {
-                        'id': last_cell_id,
-                        'type': 'board_cell',
-                        'props': {
-                            'x': x, 'y': y,
-                            'occupant': new_state['_board'][idx],
-                            'idx': idx,
-                        },
-                    }
-                except (ValueError, IndexError):
-                    cell_node = {'id': last_cell_id, 'type': 'board_cell', 'props': {}}
-            ctx['cell'] = cell_node
-            ctx['$cell'] = cell_node
-        self._execute_effect(outcome.effect_ref, ctx, new_state)
-        # Post-chance: switch turn unless game over
-        if new_state['env']['phase'] != 'game_over':
-            self._execute_effect('switch_turn', ctx, new_state)
+        self._execute_effector(outcome.effect_ref, ctx, new_state)
         self._run_triggers(new_state)
         return new_state
 
     def sample_chance(self, state: dict) -> tuple[ChanceOutcome, dict]:
-        """Convenience: sample one chance outcome and apply it."""
+        """Sample one chance outcome and apply it."""
         outcomes = self.get_chance_outcomes(state)
         r = self.rng.random()
         cumsum = 0.0
@@ -153,93 +179,139 @@ class GameEngine:
         return chosen, self.apply_chance(state, chosen)
 
     def is_terminal(self, state: dict) -> bool:
+        """Return True if any terminal condition is met."""
+        if self._compiled is not None and self._compiled.is_terminal is not None \
+                and '_arrays' in state:
+            return self._compiled.is_terminal(state)
+        return self._interp_is_terminal(state)
+
+    def _interp_is_terminal(self, state: dict) -> bool:
+        """Interpreter-path terminal check (used by compiler validation)."""
         ctx = self._build_context(state)
-        for rule in self.rules.get('terminal', []):
+        for rule in self._terminal:
             if self.expr.eval(rule['condition'], ctx):
                 return True
         return False
 
     def get_observation(self, state: dict, player_id: str) -> dict:
-        """Return the player's observation.
+        """Return the player's observation (projected via visibility rules)."""
+        return self.project_observation(state, player_id)
 
-        For perfect-information games this is the full board state.
+    def project_observation(self, state: dict, viewer: str) -> dict:
+        """Project state through visibility rules for ``viewer``.
+
+        Materializes all derived views and applies field-level visibility.
         """
-        return {
-            'board': list(state['_board']),
-            'board_size': state['board_size'],
-            'current_player': state['env']['turn']['currentPlayerId'],
-            'phase': state['env']['phase'],
-        }
+        obs = {}
+        view_names = list(self._schema.get('derivedViews', {}).keys())
+        visibility = self._visibility
+        default_level = visibility.get('default', 'public')
+        rules = visibility.get('rules', [])
+
+        for vname in view_names:
+            entities = self._materialize_view(state, vname)
+            if default_level == 'public':
+                # Perfect information: return all fields
+                obs[vname] = entities
+            else:
+                # Partial information: filter fields per entity
+                filtered = []
+                for entity in entities:
+                    entity_ctx = {**self._build_context(state), '$node': entity, '$viewer': viewer}
+                    entity_obs = dict(entity)
+                    for rule in rules:
+                        if rule.get('view', '') != vname:
+                            continue
+                        rule_filter = rule.get('filter')
+                        if rule_filter is not None:
+                            if not self.expr.eval(rule_filter, entity_ctx):
+                                continue
+                        # Apply field visibility
+                        hidden_any = False
+                        for field, level in rule.get('fields', {}).items():
+                            if level != 'public':
+                                entity_obs.pop(field, None)
+                                hidden_any = True
+                        # Strip the raw array entry too — enum/grid views expose
+                        # it as ``value``, which would leak hidden data
+                        # (e.g. an opponent's hole card id).
+                        if hidden_any:
+                            entity_obs.pop('value', None)
+                    filtered.append(entity_obs)
+                obs[vname] = filtered
+
+        # Also include env
+        obs['env'] = dict(state.get('env', {}))
+        return obs
 
     def get_info_set_key(self, state: dict, player_id: str) -> str:
         """Return a canonical info-set key for CFR.
 
-        For perfect-information games this is just a board hash.
+        For perfect-information games this is a deterministic hash of
+        the projected observation.
         """
-        obs = self.get_observation(state, player_id)
-        board_tuple = tuple(obs['board'])
-        return f"{board_tuple}|{player_id}|{obs['phase']}"
+        obs = self.project_observation(state, player_id)
+        # Deterministic string representation
+        import json as _json
+        return _json.dumps(obs, sort_keys=True, ensure_ascii=False)
 
     def get_utility(self, state: dict, player_id: str) -> float:
+        """Evaluate utility for ``player_id`` at a terminal state."""
         ctx = self._build_context(state)
-        for rule in self.rules.get('utility', []):
+        for rule in self._utility:
             rule_player = rule['player']
-            if isinstance(rule_player, str):
-                pid = rule_player
-            else:
+            if isinstance(rule_player, dict):
                 pid = self.expr.eval(rule_player, ctx)
+            else:
+                pid = rule_player
             if pid != player_id:
                 continue
             when = rule.get('when')
             if when is not None and not self.expr.eval(when, ctx):
                 continue
-            return float(self.expr.eval(rule['value'], ctx))
+            value = rule.get('value')
+            if isinstance(value, dict):
+                return float(self.expr.eval(value, ctx))
+            return float(value)
         return 0.0
 
     def load_state(self, state: dict) -> dict:
         """Import an externally constructed state (e.g. from VLM).
 
-        Validates that the state has the required structure and fills in
-        any missing fields.
+        Fills in any missing ground arrays/env fields from schema defaults.
         """
-        if '_board' not in state:
-            raise ValueError("load_state: missing '_board'")
-        if 'env' not in state:
-            raise ValueError("load_state: missing 'env'")
-        bs = state.get('board_size', self._constants.get('board_size', 9))
-        if len(state['_board']) != bs * bs:
-            raise ValueError(
-                f"load_state: _board length {len(state['_board'])} "
-                f"does not match board_size {bs}"
-            )
-        # Rebuild nodes dict to match _board
-        nodes = {}
-        for idx, occupant in enumerate(state['_board']):
-            x, y = idx % bs, idx // bs
-            nodes[f'cell_{x}_{y}'] = {
-                'id': f'cell_{x}_{y}',
-                'type': 'board_cell',
-                'props': {'x': x, 'y': y, 'occupant': occupant, 'idx': idx},
-            }
-        state['nodes'] = nodes
-        state['_win_length'] = state.get('_win_length', self._constants.get('win_length', 5))
-        return state
+        schema_ground = self._schema.get('groundState', {})
+        result = create_initial_state(self._schema, self._constants, self._players)
 
-    # ── Action / Chance expansion ─────────────────────────────────
+        # Merge arrays
+        for arr_name, arr_def in schema_ground.items():
+            if arr_def.get('type') != 'array':
+                continue
+            ext_arr = state.get(arr_name) or state.get('_arrays', {}).get(arr_name)
+            if ext_arr is not None:
+                result['_arrays'][arr_name] = list(ext_arr)
+
+        # Merge env
+        ext_env = state.get('env', {})
+        if ext_env:
+            result['env'].update(ext_env)
+
+        return result
+
+    # ── Action expansion ─────────────────────────────────────────────
 
     def _expand_template(self, tmpl: dict, state: dict) -> list[ActionInstance]:
         ctx = self._build_context(state)
-        actor_expr = tmpl.get('actor', {'var': '$env.turn.currentPlayerId'})
+        actor_expr = tmpl.get('actor', {'var': '$env.turn'})
         actor_id = self.expr.eval(actor_expr, ctx)
 
-        param_domains = {}
+        param_domains: dict[str, list] = {}
         for pname, pdef in tmpl.get('params', {}).items():
-            domain = self._eval_param_domain(pdef, state, ctx)
+            domain = self._resolve_param_domain(pdef, state, ctx)
             if pdef.get('filter'):
                 filtered = []
                 for item in domain:
-                    item_ctx = {**ctx, f'${pname}': item, '$cell': item, '$node': item}
-                    item_ctx[pname] = item
+                    item_ctx = {**ctx, f'${pname}': item, '$node': item}
                     if self.expr.eval(pdef['filter'], item_ctx):
                         filtered.append(item)
                 domain = filtered
@@ -253,15 +325,12 @@ class GameEngine:
             for pname, pval in combo.items():
                 action_ctx[pname] = pval
                 action_ctx[f'${pname}'] = pval
-                if pname == 'cell':
-                    action_ctx['cell'] = pval
-                    action_ctx['$cell'] = pval
 
             legal_expr = tmpl.get('legal', {'const': True})
             if not self.expr.eval(legal_expr, action_ctx):
                 continue
 
-            ck_expr = tmpl.get('canonicalKey', {'template': f"{tmpl['id']}"})
+            ck_expr = tmpl.get('canonicalKey', {'template': tmpl['id']})
             canonical_key = self.expr.eval(ck_expr, action_ctx)
 
             actions.append(ActionInstance(
@@ -274,44 +343,51 @@ class GameEngine:
 
         return actions
 
-    def _eval_param_domain(self, pdef: dict, state: dict, ctx: dict) -> list:
+    def _resolve_param_domain(self, pdef: dict, state: dict, ctx: dict) -> list[Any]:
+        """Resolve a parameter's candidate domain.
+
+        Supports:
+          - {"ref": "queryName"} — reference to a named query
+          - [] — direct literal list
+        """
         domain = pdef.get('domain', [])
         if isinstance(domain, list):
             return list(domain)
-        if isinstance(domain, dict):
-            if 'ref' in domain:
-                ref_name = domain['ref']
-                queries = self.rules.get('queries', {})
-                if ref_name in queries:
-                    domain = queries[ref_name].get('expr', domain)
-                else:
-                    return []
-            return self._eval_query_domain(domain, state, ctx)
+        if isinstance(domain, dict) and 'ref' in domain:
+            query_name = domain['ref']
+            query_def = self._queries.get(query_name)
+            if query_def is None:
+                return []
+            return self._resolve_query(query_def, state, ctx)
         return []
 
-    def _eval_query_domain(self, query_expr: dict, state: dict, ctx: dict) -> list:
-        query = query_expr.get('query', query_expr)
-        node_type = query.get('type')
+    def _resolve_query(self, query_def: dict, state: dict, ctx: dict) -> list[dict]:
+        """Resolve a query against a derived view."""
+        view_name = query_def.get('view', '')
+        filter_expr = query_def.get('filter')
+        entities = self._materialize_view(state, view_name)
 
-        if node_type == 'board_cell':
-            board = state['_board']
-            bs = state['board_size']
-            nodes = state['nodes']
-            results = []
-            for idx in range(bs * bs):
-                if board[idx] is None:
-                    x, y = idx % bs, idx // bs
-                    cell_id = f'cell_{x}_{y}'
-                    node = nodes.get(cell_id)
-                    if node is None:
-                        node = {
-                            'id': cell_id,
-                            'type': 'board_cell',
-                            'props': {'x': x, 'y': y, 'occupant': None, 'idx': idx},
-                        }
-                    results.append(node)
-            return results
-        return []
+        if filter_expr is None:
+            return entities
+
+        filter_fn = self._get_compiled_filter(filter_expr)
+        filtered = []
+        for entity in entities:
+            entity_ctx = {**ctx, '$node': entity, '$self': entity}
+            if filter_fn(entity_ctx):
+                filtered.append(entity)
+        return filtered
+
+    def _materialize_view(self, state: dict, view_name: str) -> list[dict]:
+        """Materialize a derived view from current state."""
+        if self._compiled is not None and self._compiled.materialize is not None \
+                and '_arrays' in state:
+            result = self._compiled.materialize(state, view_name)
+            if result is not None:
+                return result
+        return self._view_engine.materialize(state, view_name)
+
+    # ── Chance expansion ─────────────────────────────────────────────
 
     def _expand_chance(self, ct: dict, state: dict) -> list[ChanceOutcome]:
         ctx = self._build_context(state)
@@ -321,91 +397,142 @@ class GameEngine:
         if 'explicit' in prob_expr:
             outcomes = []
             for entry in prob_expr['explicit']:
-                val = self.expr.eval(entry['value'], ctx)
-                prob = float(self.expr.eval(entry['probability'], ctx))
+                outcome_val = entry.get('outcome', entry.get('value'))
+                prob = entry.get('prob', entry.get('probability'))
+                if isinstance(prob, dict):
+                    prob = float(self.expr.eval(prob, ctx))
+                else:
+                    prob = float(prob)
                 ck = self.expr.eval(
-                    ct.get('canonicalKey', {'template': f"chance:{val}"}),
-                    {**ctx, 'outcome': val}
+                    ct.get('canonicalKey', {'template': f"chance:{outcome_val}"}),
+                    {**ctx, 'outcome': outcome_val},
                 )
+                effect_ref = effect_map.get(str(outcome_val), f"do_{outcome_val}")
                 outcomes.append(ChanceOutcome(
-                    key=str(val),
+                    key=str(outcome_val),
                     probability=prob,
-                    effect_ref=effect_map.get(val, f"do_{val}"),
+                    effect_ref=effect_ref,
                     canonical_key=ck,
                 ))
             return outcomes
+
+        if 'uniform' in prob_expr:
+            over = prob_expr['uniform']['over']
+            param_def = ct.get('params', {}).get(over, {})
+            candidates = self._resolve_param_domain(param_def, state, ctx)
+            if not candidates:
+                return []
+            prob = 1.0 / len(candidates)
+            outcomes = []
+            for c in candidates:
+                cid = c.get('id', str(c)) if isinstance(c, dict) else str(c)
+                ck = self.expr.eval(
+                    ct.get('canonicalKey', {'template': f"chance:{cid}"}),
+                    {**ctx, 'outcome': cid},
+                )
+                outcomes.append(ChanceOutcome(
+                    key=cid,
+                    probability=prob,
+                    effect_ref=effect_map.get(cid, ct.get('effectRef', '')),
+                    canonical_key=ck,
+                ))
+            return outcomes
+
         return []
 
-    # ── Effect execution ──────────────────────────────────────────
+    # ── Effector execution ───────────────────────────────────────────
 
-    def _execute_effect(self, effect_name: str, ctx: dict, state: dict):
-        if effect_name not in self._effects_by_name:
+    def _execute_effector(self, effect_name: str, ctx: dict, state: dict):
+        """Execute a named effector's op sequence."""
+        effector = self._effectors.get(effect_name)
+        if effector is None:
             return
-        for op in self._effects_by_name[effect_name].get('ops', []):
+        for op in effector.get('ops', []):
             self._execute_op(op, ctx, state)
 
     def _execute_op(self, op: dict, ctx: dict, state: dict):
+        """Execute a single effect operation."""
         op_type = op.get('op')
 
-        if op_type == 'set':
-            path = self._resolve_path_template(op['path'], ctx)
+        # ── Ground array ops ──────────────────────────────────────────
+
+        if op_type == 'setIndex':
+            arr_name = op['array']
+            at = self.expr.eval(op['at'], ctx)
             value = self.expr.eval(op['value'], ctx)
-            self._set_state_path(state, path, value)
+            arr = state['_arrays'].get(arr_name)
+            if arr is not None and isinstance(at, int) and 0 <= at < len(arr):
+                arr[at] = value
+
+        elif op_type == 'append':
+            arr_name = op['array']
+            raw_value = op['value']
+            # Support both simple expressions and dict-of-expressions
+            if isinstance(raw_value, dict):
+                # Check if ALL keys are known expression types
+                is_expr_dict = all(_is_expr_key(k) for k in raw_value)
+                if is_expr_dict:
+                    value = self.expr.eval(raw_value, ctx)
+                else:
+                    # Value dict: evaluate each field's expression
+                    value = {}
+                    for k, v in raw_value.items():
+                        value[k] = self.expr.eval(v, ctx) if isinstance(v, dict) else v
+            else:
+                value = raw_value
+            arr = state['_arrays'].get(arr_name)
+            if arr is not None:
+                arr.append(value)
+
+        elif op_type == 'trimByKey':
+            arr_name = op['array']
+            max_val = int(self.expr.eval(op['max'], ctx))
+            key = op['key']
+            value = self.expr.eval(op['value'], ctx)
+            on_evict = op.get('onEvict', [])
+            arr = state['_arrays'].get(arr_name)
+            if arr is None or not isinstance(arr, list):
+                return
+            # Group by key, trim each group
+            filtered = [x for x in arr if x.get(key) != value]
+            group = [x for x in arr if x.get(key) == value]
+            while len(group) > max_val:
+                evicted = group.pop(0)
+                if on_evict:
+                    # Compute evicted board index from cell_id (e.g. "cell_1_2")
+                    evicted_cell = evicted.get('cell_id', '')
+                    evicted_idx = 0
+                    try:
+                        parts = evicted_cell.split('_')
+                        board_arr = state['_arrays'].get('board', [])
+                        bs = int(len(board_arr) ** 0.5) if board_arr else 3
+                        if len(parts) >= 3:
+                            # cell_id is "cell_{row}_{col}"; board index is
+                            # row-major (row * bs + col), matching do_place.
+                            evicted_idx = int(parts[-2]) * bs + int(parts[-1])
+                    except (ValueError, IndexError):
+                        pass
+                    evict_ctx = {**ctx, '$evicted': evicted, 'evicted_index': evicted_idx}
+                    for eop in on_evict:
+                        self._execute_op(eop, evict_ctx, state)
+            state['_arrays'][arr_name] = filtered + group
+
+        # ── Environment ops ───────────────────────────────────────────
+
+        elif op_type == 'setEnv':
+            key = op['key']
+            value = self.expr.eval(op['value'], ctx)
+            state['env'][key] = value
 
         elif op_type == 'inc':
-            path = self._resolve_path_template(op['path'], ctx)
-            by = self.expr.eval(op['by'], ctx)
-            current = self._get_state_path(state, path) or 0
-            self._set_state_path(state, path, current + by)
+            key = op['key']
+            by = int(self.expr.eval(op['by'], ctx))
+            current = state['env'].get(key, 0)
+            if not isinstance(current, (int, float)):
+                current = 0
+            state['env'][key] = current + by
 
-        elif op_type == 'listAppend':
-            path = self._resolve_path_template(op['path'], ctx)
-            value = self.expr.eval(op['value'], ctx)
-            lst: list = self._get_state_path(state, path) or []
-            if not isinstance(lst, list):
-                lst = [lst]
-            lst.append(value)
-            self._set_state_path(state, path, lst)
-
-        elif op_type == 'listShift':
-            path = self._resolve_path_template(op['path'], ctx)
-            lst: list = self._get_state_path(state, path) or []
-            if lst and isinstance(lst, list):
-                shifted = lst.pop(0)
-                if 'dest' in op:
-                    dest_path = self._resolve_path_template(op['dest'], ctx)
-                    self._set_state_path(state, dest_path, shifted)
-                self._set_state_path(state, path, lst)
-
-        elif op_type == 'trimQueue':
-            """Trim a FIFO queue, evicting oldest entries beyond max length."""
-            path = self._resolve_path_template(op['path'], ctx)
-            max_len = int(self.expr.eval(op['max'], ctx)) if 'max' in op else 3
-            queue: list = self._get_state_path(state, path) or []
-            if not isinstance(queue, list):
-                return
-            while len(queue) > max_len:
-                oldest = queue.pop(0)
-                cell_id = None
-                if isinstance(oldest, dict):
-                    cell_id = oldest.get('cellId')
-                elif isinstance(oldest, str):
-                    cell_id = oldest
-                if cell_id:
-                    self._set_state_path(state, f"state.nodes.{cell_id}.props.occupant", None)
-            self._set_state_path(state, path, queue)
-
-        elif op_type == 'emit':
-            event_name = op['event']
-            payload = {k: self.expr.eval(v, ctx) for k, v in op.get('payload', {}).items()}
-            state.setdefault('_pending_events', []).append((event_name, payload))
-
-        elif op_type == 'callEffect':
-            effect_ref = op['effectRef']
-            sub_ctx = {**ctx}
-            for k, v in op.get('args', {}).items():
-                sub_ctx[k] = self.expr.eval(v, ctx)
-            self._execute_effect(effect_ref, sub_ctx, state)
+        # ── Control flow ──────────────────────────────────────────────
 
         elif op_type == 'branch':
             cond = self.expr.eval(op['if'], ctx)
@@ -413,17 +540,33 @@ class GameEngine:
             for sub_op in branch_ops:
                 self._execute_op(sub_op, ctx, state)
 
+        elif op_type == 'callEffect':
+            effect_ref = op['effectRef']
+            sub_ctx = {**ctx}
+            for k, v in op.get('args', {}).items():
+                sub_ctx[k] = self.expr.eval(v, ctx)
+            self._execute_effector(effect_ref, sub_ctx, state)
+
         elif op_type == 'forEach':
-            lst = self.expr.eval(op['list'], ctx)
-            as_var = op['as']
-            for item in lst:
+            items = self.expr.eval(op['list'], ctx)
+            as_var = op.get('as', '$item')
+            for item in items:
                 sub_ctx = {**ctx, as_var: item}
-                for sub_op in op['do']:
+                for sub_op in op.get('do', []):
                     self._execute_op(sub_op, sub_ctx, state)
+
+        # ── Events / triggers ─────────────────────────────────────────
+
+        elif op_type == 'emit':
+            event_name = op['event']
+            payload = {k: self.expr.eval(v, ctx) for k, v in op.get('payload', {}).items()}
+            state.setdefault('_pending_events', []).append((event_name, payload))
 
         elif op_type == 'enqueueEffect':
             args = {k: self.expr.eval(v, ctx) for k, v in op.get('args', {}).items()}
             state.setdefault('_pending_effects', []).append((op['effectRef'], args))
+
+    # ── Triggers ──────────────────────────────────────────────────────
 
     def _run_triggers(self, state: dict):
         pending = state.pop('_pending_events', [])
@@ -442,125 +585,131 @@ class GameEngine:
                 t_ctx = self._build_context(state)
                 t_ctx['$event'] = payload
                 t_ctx.update(payload)
-                self._execute_effect(trigger['effectRef'], t_ctx, state)
+                self._execute_effector(trigger['effectRef'], t_ctx, state)
 
         for effect_ref, args in pending_effects:
             e_ctx = self._build_context(state)
             e_ctx.update(args)
-            self._execute_effect(effect_ref, e_ctx, state)
+            self._execute_effector(effect_ref, e_ctx, state)
 
-    # ── Context building ──────────────────────────────────────────
+    # ── Context building ──────────────────────────────────────────────
 
     def _build_context(self, state: dict, action: Optional[ActionInstance] = None) -> dict:
-        ctx = {
+        """Build expression evaluation context from state."""
+        constants = self._constants
+        ctx: dict[str, Any] = {
             '$state': state,
-            '$env': state['env'],
-            'state': state,
-            'env': state['env'],
-            '_query_fn': lambda q, c: self._eval_query_domain(q, state, c),
+            '$env': state.get('env', {}),
+            '$constants': constants,
+            '$players': self._players,
+            '_query_fn': self._query_fn,
         }
 
+        # Flatten constants into top-level context for easy access
+        for k, v in constants.items():
+            if isinstance(v, (int, float, str)):
+                ctx[k] = v
+
+        # Add ground arrays as context vars for convenience
+        arrays = state.get('_arrays', {})
+        for k, v in arrays.items():
+            ctx[f'${k}'] = v
+
         if action is not None:
-            pid = action.actor_id
-            actor_node = {
-                'id': pid,
-                'props': {'color': 'black' if pid == 'p_black' else 'white'},
-            }
-            ctx['$actor'] = actor_node
-            ctx['actor'] = actor_node
             ctx['$action'] = action
-            ctx['action'] = action
             ctx['$params'] = action.params
-            ctx['params'] = action.params
             for k, v in action.params.items():
                 ctx[k] = v
                 ctx[f'${k}'] = v
-        else:
-            pid = state['env']['turn'].get('currentPlayerId', 'p_black')
-            actor_node = {
-                'id': pid,
-                'props': {'color': 'black' if pid == 'p_black' else 'white'},
-            }
-            ctx['$actor'] = actor_node
-            ctx['actor'] = actor_node
 
         return ctx
 
-    # ── State path access ─────────────────────────────────────────
+    def _query_fn(self, query_expr: dict, ctx: dict) -> list:
+        """Query function for ExprEvaluator.
 
-    def _resolve_path_template(self, path: str, ctx: dict) -> str:
-        def replacer(m):
-            inner = m.group(1).strip()
-            val = self.expr._resolve_path(ctx, inner)
-            return str(val) if val is not None else 'null'
-        return re.sub(r'\{([^}]+)\}', replacer, path)
+        Handles both:
+          - Direct: {"view": "cell", "where": ...}  (from terminal/query refs)
+          - Wrapped: {"query": {"view": "cell", "where": ...}}  (from count expr)
+        """
+        if 'query' in query_expr:
+            query_expr = query_expr['query']
+        view_name = query_expr.get('view', '')
+        entities = self._materialize_view(ctx.get('$state', {}), view_name)
+        filter_expr = query_expr.get('filter') or query_expr.get('where')
+        if filter_expr:
+            filter_fn = self._get_compiled_filter(filter_expr)
+            filtered = []
+            for ent in entities:
+                ent_ctx = {**ctx, '$node': ent, '$self': ent}
+                if filter_fn(ent_ctx):
+                    filtered.append(ent)
+            return filtered
+        return entities
 
-    def _get_state_path(self, state: dict, path: str) -> any:
-        parts = path.replace('state.', '').split('.')
-        obj = state
-        for part in parts:
-            if isinstance(obj, dict):
-                obj = obj.get(part)
-            else:
-                return None
-        return obj
+    def _get_compiled_filter(self, filter_expr: dict) -> callable:
+        """Return a compiled closure for ``filter_expr`` (cached by id)."""
+        fid = id(filter_expr)
+        fn = self._compiled_filters.get(fid)
+        if fn is None:
+            fn = self.expr.compile(filter_expr)
+            self._compiled_filters[fid] = fn
+        return fn
 
-    def _set_state_path(self, state: dict, path: str, value: any):
-        clean = path.replace('state.', '')
-        parts = clean.split('.')
+    # ── Builtin registration ──────────────────────────────────────────
 
-        # Intercept nodes.*.props.occupant → sync _board (fast path)
-        if (len(parts) == 4 and parts[0] == 'nodes'
-                and parts[2] == 'props' and parts[3] == 'occupant'):
-            cell_id = parts[1]
-            try:
-                segs = cell_id.split('_')
-                x, y = int(segs[-2]), int(segs[-1])
-                idx = y * state['board_size'] + x
-            except (IndexError, ValueError):
-                return
-            state['_board'][idx] = value
-            node = state['nodes'].get(cell_id)
-            if node is not None:
-                node['props']['occupant'] = value
-            return
-
-        # Generic dict path
-        obj = state
-        for part in parts[:-1]:
-            if isinstance(obj, dict):
-                if part not in obj:
-                    obj[part] = {}
-                obj = obj[part]
-        if isinstance(obj, dict):
-            obj[parts[-1]] = value
-
-    # ── Functions ─────────────────────────────────────────────────
-
-    def _register_functions(self):
-        self.expr.register_function(
-            'check_five_in_row',
-            lambda s, cell_id: check_five_in_row(s, str(cell_id))
-        )
-        self.expr.register_function('debug_print', lambda msg: print(f"[debug] {msg}"))
+    def _register_builtins(self):
+        for name, fn in BUILTIN_FUNCTIONS.items():
+            self.expr.register_function(name, fn)
 
     @classmethod
     def from_json(cls, path: str | Path, **kwargs) -> 'GameEngine':
+        """Load engine from a v5.0 JSON rules file."""
         with open(path, 'r', encoding='utf-8') as f:
             rules = json.load(f)
         return cls(rules, **kwargs)
 
+    # ── Player parser ─────────────────────────────────────────────────
 
-# ── Cartesian product helper ──────────────────────────────────────
+    @staticmethod
+    def _parse_players(raw: list | None) -> list[dict]:
+        """Accept both ['p_black', 'p_white'] and [{'id': 'p_black'}, ...]."""
+        if not raw:
+            return [{'id': 'p_black'}, {'id': 'p_white'}]
+        if isinstance(raw[0], str):
+            return [{'id': pid} for pid in raw]
+        return raw
+
+
+# ── Helpers ────────────────────────────────────────────────────────────
+
+_EXPR_KEYS = frozenset({
+    'const', 'var', 'get', 'eq', 'neq', 'gt', 'gte', 'lt', 'lte',
+    'and', 'or', 'not',
+    'if', 'switch', 'call',
+    'template', 'concat', 'expr',
+    'query', 'count', 'filter', 'any', 'all', 'map',
+    'ref',
+})
+
+
+def _is_expr_key(key: str) -> bool:
+    """Check if a dict key is a known expression type, not a field name.
+
+    Used to distinguish ``{"cell_id": ..., "player_id": ...}`` (value dict)
+    from ``{"get": [...]}`` (expression).
+    """
+    return key in _EXPR_KEYS
+
 
 def _cartesian_product(param_domains: dict[str, list]) -> list[dict]:
+    """Cartesian product of multiple parameter domains."""
     if not param_domains:
         return [{}]
     keys = list(param_domains.keys())
     values = list(param_domains.values())
-    results = []
+    results: list[dict] = []
 
-    def _recurse(idx, current):
+    def _recurse(idx: int, current: dict):
         if idx == len(keys):
             results.append(dict(current))
             return

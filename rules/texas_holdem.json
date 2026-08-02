@@ -1,0 +1,1850 @@
+{
+  "meta": {
+    "gameId": "texas_holdem",
+    "version": "5.0.0",
+    "description": "Heads-up no-limit Texas Hold'em — blinds 1/2, stacks 100, full betting rounds with min-raise rules, all-in handling and split pots"
+  },
+  "players": [
+    "p_sb",
+    "p_bb"
+  ],
+  "constants": {
+    "stack_size": 100,
+    "small_blind": 1,
+    "big_blind": 2,
+    "raise_grid": [
+      0, 2, 4, 6, 8, 10, 15, 20, 25, 30, 40, 50, 60, 75, 90, 100
+    ],
+    "card_ids": [
+      "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "sT", "sJ", "sQ", "sK", "sA",
+      "h2", "h3", "h4", "h5", "h6", "h7", "h8", "h9", "hT", "hJ", "hQ", "hK", "hA",
+      "d2", "d3", "d4", "d5", "d6", "d7", "d8", "d9", "dT", "dJ", "dQ", "dK", "dA",
+      "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "cT", "cJ", "cQ", "cK", "cA"
+    ]
+  },
+  "groundState": {
+    "sb_hole": {
+      "type": "array",
+      "mutable": true,
+      "element": "card_id"
+    },
+    "bb_hole": {
+      "type": "array",
+      "mutable": true,
+      "element": "card_id"
+    },
+    "community": {
+      "type": "array",
+      "mutable": true,
+      "element": "card_id"
+    },
+    "drawn": {
+      "type": "array",
+      "mutable": true,
+      "element": "card_id"
+    },
+    "env": {
+      "type": "env",
+      "fields": {
+        "phase": {
+          "type": "string",
+          "initial": "deal_sb1"
+        },
+        "turn": {
+          "type": "player_id",
+          "initial": "p_sb"
+        },
+        "street": {
+          "type": "int",
+          "initial": 0
+        },
+        "winner": {
+          "type": "player_id?",
+          "initial": null
+        },
+        "last_action": {
+          "type": "string?",
+          "initial": null
+        },
+        "last_actor": {
+          "type": "player_id?",
+          "initial": null
+        },
+        "last_call_to": {
+          "type": "int",
+          "initial": 0
+        },
+        "last_raise_delta": {
+          "type": "int",
+          "initial": 0
+        },
+        "sb_stack": {
+          "type": "int",
+          "initial": 99
+        },
+        "bb_stack": {
+          "type": "int",
+          "initial": 98
+        },
+        "sb_committed": {
+          "type": "int",
+          "initial": 1
+        },
+        "bb_committed": {
+          "type": "int",
+          "initial": 2
+        },
+        "sb_folded": {
+          "type": "bool",
+          "initial": false
+        },
+        "bb_folded": {
+          "type": "bool",
+          "initial": false
+        },
+        "sb_acted": {
+          "type": "bool",
+          "initial": false
+        },
+        "bb_acted": {
+          "type": "bool",
+          "initial": false
+        }
+      }
+    }
+  },
+  "derivedViews": {
+    "card": {
+      "from": {
+        "type": "literal",
+        "list": {
+          "var": "card_ids"
+        }
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "player": {
+      "from": {
+        "type": "literal",
+        "list": {
+          "var": "$players"
+        }
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value.id"
+        },
+        "stack": {
+          "switch": [
+            {
+              "case": 0,
+              "then": {
+                "get": [
+                  "$env",
+                  "sb_stack"
+                ]
+              }
+            },
+            {
+              "case": 1,
+              "then": {
+                "get": [
+                  "$env",
+                  "bb_stack"
+                ]
+              }
+            }
+          ],
+          "input": {
+            "var": "$i"
+          }
+        },
+        "committed": {
+          "switch": [
+            {
+              "case": 0,
+              "then": {
+                "get": [
+                  "$env",
+                  "sb_committed"
+                ]
+              }
+            },
+            {
+              "case": 1,
+              "then": {
+                "get": [
+                  "$env",
+                  "bb_committed"
+                ]
+              }
+            }
+          ],
+          "input": {
+            "var": "$i"
+          }
+        },
+        "folded": {
+          "switch": [
+            {
+              "case": 0,
+              "then": {
+                "get": [
+                  "$env",
+                  "sb_folded"
+                ]
+              }
+            },
+            {
+              "case": 1,
+              "then": {
+                "get": [
+                  "$env",
+                  "bb_folded"
+                ]
+              }
+            }
+          ],
+          "input": {
+            "var": "$i"
+          }
+        },
+        "acted": {
+          "switch": [
+            {
+              "case": 0,
+              "then": {
+                "get": [
+                  "$env",
+                  "sb_acted"
+                ]
+              }
+            },
+            {
+              "case": 1,
+              "then": {
+                "get": [
+                  "$env",
+                  "bb_acted"
+                ]
+              }
+            }
+          ],
+          "input": {
+            "var": "$i"
+          }
+        }
+      }
+    },
+    "sb_hole_view": {
+      "from": {
+        "type": "enum",
+        "array": "sb_hole"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "bb_hole_view": {
+      "from": {
+        "type": "enum",
+        "array": "bb_hole"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "community_view": {
+      "from": {
+        "type": "enum",
+        "array": "community"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    }
+  },
+  "queries": {
+    "undrawn_cards": {
+      "view": "card",
+      "filter": {
+        "not": {
+          "call": [
+            "contains",
+            {
+              "var": "$drawn"
+            },
+            {
+              "get": [
+                "$node",
+                "id"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "actions": [
+    {
+      "id": "act",
+      "type": "move",
+      "phases": [
+        "betting"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {
+        "choice": {
+          "domain": [
+            "fold",
+            "call",
+            "raise"
+          ]
+        },
+        "amount": {
+          "domain": [
+            0, 2, 4, 6, 8, 10, 15, 20, 25, 30, 40, 50, 60, 75, 90, 100
+          ]
+        }
+      },
+      "legal": {
+        "switch": [
+          {
+            "case": "fold",
+            "then": {
+              "eq": [
+                {
+                  "var": "amount"
+                },
+                {
+                  "const": 0
+                }
+              ]
+            }
+          },
+          {
+            "case": "call",
+            "then": {
+              "eq": [
+                {
+                  "var": "amount"
+                },
+                {
+                  "call": [
+                    "poker_call_to",
+                    {
+                      "var": "$state"
+                    },
+                    {
+                      "var": "$env.turn"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "case": "raise",
+            "then": {
+              "or": [
+                {
+                  "and": [
+                    {
+                      "gte": [
+                        {
+                          "var": "amount"
+                        },
+                        {
+                          "call": [
+                            "poker_min_raise_to",
+                            {
+                              "var": "$state"
+                            },
+                            {
+                              "var": "$env.turn"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "lte": [
+                        {
+                          "var": "amount"
+                        },
+                        {
+                          "var": "$constants.stack_size"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "and": [
+                    {
+                      "eq": [
+                        {
+                          "var": "amount"
+                        },
+                        {
+                          "var": "$constants.stack_size"
+                        }
+                      ]
+                    },
+                    {
+                      "lt": [
+                        {
+                          "call": [
+                            "poker_call_to",
+                            {
+                              "var": "$state"
+                            },
+                            {
+                              "var": "$env.turn"
+                            }
+                          ]
+                        },
+                        {
+                          "var": "$constants.stack_size"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "input": {
+          "var": "choice"
+        }
+      },
+      "effectRef": "do_act",
+      "canonicalKey": {
+        "template": "act:{choice}:{amount}"
+      }
+    }
+  ],
+  "effectors": {
+    "do_deal_sb1": {
+      "description": "Deal SB first hole card",
+      "ops": [
+        {
+          "op": "append",
+          "array": "sb_hole",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "drawn",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_bb1"
+          }
+        }
+      ]
+    },
+    "do_deal_bb1": {
+      "description": "Deal BB first hole card",
+      "ops": [
+        {
+          "op": "append",
+          "array": "bb_hole",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "drawn",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_sb2"
+          }
+        }
+      ]
+    },
+    "do_deal_sb2": {
+      "description": "Deal SB second hole card",
+      "ops": [
+        {
+          "op": "append",
+          "array": "sb_hole",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "drawn",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_bb2"
+          }
+        }
+      ]
+    },
+    "do_deal_bb2": {
+      "description": "Deal BB second hole card, open preflop betting (SB acts first)",
+      "ops": [
+        {
+          "op": "append",
+          "array": "bb_hole",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "drawn",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "betting"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p_sb"
+          }
+        }
+      ]
+    },
+    "do_deal_flop1": {
+      "description": "Deal first flop card",
+      "ops": [
+        {
+          "op": "append",
+          "array": "community",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "drawn",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_flop2"
+          }
+        }
+      ]
+    },
+    "do_deal_flop2": {
+      "description": "Deal second flop card",
+      "ops": [
+        {
+          "op": "append",
+          "array": "community",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "drawn",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_flop3"
+          }
+        }
+      ]
+    },
+    "do_deal_flop3": {
+      "description": "Deal third flop card, open flop betting (BB acts first)",
+      "ops": [
+        {
+          "op": "append",
+          "array": "community",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "drawn",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "street",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p_bb"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "sb_acted",
+          "value": {
+            "const": false
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "bb_acted",
+          "value": {
+            "const": false
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_raise_delta",
+          "value": {
+            "const": 0
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "call": [
+              "poker_round_over",
+              {
+                "var": "$state"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "deal_turn"
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "betting"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_deal_turn": {
+      "description": "Deal turn card, open turn betting (skip if anyone is all-in)",
+      "ops": [
+        {
+          "op": "append",
+          "array": "community",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "drawn",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "street",
+          "value": {
+            "const": 2
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p_bb"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "sb_acted",
+          "value": {
+            "const": false
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "bb_acted",
+          "value": {
+            "const": false
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_raise_delta",
+          "value": {
+            "const": 0
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "call": [
+              "poker_round_over",
+              {
+                "var": "$state"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "deal_river"
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "betting"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_deal_river": {
+      "description": "Deal river card, open river betting (skip straight to showdown if all-in)",
+      "ops": [
+        {
+          "op": "append",
+          "array": "community",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "drawn",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "street",
+          "value": {
+            "const": 3
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p_bb"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "sb_acted",
+          "value": {
+            "const": false
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "bb_acted",
+          "value": {
+            "const": false
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_raise_delta",
+          "value": {
+            "const": 0
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "call": [
+              "poker_round_over",
+              {
+                "var": "$state"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "showdown"
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "betting"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_showdown": {
+      "description": "Reveal hands, award the pot (split on tie)",
+      "ops": [
+        {
+          "op": "setEnv",
+          "key": "winner",
+          "value": {
+            "call": [
+              "poker_winner",
+              {
+                "var": "$state"
+              }
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "game_over"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_action",
+          "value": {
+            "const": "showdown"
+          }
+        }
+      ]
+    },
+    "do_act": {
+      "description": "Apply fold / call (check) / raise, then advance street or continue betting",
+      "ops": [
+        {
+          "op": "setEnv",
+          "key": "last_call_to",
+          "value": {
+            "call": [
+              "poker_call_to",
+              {
+                "var": "$state"
+              },
+              {
+                "var": "$env.turn"
+              }
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_actor",
+          "value": {
+            "var": "$env.turn"
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "var": "choice"
+              },
+              {
+                "const": "fold"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "sb_folded",
+              "value": {
+                "switch": [
+                  {
+                    "case": "p_sb",
+                    "then": true
+                  },
+                  {
+                    "case": "p_bb",
+                    "then": false
+                  }
+                ],
+                "input": {
+                  "var": "$env.turn"
+                }
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "bb_folded",
+              "value": {
+                "switch": [
+                  {
+                    "case": "p_sb",
+                    "then": false
+                  },
+                  {
+                    "case": "p_bb",
+                    "then": true
+                  }
+                ],
+                "input": {
+                  "var": "$env.turn"
+                }
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "last_action",
+              "value": {
+                "const": "fold"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "winner",
+              "value": {
+                "switch": [
+                  {
+                    "case": "p_sb",
+                    "then": "p_bb"
+                  },
+                  {
+                    "case": "p_bb",
+                    "then": "p_sb"
+                  }
+                ],
+                "input": {
+                  "var": "$env.turn"
+                }
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "game_over"
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "branch",
+              "if": {
+                "eq": [
+                  {
+                    "var": "choice"
+                  },
+                  {
+                    "const": "call"
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "sb_committed",
+                  "value": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "call": [
+                            "poker_call_to",
+                            {
+                              "var": "$state"
+                            },
+                            {
+                              "const": "p_sb"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "var": "$env.sb_committed"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$env.turn"
+                    }
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "bb_committed",
+                  "value": {
+                    "switch": [
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "call": [
+                            "poker_call_to",
+                            {
+                              "var": "$state"
+                            },
+                            {
+                              "const": "p_bb"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "var": "$env.bb_committed"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$env.turn"
+                    }
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "sb_stack",
+                  "value": {
+                    "expr": "stack_size - $env.sb_committed"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "bb_stack",
+                  "value": {
+                    "expr": "stack_size - $env.bb_committed"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "sb_acted",
+                  "value": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": true
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "var": "$env.sb_acted"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$env.turn"
+                    }
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "bb_acted",
+                  "value": {
+                    "switch": [
+                      {
+                        "case": "p_bb",
+                        "then": true
+                      },
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "var": "$env.bb_acted"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$env.turn"
+                    }
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "last_action",
+                  "value": {
+                    "if": {
+                      "cond": {
+                        "gt": [
+                          {
+                            "var": "amount"
+                          },
+                          {
+                            "const": 0
+                          }
+                        ]
+                      },
+                      "then": "call",
+                      "else": "check"
+                    }
+                  }
+                }
+              ],
+              "else": [
+                {
+                  "op": "setEnv",
+                  "key": "sb_committed",
+                  "value": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "var": "amount"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "var": "$env.sb_committed"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$env.turn"
+                    }
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "bb_committed",
+                  "value": {
+                    "switch": [
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "var": "amount"
+                        }
+                      },
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "var": "$env.bb_committed"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$env.turn"
+                    }
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "sb_stack",
+                  "value": {
+                    "expr": "stack_size - $env.sb_committed"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "bb_stack",
+                  "value": {
+                    "expr": "stack_size - $env.bb_committed"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "sb_acted",
+                  "value": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": true
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "var": "$env.sb_acted"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$env.turn"
+                    }
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "bb_acted",
+                  "value": {
+                    "switch": [
+                      {
+                        "case": "p_bb",
+                        "then": true
+                      },
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "var": "$env.bb_acted"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$env.turn"
+                    }
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "last_raise_delta",
+                  "value": {
+                    "expr": "amount - $env.last_call_to"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "last_action",
+                  "value": {
+                    "const": "raise"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "and": [
+              {
+                "not": {
+                  "get": [
+                    "$env",
+                    "sb_folded"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "get": [
+                    "$env",
+                    "bb_folded"
+                  ]
+                }
+              },
+              {
+                "call": [
+                  "poker_round_over",
+                  {
+                    "var": "$state"
+                  }
+                ]
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "branch",
+              "if": {
+                "eq": [
+                  {
+                    "get": [
+                      "$env",
+                      "street"
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "deal_flop1"
+                  }
+                }
+              ],
+              "else": [
+                {
+                  "op": "branch",
+                  "if": {
+                    "eq": [
+                      {
+                        "get": [
+                          "$env",
+                          "street"
+                        ]
+                      },
+                      {
+                        "const": 1
+                      }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "op": "setEnv",
+                      "key": "phase",
+                      "value": {
+                        "const": "deal_turn"
+                      }
+                    }
+                  ],
+                  "else": [
+                    {
+                      "op": "branch",
+                      "if": {
+                        "eq": [
+                          {
+                            "get": [
+                              "$env",
+                              "street"
+                            ]
+                          },
+                          {
+                            "const": 2
+                          }
+                        ]
+                      },
+                      "then": [
+                        {
+                          "op": "setEnv",
+                          "key": "phase",
+                          "value": {
+                            "const": "deal_river"
+                          }
+                        }
+                      ],
+                      "else": [
+                        {
+                          "op": "setEnv",
+                          "key": "phase",
+                          "value": {
+                            "const": "showdown"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "switch": [
+                  {
+                    "case": "p_sb",
+                    "then": "p_bb"
+                  },
+                  {
+                    "case": "p_bb",
+                    "then": "p_sb"
+                  }
+                ],
+                "input": {
+                  "var": "$env.turn"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "chance": [
+    {
+      "id": "deal_sb1",
+      "phases": [
+        "deal_sb1"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_deal_sb1",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_bb1",
+      "phases": [
+        "deal_bb1"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_deal_bb1",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_sb2",
+      "phases": [
+        "deal_sb2"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_deal_sb2",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_bb2",
+      "phases": [
+        "deal_bb2"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_deal_bb2",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_flop1",
+      "phases": [
+        "deal_flop1"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_deal_flop1",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_flop2",
+      "phases": [
+        "deal_flop2"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_deal_flop2",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_flop3",
+      "phases": [
+        "deal_flop3"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_deal_flop3",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_turn",
+      "phases": [
+        "deal_turn"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_deal_turn",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_river",
+      "phases": [
+        "deal_river"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_deal_river",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "showdown",
+      "phases": [
+        "showdown"
+      ],
+      "probability": {
+        "explicit": [
+          {
+            "outcome": "show",
+            "prob": 1.0
+          }
+        ]
+      },
+      "effectMap": {
+        "show": "do_showdown"
+      },
+      "canonicalKey": {
+        "template": "showdown"
+      }
+    }
+  ],
+  "phases": [
+    {
+      "id": "deal_sb1",
+      "actions": [],
+      "description": "Chance: deal SB first card"
+    },
+    {
+      "id": "deal_bb1",
+      "actions": [],
+      "description": "Chance: deal BB first card"
+    },
+    {
+      "id": "deal_sb2",
+      "actions": [],
+      "description": "Chance: deal SB second card"
+    },
+    {
+      "id": "deal_bb2",
+      "actions": [],
+      "description": "Chance: deal BB second card"
+    },
+    {
+      "id": "betting",
+      "actions": [
+        "act"
+      ],
+      "description": "Betting round: fold / call (check) / raise"
+    },
+    {
+      "id": "deal_flop1",
+      "actions": [],
+      "description": "Chance: deal flop card 1"
+    },
+    {
+      "id": "deal_flop2",
+      "actions": [],
+      "description": "Chance: deal flop card 2"
+    },
+    {
+      "id": "deal_flop3",
+      "actions": [],
+      "description": "Chance: deal flop card 3"
+    },
+    {
+      "id": "deal_turn",
+      "actions": [],
+      "description": "Chance: deal turn card"
+    },
+    {
+      "id": "deal_river",
+      "actions": [],
+      "description": "Chance: deal river card"
+    },
+    {
+      "id": "showdown",
+      "actions": [],
+      "description": "Chance: reveal hands and award the pot"
+    },
+    {
+      "id": "game_over",
+      "actions": [],
+      "description": "Hand finished"
+    }
+  ],
+  "visibility": {
+    "default": "partial",
+    "rules": [
+      {
+        "view": "sb_hole_view",
+        "filter": {
+          "eq": [
+            {
+              "var": "$viewer"
+            },
+            "p_bb"
+          ]
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "bb_hole_view",
+        "filter": {
+          "eq": [
+            {
+              "var": "$viewer"
+            },
+            "p_sb"
+          ]
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      }
+    ]
+  },
+  "terminal": [
+    {
+      "id": "hand_done",
+      "condition": {
+        "eq": [
+          {
+            "get": [
+              "$env",
+              "phase"
+            ]
+          },
+          "game_over"
+        ]
+      }
+    }
+  ],
+  "utility": [
+    {
+      "player": "p_sb",
+      "value": {
+        "call": [
+          "poker_payoff",
+          {
+            "var": "$state"
+          },
+          "p_sb"
+        ]
+      },
+      "when": {
+        "eq": [
+          {
+            "get": [
+              "$env",
+              "phase"
+            ]
+          },
+          "game_over"
+        ]
+      }
+    },
+    {
+      "player": "p_bb",
+      "value": {
+        "call": [
+          "poker_payoff",
+          {
+            "var": "$state"
+          },
+          "p_bb"
+        ]
+      },
+      "when": {
+        "eq": [
+          {
+            "get": [
+              "$env",
+              "phase"
+            ]
+          },
+          "game_over"
+        ]
+      }
+    }
+  ],
+  "functions": {
+    "contains": {
+      "description": "List membership test",
+      "solverSafe": true,
+      "pure": true
+    },
+    "card_rank": {
+      "description": "Numeric rank of a card id (2..14)",
+      "solverSafe": true,
+      "pure": true
+    },
+    "poker_hand_value": {
+      "description": "Best 5-card hand value from 2..7 cards",
+      "solverSafe": true,
+      "pure": true
+    },
+    "poker_call_to": {
+      "description": "Total committed amount the player reaches by calling",
+      "solverSafe": true,
+      "pure": true
+    },
+    "poker_min_raise_to": {
+      "description": "Minimum total for a legal raise",
+      "solverSafe": true,
+      "pure": true
+    },
+    "poker_round_over": {
+      "description": "Whether the current betting round is finished",
+      "solverSafe": true,
+      "pure": true
+    },
+    "poker_winner": {
+      "description": "Hand winner id, or null for a split pot",
+      "solverSafe": true,
+      "pure": true
+    },
+    "poker_payoff": {
+      "description": "Net chip change for a player at a terminal state",
+      "solverSafe": true,
+      "pure": true
+    },
+    "poker_pot": {
+      "description": "Total chips committed to the pot",
+      "solverSafe": true,
+      "pure": true
+    }
+  }
+}

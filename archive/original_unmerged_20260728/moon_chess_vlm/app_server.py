@@ -23,7 +23,6 @@ def _mask_secret(value: str | None) -> str:
         return f"SET(len={len(value)})"
     return f"{value[:4]}...{value[-4:]} (len={len(value)})"
 
-
 class MoonChessHandler(SimpleHTTPRequestHandler):
     server_version = "MoonChessHTTP/0.1"
 

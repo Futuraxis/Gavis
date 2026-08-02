@@ -1,4 +1,4 @@
-"""Tests for Layer 2: GameEngine (stochastic gomoku)."""
+"""Tests for Layer 2: GameEngine (stochastic gomoku, v5.0)."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import (
     ActionInstance,
     ChanceOutcome,
-    create_gomoku_state,
+    create_initial_state,
     clone_state,
-    check_five_in_row,
+    check_line,
 )
 
 RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
@@ -37,11 +37,11 @@ def engine(gomoku_rules: dict) -> GameEngine:
 class TestStateBasics:
     def test_create_initial_state(self, engine: GameEngine):
         state = engine.create_initial_state()
-        assert state["board_size"] == 9
-        assert len(state["_board"]) == 81
-        assert all(c is None for c in state["_board"])
+        board = state["_arrays"]["board"]
+        assert len(board) == 81  # 9×9 default
+        assert all(c is None for c in board)
         assert state["env"]["phase"] == "playing"
-        assert state["env"]["turn"]["currentPlayerId"] == "p_black"
+        assert state["env"]["turn"] == "p_black"
 
     def test_get_node_type_initial(self, engine: GameEngine):
         state = engine.create_initial_state()
@@ -61,13 +61,21 @@ class TestStateBasics:
         assert not engine.is_terminal(state)
 
     def test_clone_state(self):
-        state = create_gomoku_state(5)
+        schema = {
+            "groundState": {
+                "board": {"type": "array", "length": 25, "element": "string?"},
+                "env": {"type": "env", "fields": {"phase": {"type": "string", "initial": "playing"}}},
+            },
+            "derivedViews": {},
+        }
+        state = create_initial_state(schema)
+        board = state["_arrays"]["board"]
         cloned = clone_state(state)
-        assert cloned["board_size"] == 5
-        assert cloned["_board"] == state["_board"]
+        assert len(cloned["_arrays"]["board"]) == 25
+        assert cloned["_arrays"]["board"] == board
         # Mutating clone should not affect original
-        cloned["_board"][0] = "p_black"
-        assert state["_board"][0] is None
+        cloned["_arrays"]["board"][0] = "p_black"
+        assert board[0] is None
 
 
 # ── Actions ───────────────────────────────────────────────────────
@@ -82,7 +90,8 @@ class TestActions:
         # Should be a different object
         assert new_state is not state
         # Board should have changed
-        placed = sum(1 for c in new_state["_board"] if c is not None)
+        board = new_state["_arrays"]["board"]
+        placed = sum(1 for c in board if c is not None)
         assert placed == 1
 
     def test_place_black_then_white(self, engine: GameEngine):
@@ -91,16 +100,16 @@ class TestActions:
 
         # Black places
         state = engine.apply_action(state, actions[0])
-        assert state["_board"][0] == "p_black"
+        board = state["_arrays"]["board"]
+        assert board[0] == "p_black"
 
         # Chance node (vanish check)
         assert engine.get_node_type(state) == "chance"
         outcomes = engine.get_chance_outcomes(state)
         assert len(outcomes) == 2
-        assert outcomes[0].key in ("vanish", "keep")
         outcome, state = engine.sample_chance(state)
 
-        # Now white's turn
+        # Now white's turn (unless game over)
         if engine.get_node_type(state) == "player":
             assert engine.get_current_player(state) == "p_white"
 
@@ -135,7 +144,7 @@ class TestActions:
         # Apply vanish
         vanish = [o for o in outcomes if o.key == "vanish"][0]
         new_state = engine.apply_chance(state, vanish)
-        assert new_state["_board"][40] is None
+        assert new_state["_arrays"]["board"][40] is None
 
     def test_apply_chance_keep(self, engine: GameEngine):
         state = engine.create_initial_state()
@@ -145,7 +154,7 @@ class TestActions:
         outcomes = engine.get_chance_outcomes(state)
         keep = [o for o in outcomes if o.key == "keep"][0]
         new_state = engine.apply_chance(state, keep)
-        assert new_state["_board"][40] == "p_black"
+        assert new_state["_arrays"]["board"][40] == "p_black"
 
     def test_sample_chance(self, engine: GameEngine):
         """Over many samples, verify approx 50% vanish rate."""
@@ -157,7 +166,6 @@ class TestActions:
         n = 200
         for i in range(n):
             s = clone_state(state)
-            # Use seed to get deterministic sampling
             engine.rng.seed(i * 100)
             outcome, _ = engine.sample_chance(s)
             if outcome.key == "vanish":
@@ -176,8 +184,9 @@ class TestUtility:
         """Simulate five in a row directly on the board."""
         state = engine.create_initial_state()
         # Manually set five in a row for p_black
+        board = state["_arrays"]["board"]
         for i in range(5):
-            state["_board"][i] = "p_black"
+            board[i] = "p_black"
         state["env"]["winner"] = "p_black"
         state["env"]["phase"] = "game_over"
 
@@ -192,32 +201,35 @@ class TestUtility:
         assert engine.get_utility(state, "p_white") == 0.0
 
     def test_observation_structure(self, engine: GameEngine):
+        """get_observation returns projected views (derived views + env)."""
         state = engine.create_initial_state()
         obs = engine.get_observation(state, "p_black")
-        assert "board" in obs
-        assert "board_size" in obs
-        assert "current_player" in obs
-        assert obs["board_size"] == 9
-        assert obs["current_player"] == "p_black"
-        assert len(obs["board"]) == 81
+        # Should have at least 'cell' view (from derivedViews) and 'env'
+        assert "cell" in obs
+        assert "env" in obs
+        # cell view should have 81 entities (9×9 board)
+        assert len(obs["cell"]) == 81
+        assert obs["env"]["turn"] == "p_black"
 
     def test_info_set_key(self, engine: GameEngine):
         state = engine.create_initial_state()
         key1 = engine.get_info_set_key(state, "p_black")
         key2 = engine.get_info_set_key(state, "p_white")
         assert isinstance(key1, str)
-        assert key1 != key2
+        assert len(key1) > 0
+        # Perfect information game: both players see the same thing
+        assert key1 == key2
 
-    def test_load_state_valid(self, engine: GameEngine):
-        state = engine.create_initial_state()
-        state["_board"][0] = "p_black"
-        loaded = engine.load_state(state)
-        assert loaded["_board"][0] == "p_black"
-        assert "cell_0_0" in loaded["nodes"]
-
-    def test_load_state_invalid_board(self, engine: GameEngine):
-        with pytest.raises(ValueError, match="_board"):
-            engine.load_state({"_board": [None] * 10, "env": {}})
+    def test_load_state(self, engine: GameEngine):
+        """load_state fills in default schema from any state dict."""
+        ext_state = {
+            "_arrays": {"board": ["p_black"] + [None] * 80},
+            "env": {"phase": "playing", "turn": "p_white", "winner": None},
+        }
+        loaded = engine.load_state(ext_state)
+        assert loaded["_arrays"]["board"][0] == "p_black"
+        assert loaded["env"]["turn"] == "p_white"
+        assert loaded["env"]["phase"] == "playing"
 
 
 # ── Expr evaluator ────────────────────────────────────────────────
@@ -238,19 +250,47 @@ class TestExprEvaluator:
         assert engine.expr.eval({"not": {"const": False}}, {})
 
     def test_var(self, engine: GameEngine):
-        ctx = {"$env": {"turn": {"currentPlayerId": "p_black"}}}
-        val = engine.expr.eval({"var": "$env.turn.currentPlayerId"}, ctx)
+        ctx = {"$env": {"turn": "p_black"}}
+        val = engine.expr.eval({"var": "$env.turn"}, ctx)
         assert val == "p_black"
 
     def test_template(self, engine: GameEngine):
-        ctx = {"cell": {"props": {"x": 3, "y": 5}}}
-        val = engine.expr.eval(
-            {"template": "place:{cell.props.x},{cell.props.y}"}, ctx
-        )
+        ctx = {"cell": {"x": 3, "y": 5}}
+        val = engine.expr.eval({"template": "place:{$cell.x},{$cell.y}"}, ctx)
+        # Note: template uses full var path inside {}
         assert val == "place:3,5"
 
     def test_count(self, engine: GameEngine):
-        assert engine.expr.eval({"count": [1, 2, 3]}, {}) == 3
+        # count works on evaluator result
+        result = engine.expr.eval({"count": [1, 2, 3]}, {})
+        assert result == 3
+
+    def test_switch(self, engine: GameEngine):
+        expr = {
+            "switch": [
+                {"case": "p_black", "then": "black"},
+                {"case": "p_white", "then": "white"},
+            ],
+            "input": {"const": "p_white"},
+        }
+        assert engine.expr.eval(expr, {}) == "white"
+
+    def test_switch_default(self, engine: GameEngine):
+        expr = {
+            "switch": [
+                {"case": "p_black", "then": "black"},
+                {"case": "p_white", "then": "white"},
+                {"then": "unknown"},
+            ],
+            "input": {"const": "p_red"},
+        }
+        assert engine.expr.eval(expr, {}) == "unknown"
+
+    def test_arithmetic_expr(self, engine: GameEngine):
+        ctx = {"board_size": 9, "y": 3, "x": 4}
+        # The ExprEvaluator._eval_arithmetic resolves var names from context
+        result = engine.expr.eval({"expr": "y * board_size + x"}, ctx)
+        assert result == 31  # 3 * 9 + 4
 
 
 # ── Different board sizes ─────────────────────────────────────────
@@ -264,7 +304,7 @@ class TestBoardSizes:
         rules["constants"]["board_size"] = size
         eng = GameEngine(rules, seed=42)
         state = eng.create_initial_state()
-        assert state["board_size"] == size
-        assert len(state["_board"]) == size * size
+        board = state["_arrays"]["board"]
+        assert len(board) == size * size
         actions = eng.get_legal_actions(state)
         assert len(actions) == size * size

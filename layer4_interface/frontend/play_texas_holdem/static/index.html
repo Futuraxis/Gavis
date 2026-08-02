@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>德州扑克 · 人机对弈</title>
+  <link rel="stylesheet" href="css/poker.css">
+</head>
+<body>
+  <main class="app">
+    <header class="app-header">
+      <h1>🃏 德州扑克</h1>
+      <p class="subtitle">单挑无限注 · 盲注 1/2 · 初始筹码 100</p>
+    </header>
+
+    <section id="setup" class="setup">
+      <div class="setup-row">
+        <label>座位
+          <select id="player-seat">
+            <option value="p_sb">小盲位</option>
+            <option value="p_bb">大盲位</option>
+            <option value="random" selected>随机</option>
+          </select>
+        </label>
+        <label>AI 难度
+          <select id="difficulty">
+            <option value="easy">简单</option>
+            <option value="normal" selected>正常</option>
+            <option value="hard">困难</option>
+          </select>
+        </label>
+        <button id="start-btn" type="button">开始对局</button>
+      </div>
+    </section>
+
+    <section id="game" class="game hidden">
+      <div class="table">
+        <div id="ai-panel" class="player-panel ai">
+          <div class="player-info">
+            <span id="ai-name" class="player-name">🤖 AI</span>
+            <span id="ai-stack" class="player-stack">100</span>
+            <span id="ai-committed" class="player-committed"></span>
+          </div>
+          <div id="ai-cards" class="cards"></div>
+        </div>
+
+        <div class="board-area">
+          <div id="pot" class="pot">底池 3</div>
+          <div id="community" class="cards community-cards"></div>
+          <div id="log" class="log"></div>
+        </div>
+
+        <div id="my-panel" class="player-panel me">
+          <div class="player-info">
+            <span id="my-name" class="player-name">😊 你</span>
+            <span id="my-stack" class="player-stack">100</span>
+            <span id="my-committed" class="player-committed"></span>
+          </div>
+          <div id="my-cards" class="cards"></div>
+        </div>
+      </div>
+
+      <div id="controls" class="controls hidden">
+        <button id="fold-btn" type="button" class="act-btn fold">弃牌</button>
+        <button id="call-btn" type="button" class="act-btn call">过牌</button>
+        <div class="raise-group">
+          <button id="raise-btn" type="button" class="act-btn raise">加注</button>
+          <select id="raise-amount"></select>
+        </div>
+        <button id="allin-btn" type="button" class="act-btn allin">全下</button>
+      </div>
+
+      <div id="status" class="status">准备中…</div>
+      <div id="result" class="result hidden"></div>
+      <button id="restart-btn" type="button" class="restart hidden">再来一局</button>
+    </section>
+  </main>
+
+  <script src="js/game.js"></script>
+</body>
+</html>

@@ -104,7 +104,9 @@ class GymAdapter:
 
     def _encode_state(self, state: State) -> int:
         """Encode board as 3-base integer (matching original PSRO encoding)."""
-        board = state['_board']
+        board = state.get('_board')
+        if board is None:
+            board = state.get('_arrays', {}).get('board', [])
         code = 0
         for i, val in enumerate(board):
             if val == 'p_black':

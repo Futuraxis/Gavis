@@ -21,8 +21,9 @@ class TestObservationToState:
             confidence=[[0.0]*3 for _ in range(3)],
         )
         state = observation_to_state(obs, adapter)
-        assert state["board_size"] == 3
-        assert all(c is None for c in state["_board"])
+        board = state["_arrays"]["board"]
+        assert len(board) == 9
+        assert all(c is None for c in board)
 
     def test_with_pieces(self, adapter: MoonChessAdapter):
         obs = Observation(
@@ -30,9 +31,9 @@ class TestObservationToState:
             confidence=[[0.9, 0.0, 0.0], [0.0, 0.85, 0.0], [0.0, 0.0, 0.0]],
         )
         state = observation_to_state(obs, adapter)
-        assert state["_board"][0] == "p_black"
-        assert state["_board"][4] == "p_white"
-        assert state["board_size"] == 3
+        board = state["_arrays"]["board"]
+        assert board[0] == "p_black"
+        assert board[4] == "p_white"
 
     def test_various_symbols(self, adapter: MoonChessAdapter):
         """Various unicode symbols for X and O should all map correctly."""
@@ -45,8 +46,8 @@ class TestObservationToState:
                 confidence=[[0.9, 0.0], [0.0, 0.85]],
             )
             state = observation_to_state(obs, adapter)
-            assert state["_board"][0] == "p_black", f"{sx} → p_black failed"
-            assert state["_board"][3] == "p_white", f"{so} → p_white failed"
+            assert state["_arrays"]["board"][0] == "p_black", f"{sx} → p_black failed"
+            assert state["_arrays"]["board"][3] == "p_white", f"{so} → p_white failed"
 
     def test_load_state_preserves_env(self, adapter: MoonChessAdapter):
         obs = Observation(
@@ -54,7 +55,6 @@ class TestObservationToState:
             confidence=[[0.0]*3 for _ in range(3)],
         )
         state = observation_to_state(obs, adapter)
-        assert "pieceOrder" in state["env"]
         assert state["env"]["phase"] == "playing"
         assert adapter.get_current_player(state) == "p_black"
 
@@ -66,7 +66,6 @@ class TestObservationToState:
         state = observation_to_state(obs, adapter)
         actions = adapter.get_legal_actions(state)
         assert len(actions) == 8  # one cell occupied
-        # The occupied cell should not be in legal actions
         for a in actions:
             cell = a.params.get("cell", {})
             cid = cell.get("id", "") if isinstance(cell, dict) else ""

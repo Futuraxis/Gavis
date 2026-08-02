@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unified Benchmark — runs all four solvers on the same game and compares.
 
-Usage:  python -m demos.benchmark_all [--game moon_chess|stochastic_gomoku] [--episodes N]
+Usage:  python -m demos.benchmark_all [--game moon_chess|stochastic_gomoku|texas_holdem] [--episodes N]
 
 This is the "一键横评" entry point that validates the Layer 2→3 integration.
 """
@@ -40,6 +40,9 @@ def load_engine(game: str, seed: int = 42):
         adapter = MoonChessAdapter(seed=seed)
         versions = {'feature_dim': 38, 'action_dim': 9}
         return adapter, versions
+    elif game == 'texas_holdem':
+        from layer2_engine.games.texas_holdem.texas_env_adapter import TexasHoldemAdapter
+        return TexasHoldemAdapter(seed=seed), {}
     else:
         raise ValueError(f"Unknown game: {game}")
 
@@ -104,7 +107,7 @@ def main():
         description='Gavis Unified Benchmark — compare all solvers on the same game',
     )
     parser.add_argument('--game', type=str, default='moon_chess',
-                        choices=['moon_chess', 'stochastic_gomoku'])
+                        choices=['moon_chess', 'stochastic_gomoku', 'texas_holdem'])
     parser.add_argument('--episodes', type=int, default=10,
                         help='Training episodes (only affects PPO/PSRO)')
     parser.add_argument('--solvers', type=str, nargs='+',

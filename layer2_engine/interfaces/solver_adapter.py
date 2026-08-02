@@ -2,8 +2,7 @@
 
 Every solver (MCTS, CFR, PPO, PSRO) consumes the game exclusively through
 this Protocol.  ``GameEngine`` is the canonical implementation, but any
-object satisfying the Protocol (e.g. ``MockMoonEnv`` wrapped appropriately)
-can be used for testing.
+object satisfying the Protocol can be used for testing.
 """
 
 from __future__ import annotations
@@ -18,12 +17,10 @@ NodeType = Literal["player", "chance", "terminal"]
 
 
 State = dict[str, Any]
-"""Game state — a plain dict for fast cloning.
+"""Game state — a generic dict with ground arrays + env scalars.
 
-At minimum a State must have:
-  - ``board_size``: int
-  - ``_board``: list[player_id | None]
-  - ``env``: dict with keys ``phase``, ``turn``, ``winner``, ...
+Ground arrays are stored under ``_arrays``, environment scalars under ``env``.
+Derived views are computed on-the-fly by the engine.
 """
 
 
@@ -49,8 +46,9 @@ class ChanceOutcome:
 Obs = dict[str, Any]
 """An observation returned by ``get_observation()``.
 
-For perfect-information games this is the full board state; for
-imperfect-information games it is the player's partial view.
+For perfect-information games this includes materialized derived views;
+for imperfect-information games it is the player's partial view after
+visibility projection.
 """
 
 # ── Protocol ─────────────────────────────────────────────────────
@@ -109,7 +107,18 @@ class SolverAdapter(Protocol):
         """Return a canonical info-set key (used by CFR)."""
         ...
 
-    # ── Interface Layer extension (optional) ───────────────────
+    # ── Visibility projection (v5.0) ──────────────────────────
+
+    def project_observation(self, state: State, viewer: str) -> Obs:
+        """Return the state as seen by ``viewer`` after visibility rules.
+
+        For perfect-information games this is the full state; for
+        imperfect-information games it includes only the visible
+        fields per the visibility rules declared in the JSON.
+        """
+        ...
+
+    # ── Interface Layer extension ─────────────────────────────
 
     def load_state(self, state: State) -> State:
         """Import an externally-constructed state (e.g. from VLM).

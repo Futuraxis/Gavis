@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""MCTS Demo — plays Stochastic Gomoku using MCTS.
+"""MCTS Demo — plays Stochastic Gomoku using MCTS (v5.0).
 
-Usage:  python -m demos.demo_mcts [--budget N] [--size N]
+Usage:  python -m demos.demo_mcts [--budget N] [--size N] [--seed N]
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 
@@ -20,9 +19,23 @@ SYMBOLS = {'p_black': '●', 'p_white': '○', None: '·'}
 COLOR_NAMES = {'p_black': '黑方 ●', 'p_white': '白方 ○'}
 
 
+def get_board(state: dict) -> list:
+    """Get board array from state (works with v5.0 format)."""
+    arrays = state.get('_arrays', {})
+    board = arrays.get('board') or state.get('_board', [])
+    return board
+
+
+def get_board_size(state: dict) -> int:
+    """Get board size from state."""
+    arrays = state.get('_arrays', {})
+    board = get_board(state)
+    return int(len(board) ** 0.5) if board else 9
+
+
 def render_board(state: dict) -> str:
-    bs = state['board_size']
-    board = state['_board']
+    board = get_board(state)
+    bs = get_board_size(state)
     lines = ['   ' + ''.join(f'{i:2}' for i in range(bs))]
     for y in range(bs):
         row = f'{y:2} '
@@ -38,7 +51,8 @@ def play_one_game(engine, mcts, verbose=True):
 
     if verbose:
         print('═' * 50)
-        print(f'MCTS 随机五子棋 — 棋盘 {state["board_size"]}×{state["board_size"]}')
+        board = get_board(state)
+        print(f'MCTS 随机五子棋 — 棋盘 {get_board_size(state)}×{get_board_size(state)}')
         print(f'预算: {mcts.budget}')
         print('═' * 50)
 

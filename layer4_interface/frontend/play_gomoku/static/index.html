@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>随机五子棋 · 人机对弈</title>
+  <link rel="stylesheet" href="css/gomoku.css">
+</head>
+<body>
+  <main class="app">
+    <header class="app-header">
+      <h1>⚫ 随机五子棋 ⚪</h1>
+      <p class="subtitle">9×9 · 五连获胜 · 每手落子有 50% 概率消失</p>
+    </header>
+
+    <section id="setup" class="setup">
+      <div class="setup-row">
+        <label>执子
+          <select id="player-color">
+            <option value="p_black">黑棋先手</option>
+            <option value="p_white">白棋后手</option>
+            <option value="random">随机</option>
+          </select>
+        </label>
+        <label>AI 难度
+          <select id="difficulty">
+            <option value="easy">简单</option>
+            <option value="normal" selected>正常</option>
+            <option value="hard">困难</option>
+          </select>
+        </label>
+        <button id="start-btn" type="button">开始对局</button>
+      </div>
+    </section>
+
+    <section id="game" class="game hidden">
+      <div id="status" class="status">准备中…</div>
+      <div id="board" class="board" aria-label="棋盘"></div>
+      <div id="vanish-toast" class="vanish-toast hidden">💨 落子被随机抹去了！</div>
+      <div id="result" class="result hidden"></div>
+      <button id="restart-btn" type="button" class="restart hidden">再来一局</button>
+    </section>
+  </main>
+
+  <script src="js/gomoku.js"></script>
+</body>
+</html>

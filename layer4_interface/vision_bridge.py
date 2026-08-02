@@ -17,6 +17,7 @@ def observation_to_state(
     """Convert a visual ``Observation`` to an Engine-compatible ``State``.
 
     This is the core translation function of Layer 4 → Layer 2.
+    Builds a ground state in v5.0 format and passes it to ``engine.load_state()``.
     """
     board_grid = observation.boardObservation
     bs = len(board_grid)
@@ -33,19 +34,23 @@ def observation_to_state(
             else:
                 _board.append(None)
 
-    state = {
-        'board_size': bs,
-        '_board': _board,
+    state: State = {
+        '_arrays': {
+            'board': _board,
+        },
         'env': {
+            'turn': 'p_black',
+            'round': 0,
             'phase': 'playing',
-            'turn': {'currentPlayerId': 'p_black', 'round': 0},
             'winner': None,
             'lastPlacedCell': None,
             'lastActor': None,
-            'lastAction': None,
-            'stepCount': 0,
-            'pieceOrder': {'p_black': [], 'p_white': []},
         },
+        '_players': [{'id': 'p_black'}, {'id': 'p_white'}],
+        '_constants': {'board_size': bs},
+        '_schema': {},
+        '_pending_events': [],
+        '_pending_effects': [],
     }
 
     return engine.load_state(state)

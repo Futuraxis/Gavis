@@ -1,5 +1,100 @@
 {
-  "languageVersion": "4.1.0",
+  "meta": {
+    "gameId": "moon_chess",
+    "version": "5.0.0",
+    "description": "3×3 board, 3 pieces per player, FIFO eviction, three-in-a-row wins"
+  },
+  "players": [
+    "p_black",
+    "p_white"
+  ],
+  "groundState": {
+    "board": {
+      "type": "array",
+      "length": {
+        "expr": "board_size * board_size"
+      },
+      "element": "player_id?"
+    },
+    "pieceOrder": {
+      "type": "array",
+      "mutable": true,
+      "element": {
+        "cell_id": "string",
+        "player_id": "string"
+      }
+    },
+    "env": {
+      "type": "env",
+      "fields": {
+        "turn": {
+          "type": "player_id",
+          "initial": "p_black"
+        },
+        "round": {
+          "type": "int",
+          "initial": 0
+        },
+        "phase": {
+          "type": "string",
+          "initial": "playing"
+        },
+        "winner": {
+          "type": "player_id?",
+          "initial": null
+        },
+        "lastPlacedCell": {
+          "type": "string?",
+          "initial": null
+        },
+        "lastActor": {
+          "type": "player_id?",
+          "initial": null
+        }
+      }
+    }
+  },
+  "derivedViews": {
+    "cell": {
+      "from": {
+        "array": "board",
+        "type": "grid",
+        "cols": {
+          "const": 3
+        }
+      },
+      "fields": {
+        "id": {
+          "template": "cell_{$row}_{$col}"
+        },
+        "occupant": {
+          "get": [
+            "$self",
+            "value"
+          ]
+        },
+        "x": {
+          "var": "$col"
+        },
+        "y": {
+          "var": "$row"
+        }
+      }
+    },
+    "player": {
+      "from": {
+        "type": "literal",
+        "list": {
+          "var": "$players"
+        }
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value.id"
+        }
+      }
+    }
+  },
   "constants": {
     "board_size": 3,
     "win_length": 3,
@@ -7,12 +102,19 @@
   },
   "queries": {
     "empty_cells": {
-      "description": "所有空格子",
-      "expr": {
-        "query": {"type": "board_cell"},
-        "filter": {
-          "eq": [{"get": ["$node", "props.occupant"]}, {"const": null}]
-        }
+      "view": "cell",
+      "filter": {
+        "eq": [
+          {
+            "get": [
+              "$node",
+              "occupant"
+            ]
+          },
+          {
+            "const": null
+          }
+        ]
       }
     }
   },
@@ -20,134 +122,383 @@
     {
       "id": "place_piece",
       "type": "move",
-      "actorKind": "player",
-      "actor": {"var": "$env.turn.currentPlayerId"},
-      "phases": ["playing"],
+      "phases": [
+        "playing"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
       "params": {
         "cell": {
-          "type": "node",
-          "label": "落子位置",
-          "domain": {"ref": "empty_cells"}
+          "view": "cell",
+          "domain": {
+            "ref": "empty_cells"
+          }
         }
       },
-      "legal": {"const": true},
+      "legal": {
+        "const": true
+      },
       "effectRef": "do_place_and_check",
-      "canonicalKey": {"template": "place:{cell.props.x},{cell.props.y}"}
+      "canonicalKey": {
+        "template": "place:{$cell.x},{$cell.y}"
+      }
     }
   ],
-  "effects": {
+  "effectors": {
     "do_place": {
-      "description": "落子 + 记录顺序",
-      "params": {"cell": {"type": "node"}, "actor": {"type": "node"}},
+      "description": "Place piece + record cell order",
       "ops": [
-        {"op": "set", "path": "state.nodes.{cell.id}.props.occupant", "value": {"get": ["$actor", "id"]}},
-        {"op": "set", "path": "state.env.lastPlacedCell", "value": {"get": ["$cell", "id"]}},
-        {"op": "set", "path": "state.env.lastActor", "value": {"get": ["$actor", "id"]}},
-        {"op": "inc", "path": "state.env.turn.round", "by": {"const": 1}},
         {
-          "op": "listAppend",
-          "path": "state.env.pieceOrder.{actor.id}",
-          "value": {"get": ["$cell", "id"]}
+          "op": "setIndex",
+          "array": "board",
+          "at": {
+            "expr": "$cell.y * board_size + $cell.x"
+          },
+          "value": {
+            "var": "$env.turn"
+          }
+        },
+        {
+          "op": "append",
+          "array": "pieceOrder",
+          "value": {
+            "cell_id": {
+              "get": [
+                "$cell",
+                "id"
+              ]
+            },
+            "player_id": {
+              "var": "$env.turn"
+            }
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "lastPlacedCell",
+          "value": {
+            "get": [
+              "$cell",
+              "id"
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "lastActor",
+          "value": {
+            "var": "$env.turn"
+          }
+        },
+        {
+          "op": "inc",
+          "key": "round",
+          "by": {
+            "const": 1
+          }
         }
       ]
     },
     "do_evict_oldest": {
-      "description": "FIFO 淘汰最老棋子 (超过 max_pieces 时)",
+      "description": "FIFO eviction — remove oldest piece beyond max",
       "ops": [
         {
-          "op": "trimQueue",
-          "path": "state.env.pieceOrder.{env.lastActor}",
-          "max": {"const": 3}
+          "op": "trimByKey",
+          "array": "pieceOrder",
+          "max": {
+            "const": 3
+          },
+          "key": "player_id",
+          "value": {
+            "var": "$env.lastActor"
+          },
+          "onEvict": [
+            {
+              "op": "setIndex",
+              "array": "board",
+              "at": {
+                "var": "evicted_index"
+              },
+              "value": {
+                "const": null
+              }
+            }
+          ]
         }
       ]
     },
     "do_check_winner": {
-      "description": "检查三连获胜",
+      "description": "Check for three-in-a-row",
       "ops": [
         {
           "op": "branch",
-          "if": {"call": ["check_five_in_row", {"var": "$state"}, {"get": ["$env", "lastPlacedCell"]}]},
+          "if": {
+            "call": [
+              "check_line",
+              {
+                "var": "$state"
+              },
+              {
+                "var": "$env.lastActor"
+              },
+              {
+                "const": 3
+              }
+            ]
+          },
           "then": [
-            {"op": "set", "path": "state.env.winner", "value": {"get": ["$env", "lastActor"]}},
-            {"op": "set", "path": "state.env.phase", "value": {"const": "game_over"}}
+            {
+              "op": "setEnv",
+              "key": "winner",
+              "value": {
+                "var": "$env.lastActor"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "game_over"
+              }
+            }
           ],
           "else": []
         }
       ]
     },
     "do_place_and_check": {
-      "description": "完整落子流程: 放置 → 淘汰 → 判胜 → 切换回合",
+      "description": "Complete place flow: place → evict → check winner → switch turn",
       "ops": [
-        {"op": "callEffect", "effectRef": "do_place"},
-        {"op": "callEffect", "effectRef": "do_evict_oldest"},
-        {"op": "branch",
-          "if": {"not": {"eq": [{"get": ["$env", "phase"]}, {"const": "game_over"}]}},
+        {
+          "op": "callEffect",
+          "effectRef": "do_place"
+        },
+        {
+          "op": "callEffect",
+          "effectRef": "do_evict_oldest"
+        },
+        {
+          "op": "branch",
+          "if": {
+            "neq": [
+              {
+                "get": [
+                  "$env",
+                  "phase"
+                ]
+              },
+              {
+                "const": "game_over"
+              }
+            ]
+          },
           "then": [
-            {"op": "callEffect", "effectRef": "do_check_winner"},
-            {"op": "branch",
-              "if": {"not": {"eq": [{"get": ["$env", "phase"]}, {"const": "game_over"}]}},
-              "then": [{"op": "callEffect", "effectRef": "switch_turn"}]
+            {
+              "op": "callEffect",
+              "effectRef": "do_check_winner"
+            },
+            {
+              "op": "branch",
+              "if": {
+                "neq": [
+                  {
+                    "get": [
+                      "$env",
+                      "phase"
+                    ]
+                  },
+                  {
+                    "const": "game_over"
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "callEffect",
+                  "effectRef": "switch_turn"
+                }
+              ]
             }
           ]
         }
       ]
     },
     "switch_turn": {
-      "description": "切换回合",
+      "description": "Switch to the other player",
       "ops": [
         {
-          "op": "set",
-          "path": "state.env.turn.currentPlayerId",
+          "op": "setEnv",
+          "key": "turn",
           "value": {
-            "if": {
-              "cond": {"eq": [{"get": ["$env.turn", "currentPlayerId"]}, {"const": "p_black"}]},
-              "then": {"const": "p_white"},
-              "else": {"const": "p_black"}
+            "switch": [
+              {
+                "case": "p_black",
+                "then": "p_white"
+              },
+              {
+                "case": "p_white",
+                "then": "p_black"
+              }
+            ],
+            "input": {
+              "var": "$env.turn"
             }
           }
         },
-        {"op": "set", "path": "state.env.phase", "value": {"const": "playing"}}
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "playing"
+          }
+        }
       ]
     }
   },
   "phases": [
     {
       "id": "playing",
-      "actions": ["place_piece"],
-      "description": "玩家回合: 在空格落子"
+      "actions": [
+        "place_piece"
+      ],
+      "description": "Player's turn: place a piece on an empty cell"
     }
   ],
+  "visibility": {
+    "default": "public"
+  },
   "terminal": [
     {
       "id": "three_in_row",
-      "condition": {"eq": [{"get": ["$env", "phase"]}, {"const": "game_over"}]}
+      "condition": {
+        "neq": [
+          {
+            "get": [
+              "$env",
+              "winner"
+            ]
+          },
+          {
+            "const": null
+          }
+        ]
+      }
     },
     {
-      "id": "board_full",
+      "id": "max_rounds",
       "condition": {
-        "and": [
-          {"eq": [{"get": ["$env", "phase"]}, {"const": "playing"}]},
-          {"eq": [{"count": {"query": {"type": "board_cell", "where": {"eq": [{"get": ["$node", "props.occupant"]}, {"const": null}]}}}}, {"const": 0}]}
+        "gte": [
+          {
+            "get": [
+              "$env",
+              "round"
+            ]
+          },
+          {
+            "const": 50
+          }
         ]
       }
     }
   ],
   "utility": [
-    {"player": "p_black", "value": {"const": 1}, "when": {"eq": [{"get": ["$env", "winner"]}, {"const": "p_black"}]}},
-    {"player": "p_black", "value": {"const": -1}, "when": {"eq": [{"get": ["$env", "winner"]}, {"const": "p_white"}]}},
-    {"player": "p_black", "value": {"const": 0}, "when": {"eq": [{"get": ["$env", "winner"]}, {"const": null}]}},
-    {"player": "p_white", "value": {"const": 1}, "when": {"eq": [{"get": ["$env", "winner"]}, {"const": "p_white"}]}},
-    {"player": "p_white", "value": {"const": -1}, "when": {"eq": [{"get": ["$env", "winner"]}, {"const": "p_black"}]}},
-    {"player": "p_white", "value": {"const": 0}, "when": {"eq": [{"get": ["$env", "winner"]}, {"const": null}]}}
+    {
+      "player": "p_black",
+      "value": 1,
+      "when": {
+        "eq": [
+          {
+            "get": [
+              "$env",
+              "winner"
+            ]
+          },
+          "p_black"
+        ]
+      }
+    },
+    {
+      "player": "p_black",
+      "value": -1,
+      "when": {
+        "eq": [
+          {
+            "get": [
+              "$env",
+              "winner"
+            ]
+          },
+          "p_white"
+        ]
+      }
+    },
+    {
+      "player": "p_black",
+      "value": 0,
+      "when": {
+        "eq": [
+          {
+            "get": [
+              "$env",
+              "winner"
+            ]
+          },
+          null
+        ]
+      }
+    },
+    {
+      "player": "p_white",
+      "value": 1,
+      "when": {
+        "eq": [
+          {
+            "get": [
+              "$env",
+              "winner"
+            ]
+          },
+          "p_white"
+        ]
+      }
+    },
+    {
+      "player": "p_white",
+      "value": -1,
+      "when": {
+        "eq": [
+          {
+            "get": [
+              "$env",
+              "winner"
+            ]
+          },
+          "p_black"
+        ]
+      }
+    },
+    {
+      "player": "p_white",
+      "value": 0,
+      "when": {
+        "eq": [
+          {
+            "get": [
+              "$env",
+              "winner"
+            ]
+          },
+          null
+        ]
+      }
+    }
   ],
   "functions": {
-    "check_five_in_row": {
-      "name": "check_five_in_row",
-      "args": [{"name": "state", "type": "StateGraph"}, {"name": "cellId", "type": "string"}],
-      "returns": "boolean",
-      "pure": true,
+    "check_line": {
+      "description": "Check N-in-a-row for a given player",
       "solverSafe": true,
-      "description": "检查从指定格子出发是否有 N 连 (N=win_length)"
+      "pure": true
     }
   }
 }

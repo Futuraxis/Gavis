@@ -141,6 +141,26 @@ class TestMCTS:
                 assert action.canonical_key in legal_keys
                 state = moon_adapter.apply_action(state, action)
 
+    def test_blocks_immediate_three_in_a_row(self, moon_adapter: MoonChessAdapter):
+        """Black 0,1 → the AI (white) must block cell_0_2.
+
+        Regression: UCB selection did not flip the exploitation term for
+        player children, so the search maximized the OPPONENT's utility
+        and never learned to defend.
+        """
+        solver = MCTS(moon_adapter, MCTSConfig(seed=42, budget=1500))
+        state = moon_adapter.create_initial_state()
+        for cell in ('cell_0_0', 'cell_1_2', 'cell_0_1'):
+            action = next(
+                a for a in moon_adapter.get_legal_actions(state)
+                if a.params.get('cell', {}).get('id', '') == cell
+            )
+            state = moon_adapter.apply_action(state, action)
+        # Now black 0,1 on top row; white (AI) must play cell_0_2.
+        assert moon_adapter.get_current_player(state) == 'p_white'
+        action = solver.select_action(state)
+        assert action.params.get('cell', {}).get('id', '') == 'cell_0_2'
+
 
 # ── CFR ───────────────────────────────────────────────────────────
 
