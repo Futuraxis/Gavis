@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import pytest
 import numpy as np
+import pytest
 
 from layer4_interface.binding import (
     MockBinding,
     Observation,
-    ImageBinding,
-    TemplateMatchingClassifier,
     StateTracker,
-    StateChange,
+    TemplateMatchingClassifier,
 )
 
 

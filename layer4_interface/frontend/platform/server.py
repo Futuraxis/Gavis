@@ -122,6 +122,7 @@ def make_handler(
                         "board_size": spec.board_size,
                         "seat_options": list(spec.seat_options),
                         "seat_label": spec.seat_label,
+                        "player_counts": list(spec.player_counts),
                         "difficulties": list(spec.difficulty_budgets),
                         "solver_options": list(SOLVER_OPTIONS.get(spec.game_id, ())),
                     }
@@ -134,6 +135,7 @@ def make_handler(
                 payload["game_id"],
                 str(payload.get("player_pid", "random")),
                 str(payload.get("difficulty", "normal")),
+                int(payload.get("player_count", 2)),
             )
             send_json(self, HTTPStatus.OK, {"ok": True, "session": session.snapshot()})
 

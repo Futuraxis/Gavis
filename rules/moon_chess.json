@@ -50,6 +50,10 @@
         "lastActor": {
           "type": "player_id?",
           "initial": null
+        },
+        "lastPlacedIndex": {
+          "type": "int",
+          "initial": 0
         }
       }
     }
@@ -98,7 +102,25 @@
   "constants": {
     "board_size": 3,
     "win_length": 3,
-    "max_pieces": 3
+    "max_pieces": 3,
+    "dirs": [
+      {
+        "dr": 0,
+        "dc": 1
+      },
+      {
+        "dr": 1,
+        "dc": 0
+      },
+      {
+        "dr": 1,
+        "dc": 1
+      },
+      {
+        "dr": 1,
+        "dc": -1
+      }
+    ]
   },
   "queries": {
     "empty_cells": {
@@ -186,6 +208,13 @@
         },
         {
           "op": "setEnv",
+          "key": "lastPlacedIndex",
+          "value": {
+            "expr": "$cell.y * board_size + $cell.x"
+          }
+        },
+        {
+          "op": "setEnv",
           "key": "lastActor",
           "value": {
             "var": "$env.turn"
@@ -234,18 +263,103 @@
         {
           "op": "branch",
           "if": {
-            "call": [
-              "check_line",
-              {
-                "var": "$state"
+            "any": {
+              "list": {
+                "var": "$constants.dirs"
               },
-              {
-                "var": "$env.lastActor"
-              },
-              {
-                "const": 3
+              "as": "$d",
+              "where": {
+                "any": {
+                  "list": {
+                    "range": {
+                      "from": 0,
+                      "to": {
+                        "var": "$constants.win_length"
+                      }
+                    }
+                  },
+                  "as": "$k",
+                  "where": {
+                    "all": {
+                      "list": {
+                        "range": {
+                          "from": 0,
+                          "to": {
+                            "var": "$constants.win_length"
+                          }
+                        }
+                      },
+                      "as": "$j",
+                      "where": {
+                        "and": [
+                          {
+                            "and": [
+                              {
+                                "gte": [
+                                  {
+                                    "expr": "$env.lastPlacedIndex // board_size + (j - k) * d.dr"
+                                  },
+                                  {
+                                    "const": 0
+                                  }
+                                ]
+                              },
+                              {
+                                "lt": [
+                                  {
+                                    "expr": "$env.lastPlacedIndex // board_size + (j - k) * d.dr"
+                                  },
+                                  {
+                                    "var": "$constants.board_size"
+                                  }
+                                ]
+                              },
+                              {
+                                "gte": [
+                                  {
+                                    "expr": "$env.lastPlacedIndex % board_size + (j - k) * d.dc"
+                                  },
+                                  {
+                                    "const": 0
+                                  }
+                                ]
+                              },
+                              {
+                                "lt": [
+                                  {
+                                    "expr": "$env.lastPlacedIndex % board_size + (j - k) * d.dc"
+                                  },
+                                  {
+                                    "var": "$constants.board_size"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "eq": [
+                              {
+                                "at": [
+                                  {
+                                    "var": "$board"
+                                  },
+                                  {
+                                    "expr": "($env.lastPlacedIndex // board_size + (j - k) * d.dr) * board_size + $env.lastPlacedIndex % board_size + (j - k) * d.dc"
+                                  }
+                                ]
+                              },
+                              {
+                                "var": "$env.lastActor"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
               }
-            ]
+            }
           },
           "then": [
             {
@@ -493,12 +607,5 @@
         ]
       }
     }
-  ],
-  "functions": {
-    "check_line": {
-      "description": "Check N-in-a-row for a given player",
-      "solverSafe": true,
-      "pure": true
-    }
-  }
+  ]
 }

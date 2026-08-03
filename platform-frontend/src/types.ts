@@ -4,10 +4,11 @@ export interface GameInfo {
   game_id: string
   display_name: string
   description: string
-  kind: 'board' | 'poker'
+  kind: 'board' | 'poker' | 'mahjong'
   board_size: number | null
   seat_options: string[]
   seat_label: string
+  player_counts: number[]
   difficulties: string[]
   solver_options: string[]
 }
@@ -62,7 +63,38 @@ export interface PokerSnapshot {
   raise_amounts: number[]
 }
 
-export type Snapshot = BoardSnapshot | PokerSnapshot
+export interface MahjongMeld {
+  type: string
+  tiles: string[]
+  from?: string | null
+}
+
+export interface MahjongSnapshot {
+  game_id: string
+  player_pid: string
+  ai_pid: string
+  difficulty: string
+  over: boolean
+  winner: string | null
+  turn: string | null
+  phase: string | null
+  my_hand: string[]
+  ai_hand: string[]
+  hand_counts: Record<string, number>
+  melds: Record<string, MahjongMeld[]>
+  discards: Record<string, string[]>
+  wall_remaining: number
+  last_discard: string | null
+  last_action: string | null
+  done: string[]
+  winners: string[]
+  payoffs: number[]
+  claim: { queue: string[]; passed: number; actor: string | null } | null
+  legal: { type: string; tile?: string; tiles?: string[] }[]
+  last_ai_action: string | null
+}
+
+export type Snapshot = BoardSnapshot | PokerSnapshot | MahjongSnapshot
 
 // ── 历史与回放 ─────────────────────────────────────────────────
 

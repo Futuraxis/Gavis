@@ -29,6 +29,9 @@ SOLVER_OPTIONS: dict[str, tuple[str, ...]] = {
     "moon_chess": ("mcts", "cfr", "hybrid", "random"),
     "stochastic_gomoku": ("mcts", "cfr", "hybrid", "random"),
     "texas_holdem": ("mcts", "hybrid", "random"),
+    "mahjong_guangdong": ("mahjong", "random"),
+    "mahjong_hongzhong": ("mahjong", "random"),
+    "mahjong_blood": ("mahjong", "random"),
 }
 
 #: Search budget per game (harder than the play tiers, bounded).
@@ -36,6 +39,9 @@ BENCHMARK_BUDGETS: dict[str, int] = {
     "moon_chess": 2000,
     "stochastic_gomoku": 3000,
     "texas_holdem": 1500,
+    "mahjong_guangdong": 1000,
+    "mahjong_hongzhong": 1000,
+    "mahjong_blood": 1000,
 }
 
 SOLVER_LABELS: dict[str, str] = {
@@ -43,6 +49,7 @@ SOLVER_LABELS: dict[str, str] = {
     "cfr": "CFR",
     "hybrid": "Hybrid",
     "random": "随机",
+    "mahjong": "启发式",
 }
 
 
@@ -82,6 +89,9 @@ def create_solver(game_id: str, name: str, engine: SolverAdapter, seed: int, bud
         )
     if name == "random":
         return RandomSolver(engine, seed)
+    if name == "mahjong":
+        from layer3_solvers.mahjong.heuristic import MahjongHeuristicAI
+        return MahjongHeuristicAI(engine, SolverConfig(seed=seed))
     raise ValueError(f"未知求解器: {name}")
 
 
@@ -225,8 +235,13 @@ class BenchmarkRunner:
     def _play_one(
         engine: SolverAdapter, solver_a: SolverBase, solver_b: SolverBase, spec, a_first: bool, rng_seed: int
     ) -> tuple[Optional[str], int, float]:
-        """Play one full match; returns (winner_tag, moves, seconds)."""
-        seat_a = spec.seat_options[0] if a_first else spec.seat_options[1]
+        """Play one full match; returns (winner_tag, moves, seconds).
+
+        Note: mahjong benchmarks run 2-player seats only (the runner
+        swaps exactly two seats; 4-player mahjong is not benchmarked).
+        """
+        seats = spec.seat_options[:2]
+        seat_a = seats[0] if a_first else seats[1]
         seat_b = spec.seat_options[1] if a_first else spec.seat_options[0]
         rng = random.Random(rng_seed)
         state = engine.create_initial_state()

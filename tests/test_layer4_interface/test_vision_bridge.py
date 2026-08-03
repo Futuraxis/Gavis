@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from layer4_interface.vision_bridge import observation_to_state
-from layer4_interface.binding import Observation
 from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
+from layer4_interface.binding import Observation
+from layer4_interface.vision_bridge import observation_to_state
 
 
 @pytest.fixture

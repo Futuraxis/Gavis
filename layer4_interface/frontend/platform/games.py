@@ -21,11 +21,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Literal, Optional
 
 from layer2_engine.core.engine import GameEngine
-from layer2_engine.core.poker_utils import PLAYER_BB, PLAYER_SB, poker_hand_name, poker_payoff
+from layer2_engine.games.mahjong.mahjong_adapter import MahjongAdapter
 from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
 from layer2_engine.games.texas_holdem.texas_env_adapter import TexasHoldemAdapter
 from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter
 from layer3_solvers import MCTS, HybridConfig, HybridSolver, SolverBase, SolverConfig
+from layer3_solvers.mahjong.heuristic import MahjongHeuristicAI
 
 if TYPE_CHECKING:
     from .session import GameSession
@@ -46,12 +47,12 @@ class GameSpec:
     game_id: str
     display_name: str
     description: str
-    kind: Literal["board", "poker"]
+    kind: Literal["board", "poker", "mahjong"]
     board_size: Optional[int]
     seat_options: tuple[str, ...]
     seat_label: str  # '颜色' for board games, '座位' for poker
     difficulty_budgets: dict[Difficulty, int]
-    create_engine: Callable[[int], SolverAdapter]
+    create_engine: Callable[..., SolverAdapter]  # (seed, player_count=2)
     create_solver: Callable[[SolverAdapter, int, int], SolverBase]  # (engine, seed, budget)
     resolve_start: Callable[[GameSession], None]  # start chance nodes (dealing)
     ai_opens: Callable[[GameSession], bool]  # AI moves before the human's first move
@@ -60,6 +61,7 @@ class GameSpec:
     run_ai: Callable[[GameSession, Optional[Callable[[ActionInstance], None]]], None]
     build_snapshot: Callable[[GameSession], dict]
     describe_action: Callable[[ActionInstance], str]  # history log caption
+    player_counts: tuple[int, ...] = (2,)  # mahjong seat count options
 
 
 # ── Moon Chess ────────────────────────────────────────────────────
@@ -325,7 +327,7 @@ def _poker_snapshot(session: GameSession) -> dict:
 
     def _hand_name(pid: str) -> Optional[str]:
         cards = [*_cards(pid), *arrs.get("community", [])]
-        return poker_hand_name(cards) if over else None
+        return session.engine.hand_name(cards) if over else None
 
     return {
         "game_id": session.game_id,
@@ -355,13 +357,150 @@ def _poker_snapshot(session: GameSession) -> dict:
         "call_to": int(env.get("last_call_to", 0)),
         "my_hand_name": _hand_name(session.player_pid),
         "ai_hand_name": _hand_name(session.ai_pid),
-        "payoff": poker_payoff(session.state, session.player_pid) if over else None,
+        "payoff": session.engine.get_utility(session.state, session.player_pid) if over else None,
         "legal": legal,
         "raise_amounts": raise_amts,
     }
 
 
 def _poker_describe_action(action: ActionInstance) -> str:
+    return action.canonical_key
+
+
+# ── Mahjong (guangdong / hongzhong / blood) ───────────────────────
+
+
+def _make_mahjong_engine(variant: str) -> Callable[..., SolverAdapter]:
+    def _create(seed: int, player_count: int = 2) -> SolverAdapter:
+        return MahjongAdapter(variant=variant, player_count=player_count, seed=seed)
+    return _create
+
+
+def _mahjong_create_solver(engine: SolverAdapter, seed: int, budget: int) -> SolverBase:
+    return MahjongHeuristicAI(engine, SolverConfig(seed=seed))
+
+
+def _mahjong_resolve_start(session: GameSession) -> None:
+    while session.engine.get_node_type(session.state) == "chance":
+        _, session.state = session.engine.sample_chance(session.state)
+
+
+def _mahjong_parse_human_action(session: GameSession, payload: dict) -> ActionInstance:
+    if session.over:
+        raise PlayError("本局已结束")
+    if session.current_player != session.player_pid:
+        raise PlayError("还没轮到你")
+    action_type = payload.get("type")
+    for action in session.engine.get_legal_actions(session.state):
+        if action.template_id != action_type:
+            continue
+        matched = True
+        for key in ("tile", "tiles"):
+            if key in payload and action.params.get(key) != payload[key]:
+                matched = False
+        if matched:
+            return action
+    raise PlayError(f"非法动作: {action_type} {payload}")
+
+
+def _mahjong_apply_human(session: GameSession, action: ActionInstance) -> None:
+    session.state = session.engine.apply_action(session.state, action)
+    while session.engine.get_node_type(session.state) == "chance":
+        _, session.state = session.engine.sample_chance(session.state)
+
+
+def _mahjong_run_ai(session: GameSession, on_ai_action: Optional[Callable[[ActionInstance], None]] = None) -> None:
+    """Drive every non-human seat (2-player: the single AI; 4-player:
+    both AI seats) through their draw/claim/discard turns."""
+    while not session.over and session.current_player is not None \
+            and session.current_player != session.player_pid:
+        action = session.solver.select_action(session.state)
+        if action is None:  # heuristic found nothing — random fallback
+            legal = session.engine.get_legal_actions(session.state)
+            action = random.choice(legal) if legal else None
+        if action is None:
+            break
+        session.state = session.engine.apply_action(session.state, action)
+        while session.engine.get_node_type(session.state) == "chance":
+            _, session.state = session.engine.sample_chance(session.state)
+        session.last_ai_info["action"] = action.canonical_key
+        if on_ai_action is not None:
+            on_ai_action(action)
+
+
+def _mahjong_snapshot(session: GameSession) -> dict:
+    env = session.state["env"]
+    arrs = session.state["_arrays"]
+    seats = session.spec.seat_options
+    over = session.over
+
+    def _hand(pid: str) -> list:
+        return list(arrs.get(f"hand_{pid}", []))
+
+    def _melds(pid: str) -> list:
+        return list(arrs.get(f"melds_{pid}", []))
+
+    def _discards(pid: str) -> list:
+        return list(arrs.get(f"discard_{pid}", []))
+
+    legal = []
+    if not over and session.current_player == session.player_pid:
+        for action in session.engine.get_legal_actions(session.state):
+            legal.append({"type": action.template_id, **action.params})
+
+    return {
+        "game_id": session.game_id,
+        "player_pid": session.player_pid,
+        "ai_pid": session.ai_pid,
+        "difficulty": session.difficulty,
+        "over": over,
+        "winner": session.winner,
+        # During a claim the effective actor is the queue head, not the
+        # discarder — mirror MahjongAdapter.get_current_player.
+        "turn": ((env.get("claim_queue") or [None])[int(env.get("claim_index", 0))])
+        if env.get("phase") == "claim" else session.current_player,
+        "phase": env.get("phase"),
+        "my_hand": _hand(session.player_pid),
+        "ai_hand": _hand(session.ai_pid) if over else [],
+        "hand_counts": {pid: len(_hand(pid)) for pid in seats},
+        "melds": {pid: _melds(pid) for pid in seats},
+        "discards": {pid: _discards(pid) for pid in seats},
+        "wall_remaining": int(env.get("wall_count", 0)),
+        "last_discard": env.get("last_discard"),
+        "last_action": env.get("last_action"),
+        "done": list(env.get("done", [])),
+        "winners": list(env.get("winners", [])),
+        "payoffs": list(env.get("payoffs", [])),
+        "claim": {
+            "queue": list(env.get("claim_queue", [])),
+            "passed": int(env.get("claim_index", 0)),
+            "actor": env.get("actor"),
+        } if env.get("phase") == "claim" else None,
+        "legal": legal,
+        "last_ai_action": session.last_ai_info.get("action"),
+    }
+
+
+def _mahjong_describe_action(action: ActionInstance) -> str:
+    if action.template_id == "discard":
+        return f"打 {MahjongAdapter.tile_name(action.params['tile'])}"
+    if action.template_id == "win_self":
+        return "自摸"
+    if action.template_id == "claim_win":
+        return "荣和"
+    if action.template_id == "claim_peng":
+        return f"碰 {MahjongAdapter.tile_name(action.params['tile'])}"
+    if action.template_id == "claim_gang":
+        return f"明杠 {MahjongAdapter.tile_name(action.params['tile'])}"
+    if action.template_id == "claim_chi":
+        tiles = action.params.get("tiles", [])
+        return "吃 " + "".join(MahjongAdapter.tile_name(t) for t in tiles)
+    if action.template_id == "gang_concealed":
+        return f"暗杠 {MahjongAdapter.tile_name(action.params['tile'])}"
+    if action.template_id == "gang_added":
+        return f"加杠 {MahjongAdapter.tile_name(action.params['tile'])}"
+    if action.template_id == "claim_pass":
+        return "过"
     return action.canonical_key
 
 
@@ -422,7 +561,7 @@ GAMES: dict[str, GameSpec] = {
         description="双人德州扑克：翻前/翻牌/转牌/河牌四轮下注，AI 使用混合求解器。",
         kind="poker",
         board_size=None,
-        seat_options=(PLAYER_SB, PLAYER_BB),
+        seat_options=(TexasHoldemAdapter.PLAYER_SB, TexasHoldemAdapter.PLAYER_BB),
         seat_label="座位",
         difficulty_budgets={"easy": 150, "normal": 500, "hard": 1200},
         create_engine=_poker_create_engine,
@@ -434,5 +573,65 @@ GAMES: dict[str, GameSpec] = {
         run_ai=_poker_run_ai,
         build_snapshot=_poker_snapshot,
         describe_action=_poker_describe_action,
+    ),
+    "mahjong_guangdong": GameSpec(
+        game_id="mahjong_guangdong",
+        display_name="广东麻将（鸡胡）",
+        description="二人/四人广东鸡胡：吃碰杠、自摸荣和、清一色等番种，AI 使用启发式策略。",
+        kind="mahjong",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(2, 4),
+        difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
+        create_engine=_make_mahjong_engine("guangdong"),
+        create_solver=_mahjong_create_solver,
+        resolve_start=_mahjong_resolve_start,
+        ai_opens=lambda session: session.player_pid != "p0",
+        parse_human_action=_mahjong_parse_human_action,
+        apply_human=_mahjong_apply_human,
+        run_ai=_mahjong_run_ai,
+        build_snapshot=_mahjong_snapshot,
+        describe_action=_mahjong_describe_action,
+    ),
+    "mahjong_hongzhong": GameSpec(
+        game_id="mahjong_hongzhong",
+        display_name="红中麻将",
+        description="红中万能牌：红中可代任意牌凑搭子，其余规则同鸡胡。",
+        kind="mahjong",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(2, 4),
+        difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
+        create_engine=_make_mahjong_engine("hongzhong"),
+        create_solver=_mahjong_create_solver,
+        resolve_start=_mahjong_resolve_start,
+        ai_opens=lambda session: session.player_pid != "p0",
+        parse_human_action=_mahjong_parse_human_action,
+        apply_human=_mahjong_apply_human,
+        run_ai=_mahjong_run_ai,
+        build_snapshot=_mahjong_snapshot,
+        describe_action=_mahjong_describe_action,
+    ),
+    "mahjong_blood": GameSpec(
+        game_id="mahjong_blood",
+        display_name="血战到底",
+        description="血战到底：胡牌后不退出，剩余玩家继续，直到两家胡或牌墙摸空。",
+        kind="mahjong",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(2, 4),
+        difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
+        create_engine=_make_mahjong_engine("blood"),
+        create_solver=_mahjong_create_solver,
+        resolve_start=_mahjong_resolve_start,
+        ai_opens=lambda session: session.player_pid != "p0",
+        parse_human_action=_mahjong_parse_human_action,
+        apply_human=_mahjong_apply_human,
+        run_ai=_mahjong_run_ai,
+        build_snapshot=_mahjong_snapshot,
+        describe_action=_mahjong_describe_action,
     ),
 }

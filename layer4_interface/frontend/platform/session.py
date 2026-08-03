@@ -102,11 +102,14 @@ class PlayManager:
         self._sessions: dict[str, GameSession] = {}
         self._lock = threading.Lock()
 
-    def start(self, game_id: str, player_pid: str, difficulty: str) -> GameSession:
+    def start(self, game_id: str, player_pid: str, difficulty: str,
+              player_count: int = 2) -> GameSession:
         """Create a new session; resolves start chance nodes and lets the AI open."""
         spec = GAMES.get(game_id)
         if spec is None:
             raise PlayError(f"未知游戏: {game_id}")
+        if player_count not in spec.player_counts:
+            raise PlayError(f"该游戏不支持 {player_count} 人")
         if player_pid == "random":
             player_pid = spec.seat_options[0] if uuid.uuid4().int % 2 == 0 else spec.seat_options[1]
         if player_pid not in spec.seat_options:
@@ -115,7 +118,10 @@ class PlayManager:
             raise PlayError(f"未知难度: {difficulty}")
 
         session_id = uuid.uuid4().hex[:8]
-        engine = spec.create_engine(self._seed)
+        if spec.player_counts != (2,):
+            engine = spec.create_engine(self._seed, player_count=player_count)
+        else:
+            engine = spec.create_engine(self._seed)
         solver = spec.create_solver(engine, self._seed, spec.difficulty_budgets[difficulty])
         session = GameSession(
             game_id=session_id,

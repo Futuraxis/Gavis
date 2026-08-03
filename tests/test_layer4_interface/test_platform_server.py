@@ -58,7 +58,8 @@ class TestGames:
         data = _get(base_url + "/api/games")
         assert data["ok"] is True
         by_id = {g["game_id"]: g for g in data["games"]}
-        assert set(by_id) == {"moon_chess", "stochastic_gomoku", "texas_holdem"}
+        assert set(by_id) == {"moon_chess", "stochastic_gomoku", "texas_holdem",
+                          "mahjong_guangdong", "mahjong_hongzhong", "mahjong_blood"}
         assert by_id["moon_chess"]["board_size"] == 3
         assert by_id["stochastic_gomoku"]["board_size"] == 9
         assert by_id["texas_holdem"]["kind"] == "poker"

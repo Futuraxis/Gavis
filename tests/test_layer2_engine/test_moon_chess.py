@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
 import numpy as np
+import pytest
 
 from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
-from layer2_engine.interfaces.solver_adapter import SolverAdapter, ActionInstance
+from layer2_engine.interfaces.solver_adapter import SolverAdapter
 
 
 @pytest.fixture

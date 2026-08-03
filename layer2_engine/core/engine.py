@@ -15,16 +15,15 @@ import random
 from pathlib import Path
 from typing import Any, Optional
 
+from .expr_eval import ExprEvaluator
+from .rules_compiler import RulesCompiler
 from .state_graph import (
     ActionInstance,
     ChanceOutcome,
     DerivedViewEngine,
-    BUILTIN_FUNCTIONS,
-    create_initial_state,
     clone_state,
+    create_initial_state,
 )
-from .expr_eval import ExprEvaluator
-from .rules_compiler import RulesCompiler
 
 
 class GameEngine:
@@ -45,8 +44,9 @@ class GameEngine:
         # probe validation runs against the pure interpreter.
         self._compiled = None
 
-        # Register built-in functions
-        self._register_builtins()
+        # Register rules functions (alias definitions, v5.1 — the
+        # BUILTIN_FUNCTIONS registry is retired; rules JSON is self-sufficient).
+        self.expr.set_functions(rules.get('functions', {}))
 
         # Parse schema
         self._constants: dict = rules.get('constants', {})
@@ -347,18 +347,32 @@ class GameEngine:
         """Resolve a parameter's candidate domain.
 
         Supports:
-          - {"ref": "queryName"} — reference to a named query
           - [] — direct literal list
+          - {"ref": "queryName"} — reference to a named query
+          - {"array": <expr|name>} — dynamic ground array contents
+          - {"expr": <expr>} — any expression; a non-list result is
+            wrapped into a single-element list
         """
         domain = pdef.get('domain', [])
         if isinstance(domain, list):
             return list(domain)
-        if isinstance(domain, dict) and 'ref' in domain:
-            query_name = domain['ref']
-            query_def = self._queries.get(query_name)
-            if query_def is None:
-                return []
-            return self._resolve_query(query_def, state, ctx)
+        if isinstance(domain, dict):
+            if 'ref' in domain:
+                query_name = domain['ref']
+                query_def = self._queries.get(query_name)
+                if query_def is None:
+                    return []
+                return self._resolve_query(query_def, state, ctx)
+            if 'array' in domain:
+                arr_spec = domain['array']
+                arr_name = self.expr.eval(arr_spec, ctx) if isinstance(arr_spec, dict) else arr_spec
+                arr = state.get('_arrays', {}).get(arr_name)
+                return list(arr) if isinstance(arr, list) else []
+            if 'expr' in domain:
+                value = self.expr.eval(domain['expr'], ctx)
+                if isinstance(value, list):
+                    return list(value)
+                return [value] if value is not None else []
         return []
 
     def _resolve_query(self, query_def: dict, state: dict, ctx: dict) -> list[dict]:
@@ -457,7 +471,7 @@ class GameEngine:
         # ── Ground array ops ──────────────────────────────────────────
 
         if op_type == 'setIndex':
-            arr_name = op['array']
+            arr_name = self._resolve_array_name(op, ctx)
             at = self.expr.eval(op['at'], ctx)
             value = self.expr.eval(op['value'], ctx)
             arr = state['_arrays'].get(arr_name)
@@ -465,7 +479,7 @@ class GameEngine:
                 arr[at] = value
 
         elif op_type == 'append':
-            arr_name = op['array']
+            arr_name = self._resolve_array_name(op, ctx)
             raw_value = op['value']
             # Support both simple expressions and dict-of-expressions
             if isinstance(raw_value, dict):
@@ -483,6 +497,41 @@ class GameEngine:
             arr = state['_arrays'].get(arr_name)
             if arr is not None:
                 arr.append(value)
+            elif isinstance(arr_name, str) and isinstance(state['env'].get(arr_name), list):
+                # Env lists are shared by reference across clones — rebind.
+                state['env'][arr_name] = state['env'][arr_name] + [value]
+
+        elif op_type == 'remove':
+            """Multiset difference A⊖B — remove up to ``count`` matches by value.
+
+            Rebind (never mutate in place) so env lists — which are shared
+            by reference across cloned states — are never corrupted.
+            """
+            arr_name = self._resolve_array_name(op, ctx)
+            value = self.expr.eval(op['value'], ctx)
+            count = int(self.expr.eval(op.get('count', {'const': 1}), ctx))
+            arr = state['_arrays'].get(arr_name)
+            if arr is None and isinstance(arr_name, str) \
+                    and isinstance(state['env'].get(arr_name), list):
+                state['env'][arr_name] = _remove_matches(state['env'][arr_name], value, count)
+                return
+            if arr is None:
+                return
+            state['_arrays'][arr_name] = _remove_matches(arr, value, count)
+
+        elif op_type == 'setArray':
+            """Wholesale array replacement (e.g. rewriting a meld list).
+
+            The value is a fresh list by construction, so env-list rebinding
+            is safe against the clone-sharing trap.
+            """
+            arr_name = self._resolve_array_name(op, ctx)
+            value = self.expr.eval(op['value'], ctx)
+            fresh = list(value) if isinstance(value, list) else []
+            if isinstance(arr_name, str) and arr_name in state['_arrays']:
+                state['_arrays'][arr_name] = fresh
+            elif isinstance(arr_name, str) and arr_name in state['env']:
+                state['env'][arr_name] = fresh
 
         elif op_type == 'trimByKey':
             arr_name = op['array']
@@ -565,6 +614,13 @@ class GameEngine:
         elif op_type == 'enqueueEffect':
             args = {k: self.expr.eval(v, ctx) for k, v in op.get('args', {}).items()}
             state.setdefault('_pending_effects', []).append((op['effectRef'], args))
+
+    def _resolve_array_name(self, op: dict, ctx: dict) -> Any:
+        """Resolve an effector's ``array`` field: literal name or expression."""
+        raw = op.get('array')
+        if isinstance(raw, dict):
+            return self.expr.eval(raw, ctx)
+        return raw
 
     # ── Triggers ──────────────────────────────────────────────────────
 
@@ -655,12 +711,6 @@ class GameEngine:
             self._compiled_filters[fid] = fn
         return fn
 
-    # ── Builtin registration ──────────────────────────────────────────
-
-    def _register_builtins(self):
-        for name, fn in BUILTIN_FUNCTIONS.items():
-            self.expr.register_function(name, fn)
-
     @classmethod
     def from_json(cls, path: str | Path, **kwargs) -> 'GameEngine':
         """Load engine from a v5.0 JSON rules file."""
@@ -688,6 +738,9 @@ _EXPR_KEYS = frozenset({
     'if', 'switch', 'call',
     'template', 'concat', 'expr',
     'query', 'count', 'filter', 'any', 'all', 'map',
+    'choose', 'range', 'sort', 'group', 'distinct', 'contains',
+    'sum', 'max', 'min', 'at',
+    'add', 'sub', 'mul', 'div',
     'ref',
 })
 
@@ -699,6 +752,18 @@ def _is_expr_key(key: str) -> bool:
     from ``{"get": [...]}`` (expression).
     """
     return key in _EXPR_KEYS
+
+
+def _remove_matches(arr: list, value: Any, count: int) -> list:
+    """Return ``arr`` with up to ``count`` occurrences of ``value`` removed."""
+    out = []
+    removed = 0
+    for item in arr:
+        if removed < count and item == value:
+            removed += 1
+        else:
+            out.append(item)
+    return out
 
 
 def _cartesian_product(param_domains: dict[str, list]) -> list[dict]:

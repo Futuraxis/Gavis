@@ -17,20 +17,13 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-from .poker_utils import (
-    card_rank,
-    contains,
-    poker_call_to,
-    poker_hand_name,
-    poker_hand_value,
-    poker_min_raise_to,
-    poker_payoff,
-    poker_pot,
-    poker_round_over,
-    poker_winner,
-)
+from .expr_eval import ExprEvaluator
 
 _TEMPLATE_RE = re.compile(r'\{([^}]+)\}')
+
+# Shared evaluator for derived-view field closures (views only need the
+# pure expression primitives — no rule functions involved).
+_FULL_EVALUATOR = ExprEvaluator()
 
 
 # ── Core data types (shared with SolverAdapter Protocol) ────────────────
@@ -154,114 +147,16 @@ def compile_expr(spec: Any) -> Any:
     """Precompile a static expression spec into a closure over ctx.
 
     Returns either the literal value (non-dict specs) or ``fn(ctx)`` with
-    semantics identical to ``_resolve_value(spec, ctx)``.  Fast-path types
-    (const/var/get/template/switch) are inlined as closures; everything
-    else falls back to ``str(spec)`` exactly like ``_resolve_value``.
+    semantics identical to the full ``ExprEvaluator`` (v5.1 primitives
+    included).  Compiled closures are used for derived-view field defs,
+    which are evaluated ~700k times per MCTS move.
 
-    Used for derived-view field defs, which are evaluated ~700k times per
-    MCTS move — compiling them eliminates ~4M dict-walking calls.
+    Views share a single evaluator instance; rule-level ``functions``
+    aliases are NOT registered here (view fields must stay pure).
     """
     if not isinstance(spec, dict):
         return spec
-
-    if 'const' in spec:
-        value = spec['const']
-        return lambda ctx: value
-
-    if 'var' in spec:
-        parts = spec['var'].lstrip('$').split('.')
-
-        def _var(ctx: dict, parts: list = parts) -> Any:
-            obj = ctx
-            for p in parts:
-                if isinstance(obj, dict):
-                    if p in obj:
-                        obj = obj[p]
-                    elif f'${p}' in obj:
-                        obj = obj[f'${p}']
-                    else:
-                        return None
-                else:
-                    return None
-            return obj
-
-        return _var
-
-    if 'get' in spec:
-        target_path, field = spec['get']
-        if isinstance(target_path, dict):
-            tgt_fn = compile_expr(target_path)
-        else:
-            clean = target_path.lstrip('$')
-
-            def _tgt(ctx: dict, clean: str = clean) -> Any:
-                value = ctx.get(clean)
-                if value is None:
-                    value = ctx.get(f'${clean}')
-                return value
-
-            tgt_fn = _tgt
-
-        def _get(ctx: dict, tgt_fn: callable = tgt_fn, field: str = field) -> Any:
-            target = tgt_fn(ctx)
-            if isinstance(target, dict):
-                return target.get(field)
-            return None
-
-        return _get
-
-    if 'template' in spec:
-        # Split template into literal parts + compiled var closures once.
-        tmpl = spec['template']
-        parts: list = []
-        last = 0
-        for m in _TEMPLATE_RE.finditer(tmpl):
-            if m.start() > last:
-                parts.append(tmpl[last:m.start()])
-            inner = m.group(1).strip()
-            parts.append(compile_expr({'var': inner if inner.startswith('$') else f'${inner}'}))
-            last = m.end()
-        if last < len(tmpl):
-            parts.append(tmpl[last:])
-
-        def _template(ctx: dict, parts: list = parts) -> str:
-            out = []
-            for p in parts:
-                if callable(p):
-                    value = p(ctx)
-                    out.append(str(value) if value is not None else '')
-                else:
-                    out.append(p)
-            return ''.join(out)
-
-        return _template
-
-    if 'switch' in spec:
-        cases = []
-        default_fn = None
-        for case in spec['switch']:
-            if 'case' in case:
-                cases.append((case['case'], compile_expr(case['then'])))
-            else:
-                default_fn = compile_expr(case.get('then'))
-        input_fn = compile_expr(spec.get('input', {'var': '$input'}))
-
-        def _switch(
-            ctx: dict,
-            cases: list = cases,
-            default_fn: callable | None = default_fn,
-            input_fn: callable = input_fn,
-        ) -> Any:
-            value = input_fn(ctx)
-            for case_val, then_fn in cases:
-                if case_val == value:
-                    return then_fn(ctx)
-            return default_fn(ctx) if default_fn is not None else None
-
-        return _switch
-
-    # Fallback mirrors _resolve_value: str(expr)
-    return lambda ctx, spec=spec: str(spec)
+    return _FULL_EVALUATOR.compile(spec)
 
 
 # ── Derived View Engine ──────────────────────────────────────────────
@@ -451,77 +346,3 @@ def _resolve_value(expr: Any, ctx: dict) -> Any:
     return str(expr)
 
 
-# ── Win check (built-in engine function) ──────────────────────────────
-
-def check_line(state: dict, player_id: str, win_length: int) -> bool:
-    """Check whether ``player_id`` has ``win_length`` consecutive pieces.
-
-    Built-in engine function (not a registered external function).
-    Works with both v4.1 (``_board``) and v5.0 (``_arrays.board``) states.
-    """
-    board = state.get('_board')
-    if board is None:
-        arr = state.get('_arrays', {})
-        board = arr.get('board', [])
-    if board is None or not board:
-        return False
-
-    bs = _get_board_size(state)
-    players = state.get('_players', [])
-    player_ids = [p['id'] for p in players] if players and isinstance(players[0], dict) else ['p_black', 'p_white']
-
-    if player_id not in player_ids:
-        return False
-
-    directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
-
-    for idx in range(len(board)):
-        if board[idx] != player_id:
-            continue
-        x, y = idx % bs, idx // bs
-        for dx, dy in directions:
-            count = 1
-            px, py = x + dx, y + dy
-            while 0 <= px < bs and 0 <= py < bs and board[py * bs + px] == player_id:
-                count += 1
-                px += dx
-                py += dy
-            nx, ny = x - dx, y - dy
-            while 0 <= nx < bs and 0 <= ny < bs and board[ny * bs + nx] == player_id:
-                count += 1
-                nx -= dx
-                ny -= dy
-            if count >= win_length:
-                return True
-    return False
-
-
-def _get_board_size(state: dict) -> int:
-    """Extract board size from various state formats."""
-    bs = state.get('board_size')
-    if bs:
-        return bs
-    arr = state.get('_arrays', {})
-    board = arr.get('board', [])
-    if not board:
-        return 3
-    return int(len(board) ** 0.5)
-
-
-# ── Built-in function registry ────────────────────────────────────────
-
-BUILTIN_FUNCTIONS: dict[str, callable] = {
-    'check_line': check_line,
-    'debug_print': lambda msg: print(f"[debug] {msg}"),
-    # Texas Hold'em (rules/texas_holdem.json)
-    'contains': contains,
-    'card_rank': card_rank,
-    'poker_hand_value': poker_hand_value,
-    'poker_call_to': poker_call_to,
-    'poker_min_raise_to': poker_min_raise_to,
-    'poker_round_over': poker_round_over,
-    'poker_winner': poker_winner,
-    'poker_payoff': poker_payoff,
-    'poker_pot': poker_pot,
-    'poker_hand_name': poker_hand_name,
-}

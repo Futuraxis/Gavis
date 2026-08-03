@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .state_graph import ActionInstance, ChanceOutcome, BUILTIN_FUNCTIONS
+from .state_graph import ActionInstance, ChanceOutcome
 
 _TEMPLATE_RE = re.compile(r'\{([^}]+)\}')
 _ARITH_PREFIX_RE = re.compile(r'\$([a-zA-Z_][a-zA-Z0-9_.]*)')
@@ -567,7 +567,6 @@ class RulesCompiler:
         namespace: dict[str, Any] = {
             'ActionInstance': ActionInstance,
             'ChanceOutcome': ChanceOutcome,
-            **BUILTIN_FUNCTIONS,
         }
         source = '\n'.join(src_parts)
         exec(compile(source, '<rules_codegen>', 'exec'), namespace)  # noqa: S102 — generated

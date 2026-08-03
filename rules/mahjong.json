@@ -1,0 +1,4426 @@
+{
+  "meta": {
+    "gameId": "mahjong",
+    "version": "5.1.0",
+    "description": "Mahjong — guangdong jihu / hongzhong wild / blood variants × 2-4 players. Variant and player_count are injected into constants by MahjongAdapter. Pure-expression aliases (zero builtins)."
+  },
+  "players": [
+    "p0",
+    "p1",
+    "p2",
+    "p3"
+  ],
+  "constants": {
+    "variant": "guangdong",
+    "player_count": 2,
+    "deal_target": 27,
+    "player_ids": [
+      "p0",
+      "p1"
+    ],
+    "tile_ids": [
+      "m1",
+      "m1",
+      "m1",
+      "m1",
+      "m2",
+      "m2",
+      "m2",
+      "m2",
+      "m3",
+      "m3",
+      "m3",
+      "m3",
+      "m4",
+      "m4",
+      "m4",
+      "m4",
+      "m5",
+      "m5",
+      "m5",
+      "m5",
+      "m6",
+      "m6",
+      "m6",
+      "m6",
+      "m7",
+      "m7",
+      "m7",
+      "m7",
+      "m8",
+      "m8",
+      "m8",
+      "m8",
+      "m9",
+      "m9",
+      "m9",
+      "m9",
+      "p1",
+      "p1",
+      "p1",
+      "p1",
+      "p2",
+      "p2",
+      "p2",
+      "p2",
+      "p3",
+      "p3",
+      "p3",
+      "p3",
+      "p4",
+      "p4",
+      "p4",
+      "p4",
+      "p5",
+      "p5",
+      "p5",
+      "p5",
+      "p6",
+      "p6",
+      "p6",
+      "p6",
+      "p7",
+      "p7",
+      "p7",
+      "p7",
+      "p8",
+      "p8",
+      "p8",
+      "p8",
+      "p9",
+      "p9",
+      "p9",
+      "p9",
+      "s1",
+      "s1",
+      "s1",
+      "s1",
+      "s2",
+      "s2",
+      "s2",
+      "s2",
+      "s3",
+      "s3",
+      "s3",
+      "s3",
+      "s4",
+      "s4",
+      "s4",
+      "s4",
+      "s5",
+      "s5",
+      "s5",
+      "s5",
+      "s6",
+      "s6",
+      "s6",
+      "s6",
+      "s7",
+      "s7",
+      "s7",
+      "s7",
+      "s8",
+      "s8",
+      "s8",
+      "s8",
+      "s9",
+      "s9",
+      "s9",
+      "s9",
+      "z1",
+      "z1",
+      "z1",
+      "z1",
+      "z2",
+      "z2",
+      "z2",
+      "z2",
+      "z3",
+      "z3",
+      "z3",
+      "z3",
+      "z4",
+      "z4",
+      "z4",
+      "z4",
+      "z5",
+      "z5",
+      "z5",
+      "z5",
+      "z6",
+      "z6",
+      "z6",
+      "z6",
+      "z7",
+      "z7",
+      "z7",
+      "z7"
+    ],
+    "suit_of": {
+      "m1": "m",
+      "m2": "m",
+      "m3": "m",
+      "m4": "m",
+      "m5": "m",
+      "m6": "m",
+      "m7": "m",
+      "m8": "m",
+      "m9": "m",
+      "p1": "p",
+      "p2": "p",
+      "p3": "p",
+      "p4": "p",
+      "p5": "p",
+      "p6": "p",
+      "p7": "p",
+      "p8": "p",
+      "p9": "p",
+      "s1": "s",
+      "s2": "s",
+      "s3": "s",
+      "s4": "s",
+      "s5": "s",
+      "s6": "s",
+      "s7": "s",
+      "s8": "s",
+      "s9": "s",
+      "z1": "z",
+      "z2": "z",
+      "z3": "z",
+      "z4": "z",
+      "z5": "z",
+      "z6": "z",
+      "z7": "z"
+    },
+    "chi_runs": [
+      [
+        "m1",
+        "m2",
+        "m3"
+      ],
+      [
+        "m2",
+        "m3",
+        "m4"
+      ],
+      [
+        "m3",
+        "m4",
+        "m5"
+      ],
+      [
+        "m4",
+        "m5",
+        "m6"
+      ],
+      [
+        "m5",
+        "m6",
+        "m7"
+      ],
+      [
+        "m6",
+        "m7",
+        "m8"
+      ],
+      [
+        "m7",
+        "m8",
+        "m9"
+      ],
+      [
+        "p1",
+        "p2",
+        "p3"
+      ],
+      [
+        "p2",
+        "p3",
+        "p4"
+      ],
+      [
+        "p3",
+        "p4",
+        "p5"
+      ],
+      [
+        "p4",
+        "p5",
+        "p6"
+      ],
+      [
+        "p5",
+        "p6",
+        "p7"
+      ],
+      [
+        "p6",
+        "p7",
+        "p8"
+      ],
+      [
+        "p7",
+        "p8",
+        "p9"
+      ],
+      [
+        "s1",
+        "s2",
+        "s3"
+      ],
+      [
+        "s2",
+        "s3",
+        "s4"
+      ],
+      [
+        "s3",
+        "s4",
+        "s5"
+      ],
+      [
+        "s4",
+        "s5",
+        "s6"
+      ],
+      [
+        "s5",
+        "s6",
+        "s7"
+      ],
+      [
+        "s6",
+        "s7",
+        "s8"
+      ],
+      [
+        "s7",
+        "s8",
+        "s9"
+      ]
+    ],
+    "thirteen_orphans": [
+      "m1",
+      "m9",
+      "p1",
+      "p9",
+      "s1",
+      "s9",
+      "z1",
+      "z2",
+      "z3",
+      "z4",
+      "z5",
+      "z6",
+      "z7"
+    ],
+    "wild_tile": "z5",
+    "fan_pay": [
+      10,
+      20,
+      40,
+      80,
+      160,
+      320,
+      640,
+      1280
+    ]
+  },
+  "groundState": {
+    "hand_p0": {
+      "type": "array",
+      "mutable": true,
+      "element": "tile"
+    },
+    "melds_p0": {
+      "type": "array",
+      "mutable": true,
+      "element": "meld"
+    },
+    "discard_p0": {
+      "type": "array",
+      "mutable": true,
+      "element": "tile"
+    },
+    "hand_p1": {
+      "type": "array",
+      "mutable": true,
+      "element": "tile"
+    },
+    "melds_p1": {
+      "type": "array",
+      "mutable": true,
+      "element": "meld"
+    },
+    "discard_p1": {
+      "type": "array",
+      "mutable": true,
+      "element": "tile"
+    },
+    "hand_p2": {
+      "type": "array",
+      "mutable": true,
+      "element": "tile"
+    },
+    "melds_p2": {
+      "type": "array",
+      "mutable": true,
+      "element": "meld"
+    },
+    "discard_p2": {
+      "type": "array",
+      "mutable": true,
+      "element": "tile"
+    },
+    "hand_p3": {
+      "type": "array",
+      "mutable": true,
+      "element": "tile"
+    },
+    "melds_p3": {
+      "type": "array",
+      "mutable": true,
+      "element": "meld"
+    },
+    "discard_p3": {
+      "type": "array",
+      "mutable": true,
+      "element": "tile"
+    },
+    "drawn": {
+      "type": "array",
+      "mutable": true,
+      "element": "tile"
+    },
+    "env": {
+      "type": "env",
+      "fields": {
+        "phase": {
+          "type": "string",
+          "initial": "deal"
+        },
+        "turn": {
+          "type": "player_id",
+          "initial": "p0"
+        },
+        "actor": {
+          "type": "player_id?",
+          "initial": null
+        },
+        "last_discard": {
+          "type": "tile?",
+          "initial": null
+        },
+        "last_discarder": {
+          "type": "player_id?",
+          "initial": null
+        },
+        "last_drawn": {
+          "type": "tile?",
+          "initial": null
+        },
+        "dealer_idx": {
+          "type": "int",
+          "initial": 0
+        },
+        "claim_queue": {
+          "type": "list",
+          "initial": []
+        },
+        "claim_index": {
+          "type": "int",
+          "initial": 0
+        },
+        "dealt_count": {
+          "type": "int",
+          "initial": 0
+        },
+        "wall_count": {
+          "type": "int",
+          "initial": 136
+        },
+        "winners": {
+          "type": "list",
+          "initial": []
+        },
+        "done": {
+          "type": "list",
+          "initial": []
+        },
+        "fan_pay": {
+          "type": "int",
+          "initial": 0
+        },
+        "win_hand": {
+          "type": "list",
+          "initial": []
+        },
+        "payoffs": {
+          "type": "list",
+          "initial": []
+        },
+        "game_over": {
+          "type": "bool",
+          "initial": false
+        },
+        "winner": {
+          "type": "player_id?",
+          "initial": null
+        },
+        "last_action": {
+          "type": "string?",
+          "initial": null
+        }
+      }
+    }
+  },
+  "derivedViews": {
+    "tile": {
+      "from": {
+        "type": "literal",
+        "list": {
+          "var": "tile_ids"
+        }
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "player": {
+      "from": {
+        "type": "literal",
+        "list": {
+          "var": "$players"
+        }
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value.id"
+        },
+        "idx": {
+          "var": "$i"
+        }
+      }
+    },
+    "hand_view_p0": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p0"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "meld_view_p0": {
+      "from": {
+        "type": "enum",
+        "array": "melds_p0"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "discard_view_p0": {
+      "from": {
+        "type": "enum",
+        "array": "discard_p0"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p1": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p1"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "meld_view_p1": {
+      "from": {
+        "type": "enum",
+        "array": "melds_p1"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "discard_view_p1": {
+      "from": {
+        "type": "enum",
+        "array": "discard_p1"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p2": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p2"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "meld_view_p2": {
+      "from": {
+        "type": "enum",
+        "array": "melds_p2"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "discard_view_p2": {
+      "from": {
+        "type": "enum",
+        "array": "discard_p2"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p3": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p3"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "meld_view_p3": {
+      "from": {
+        "type": "enum",
+        "array": "melds_p3"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "discard_view_p3": {
+      "from": {
+        "type": "enum",
+        "array": "discard_p3"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    }
+  },
+  "queries": {
+    "undrawn_tiles": {
+      "view": "tile",
+      "filter": {
+        "lt": [
+          {
+            "count": {
+              "filter": {
+                "list": {
+                  "var": "$drawn"
+                },
+                "as": "$t",
+                "where": {
+                  "eq": [
+                    {
+                      "var": "$t"
+                    },
+                    {
+                      "get": [
+                        {
+                          "var": "$node"
+                        },
+                        "id"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "const": 4
+          }
+        ]
+      }
+    }
+  },
+  "actions": [
+    {
+      "id": "discard",
+      "type": "move",
+      "phases": [
+        "action"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {
+        "tile": {
+          "domain": {
+            "array": {
+              "template": "hand_{$env.turn}"
+            }
+          }
+        }
+      },
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_discard",
+      "canonicalKey": {
+        "template": "discard:{tile}"
+      }
+    },
+    {
+      "id": "win_self",
+      "type": "move",
+      "phases": [
+        "action"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {},
+      "legal": {
+        "call": [
+          "is_win_hand",
+          {
+            "concat": [
+              {
+                "call": [
+                  "hand_of",
+                  {
+                    "var": "$env.turn"
+                  }
+                ]
+              },
+              {
+                "map": {
+                  "list": {
+                    "range": {
+                      "from": {
+                        "const": 0
+                      },
+                      "to": {
+                        "const": 1
+                      }
+                    }
+                  },
+                  "as": "$node",
+                  "expr": {
+                    "var": "$env.last_drawn"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "effectRef": "do_win_self",
+      "canonicalKey": {
+        "const": "win_self"
+      }
+    },
+    {
+      "id": "gang_concealed",
+      "type": "move",
+      "phases": [
+        "action"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {
+        "tile": {
+          "domain": {
+            "array": {
+              "template": "hand_{$env.turn}"
+            }
+          }
+        }
+      },
+      "legal": {
+        "eq": [
+          {
+            "count": {
+              "filter": {
+                "list": {
+                  "call": [
+                    "hand_of",
+                    {
+                      "var": "$env.turn"
+                    }
+                  ]
+                },
+                "as": "$node",
+                "where": {
+                  "eq": [
+                    {
+                      "var": "$node"
+                    },
+                    {
+                      "var": "tile"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "const": 4
+          }
+        ]
+      },
+      "effectRef": "do_gang_concealed",
+      "canonicalKey": {
+        "template": "gang_concealed:{tile}"
+      }
+    },
+    {
+      "id": "gang_added",
+      "type": "move",
+      "phases": [
+        "action"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {
+        "tile": {
+          "domain": {
+            "array": {
+              "template": "hand_{$env.turn}"
+            }
+          }
+        }
+      },
+      "legal": {
+        "and": [
+          {
+            "gte": [
+              {
+                "count": {
+                  "filter": {
+                    "list": {
+                      "call": [
+                        "hand_of",
+                        {
+                          "var": "$env.turn"
+                        }
+                      ]
+                    },
+                    "as": "$node",
+                    "where": {
+                      "eq": [
+                        {
+                          "var": "$node"
+                        },
+                        {
+                          "var": "tile"
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "const": 1
+              }
+            ]
+          },
+          {
+            "any": {
+              "list": {
+                "call": [
+                  "melds_of",
+                  {
+                    "var": "$env.turn"
+                  }
+                ]
+              },
+              "as": "$node",
+              "where": {
+                "and": [
+                  {
+                    "eq": [
+                      {
+                        "get": [
+                          {
+                            "var": "$node"
+                          },
+                          "type"
+                        ]
+                      },
+                      {
+                        "const": "peng"
+                      }
+                    ]
+                  },
+                  {
+                    "eq": [
+                      {
+                        "at": [
+                          {
+                            "get": [
+                              {
+                                "var": "$node"
+                              },
+                              "tiles"
+                            ]
+                          },
+                          {
+                            "const": 0
+                          }
+                        ]
+                      },
+                      {
+                        "var": "tile"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "effectRef": "do_gang_added",
+      "canonicalKey": {
+        "template": "gang_added:{tile}"
+      }
+    },
+    {
+      "id": "claim_win",
+      "type": "move",
+      "phases": [
+        "claim"
+      ],
+      "actor": {
+        "at": [
+          {
+            "var": "$env.claim_queue"
+          },
+          {
+            "var": "$env.claim_index"
+          }
+        ]
+      },
+      "params": {
+        "tile": {
+          "domain": {
+            "expr": {
+              "map": {
+                "list": {
+                  "range": {
+                    "from": {
+                      "const": 0
+                    },
+                    "to": {
+                      "const": 1
+                    }
+                  }
+                },
+                "as": "$node",
+                "expr": {
+                  "var": "$env.last_discard"
+                }
+              }
+            }
+          }
+        }
+      },
+      "legal": {
+        "call": [
+          "is_win_hand",
+          {
+            "concat": [
+              {
+                "call": [
+                  "hand_of",
+                  {
+                    "at": [
+                      {
+                        "var": "$env.claim_queue"
+                      },
+                      {
+                        "var": "$env.claim_index"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "map": {
+                  "list": {
+                    "range": {
+                      "from": {
+                        "const": 0
+                      },
+                      "to": {
+                        "const": 1
+                      }
+                    }
+                  },
+                  "as": "$node",
+                  "expr": {
+                    "var": "tile"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "effectRef": "do_claim_win",
+      "canonicalKey": {
+        "template": "claim_win:{tile}"
+      }
+    },
+    {
+      "id": "claim_peng",
+      "type": "move",
+      "phases": [
+        "claim"
+      ],
+      "actor": {
+        "at": [
+          {
+            "var": "$env.claim_queue"
+          },
+          {
+            "var": "$env.claim_index"
+          }
+        ]
+      },
+      "params": {
+        "tile": {
+          "domain": {
+            "expr": {
+              "map": {
+                "list": {
+                  "range": {
+                    "from": {
+                      "const": 0
+                    },
+                    "to": {
+                      "const": 1
+                    }
+                  }
+                },
+                "as": "$node",
+                "expr": {
+                  "var": "$env.last_discard"
+                }
+              }
+            }
+          }
+        }
+      },
+      "legal": {
+        "gte": [
+          {
+            "count": {
+              "filter": {
+                "list": {
+                  "call": [
+                    "hand_of",
+                    {
+                      "at": [
+                        {
+                          "var": "$env.claim_queue"
+                        },
+                        {
+                          "var": "$env.claim_index"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "as": "$node",
+                "where": {
+                  "eq": [
+                    {
+                      "var": "$node"
+                    },
+                    {
+                      "var": "tile"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "const": 2
+          }
+        ]
+      },
+      "effectRef": "do_claim_peng",
+      "canonicalKey": {
+        "template": "claim_peng:{tile}"
+      }
+    },
+    {
+      "id": "claim_gang",
+      "type": "move",
+      "phases": [
+        "claim"
+      ],
+      "actor": {
+        "at": [
+          {
+            "var": "$env.claim_queue"
+          },
+          {
+            "var": "$env.claim_index"
+          }
+        ]
+      },
+      "params": {
+        "tile": {
+          "domain": {
+            "expr": {
+              "map": {
+                "list": {
+                  "range": {
+                    "from": {
+                      "const": 0
+                    },
+                    "to": {
+                      "const": 1
+                    }
+                  }
+                },
+                "as": "$node",
+                "expr": {
+                  "var": "$env.last_discard"
+                }
+              }
+            }
+          }
+        }
+      },
+      "legal": {
+        "gte": [
+          {
+            "count": {
+              "filter": {
+                "list": {
+                  "call": [
+                    "hand_of",
+                    {
+                      "at": [
+                        {
+                          "var": "$env.claim_queue"
+                        },
+                        {
+                          "var": "$env.claim_index"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "as": "$node",
+                "where": {
+                  "eq": [
+                    {
+                      "var": "$node"
+                    },
+                    {
+                      "var": "tile"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "const": 3
+          }
+        ]
+      },
+      "effectRef": "do_claim_gang",
+      "canonicalKey": {
+        "template": "claim_gang:{tile}"
+      }
+    },
+    {
+      "id": "claim_chi",
+      "type": "move",
+      "phases": [
+        "claim"
+      ],
+      "actor": {
+        "at": [
+          {
+            "var": "$env.claim_queue"
+          },
+          {
+            "var": "$env.claim_index"
+          }
+        ]
+      },
+      "params": {
+        "tiles": {
+          "domain": {
+            "expr": {
+              "filter": {
+                "list": {
+                  "var": "$constants.chi_runs"
+                },
+                "as": "$node",
+                "where": {
+                  "contains": [
+                    {
+                      "var": "$node"
+                    },
+                    {
+                      "var": "$env.last_discard"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "legal": {
+        "eq": [
+          {
+            "var": "$env.claim_index"
+          },
+          {
+            "const": 0
+          }
+        ]
+      },
+      "effectRef": "do_claim_chi",
+      "canonicalKey": {
+        "template": "claim_chi:{tiles}"
+      }
+    },
+    {
+      "id": "claim_pass",
+      "type": "move",
+      "phases": [
+        "claim"
+      ],
+      "actor": {
+        "at": [
+          {
+            "var": "$env.claim_queue"
+          },
+          {
+            "var": "$env.claim_index"
+          }
+        ]
+      },
+      "params": {},
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_claim_pass",
+      "canonicalKey": {
+        "const": "claim_pass"
+      }
+    }
+  ],
+  "effectors": {
+    "to_draw": {
+      "description": "Advance to the draw phase (or end on an empty wall)",
+      "ops": [
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "var": "$env.wall_count"
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "game_over",
+              "value": {
+                "const": true
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "game_over"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "last_action",
+              "value": {
+                "const": "wall_empty"
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "draw"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_draw": {
+      "description": "Deal / draw / gang-draw: one tile from the wall",
+      "ops": [
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "var": "$env.phase"
+              },
+              {
+                "const": "deal"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "append",
+              "array": {
+                "template": "hand_{$env.turn}"
+              },
+              "value": {
+                "var": "outcome"
+              }
+            },
+            {
+              "op": "append",
+              "array": "drawn",
+              "value": {
+                "var": "outcome"
+              }
+            },
+            {
+              "op": "inc",
+              "key": "wall_count",
+              "by": -1
+            },
+            {
+              "op": "inc",
+              "key": "dealt_count",
+              "by": 1
+            },
+            {
+              "op": "setEnv",
+              "key": "last_drawn",
+              "value": {
+                "var": "outcome"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "call": [
+                  "next_turn",
+                  {
+                    "var": "$env.turn"
+                  }
+                ]
+              }
+            },
+            {
+              "op": "branch",
+              "if": {
+                "gte": [
+                  {
+                    "var": "$env.dealt_count"
+                  },
+                  {
+                    "var": "$constants.deal_target"
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "action"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "turn",
+                  "value": {
+                    "const": "p0"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "dealt_count",
+                  "value": {
+                    "const": 0
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "last_action",
+                  "value": {
+                    "const": "deal_done"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "payoffs",
+                  "value": {
+                    "map": {
+                      "list": {
+                        "var": "$players"
+                      },
+                      "as": "$node",
+                      "expr": {
+                        "const": 0
+                      }
+                    }
+                  }
+                }
+              ],
+              "else": []
+            }
+          ],
+          "else": [
+            {
+              "op": "append",
+              "array": {
+                "template": "hand_{$env.turn}"
+              },
+              "value": {
+                "var": "outcome"
+              }
+            },
+            {
+              "op": "append",
+              "array": "drawn",
+              "value": {
+                "var": "outcome"
+              }
+            },
+            {
+              "op": "inc",
+              "key": "wall_count",
+              "by": -1
+            },
+            {
+              "op": "setEnv",
+              "key": "last_drawn",
+              "value": {
+                "var": "outcome"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "action"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_discard": {
+      "description": "Discard a tile, open the claim queue",
+      "ops": [
+        {
+          "op": "remove",
+          "array": {
+            "template": "hand_{$env.turn}"
+          },
+          "value": {
+            "var": "tile"
+          },
+          "count": {
+            "const": 1
+          }
+        },
+        {
+          "op": "append",
+          "array": {
+            "template": "discard_{$env.turn}"
+          },
+          "value": {
+            "var": "tile"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_discard",
+          "value": {
+            "var": "tile"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_discarder",
+          "value": {
+            "var": "$env.turn"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "dealer_idx",
+          "value": {
+            "get": [
+              {
+                "at": [
+                  {
+                    "filter": {
+                      "list": {
+                        "query": {
+                          "view": "player"
+                        }
+                      },
+                      "as": "$node",
+                      "where": {
+                        "eq": [
+                          {
+                            "get": [
+                              {
+                                "var": "$node"
+                              },
+                              "id"
+                            ]
+                          },
+                          {
+                            "var": "$env.turn"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              "idx"
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "claim_queue",
+          "value": {
+            "map": {
+              "list": {
+                "sort": {
+                  "list": {
+                    "filter": {
+                      "list": {
+                        "query": {
+                          "view": "player"
+                        }
+                      },
+                      "as": "$node",
+                      "where": {
+                        "and": [
+                          {
+                            "not": {
+                              "contains": [
+                                {
+                                  "var": "$env.done"
+                                },
+                                {
+                                  "get": [
+                                    {
+                                      "var": "$node"
+                                    },
+                                    "id"
+                                  ]
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "not": {
+                              "eq": [
+                                {
+                                  "get": [
+                                    {
+                                      "var": "$node"
+                                    },
+                                    "id"
+                                  ]
+                                },
+                                {
+                                  "var": "$env.last_discarder"
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "by": {
+                    "expr": "(node.idx - $env.dealer_idx + 4) % 4"
+                  }
+                }
+              },
+              "as": "$node",
+              "expr": {
+                "get": [
+                  {
+                    "var": "$node"
+                  },
+                  "id"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "claim_index",
+          "value": {
+            "const": 0
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_action",
+          "value": {
+            "const": "discard"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "claim"
+          }
+        }
+      ]
+    },
+    "do_claim_pass": {
+      "description": "Pass the claim; open the draw once all pass",
+      "ops": [
+        {
+          "op": "inc",
+          "key": "claim_index",
+          "by": 1
+        },
+        {
+          "op": "branch",
+          "if": {
+            "gte": [
+              {
+                "var": "$env.claim_index"
+              },
+              {
+                "count": {
+                  "var": "$env.claim_queue"
+                }
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "last_action",
+              "value": {
+                "const": "pass_all"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "at": [
+                  {
+                    "var": "$env.claim_queue"
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "claim_queue",
+              "value": {
+                "const": []
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "claim_index",
+              "value": {
+                "const": 0
+              }
+            },
+            {
+              "op": "callEffect",
+              "effectRef": "to_draw",
+              "args": {}
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "last_action",
+              "value": {
+                "const": "pass"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_claim_peng": {
+      "description": "Pung: take the discard, meld a triplet",
+      "ops": [
+        {
+          "op": "setEnv",
+          "key": "actor",
+          "value": {
+            "at": [
+              {
+                "var": "$env.claim_queue"
+              },
+              {
+                "var": "$env.claim_index"
+              }
+            ]
+          }
+        },
+        {
+          "op": "remove",
+          "array": {
+            "template": "hand_{$env.actor}"
+          },
+          "value": {
+            "var": "tile"
+          },
+          "count": {
+            "const": 2
+          }
+        },
+        {
+          "op": "append",
+          "array": {
+            "template": "melds_{$env.actor}"
+          },
+          "value": {
+            "type": "peng",
+            "tiles": {
+              "map": {
+                "list": {
+                  "range": {
+                    "from": {
+                      "const": 0
+                    },
+                    "to": {
+                      "const": 3
+                    }
+                  }
+                },
+                "as": "$node",
+                "expr": {
+                  "var": "tile"
+                }
+              }
+            },
+            "from": {
+              "var": "$env.last_discarder"
+            }
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "var": "$env.actor"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "claim_queue",
+          "value": {
+            "const": []
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "claim_index",
+          "value": {
+            "const": 0
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_action",
+          "value": {
+            "const": "peng"
+          }
+        },
+        {
+          "op": "callEffect",
+          "effectRef": "to_draw",
+          "args": {}
+        }
+      ]
+    },
+    "do_claim_gang": {
+      "description": "Exposed gang: take the discard, meld quads",
+      "ops": [
+        {
+          "op": "setEnv",
+          "key": "actor",
+          "value": {
+            "at": [
+              {
+                "var": "$env.claim_queue"
+              },
+              {
+                "var": "$env.claim_index"
+              }
+            ]
+          }
+        },
+        {
+          "op": "remove",
+          "array": {
+            "template": "hand_{$env.actor}"
+          },
+          "value": {
+            "var": "tile"
+          },
+          "count": {
+            "const": 3
+          }
+        },
+        {
+          "op": "append",
+          "array": {
+            "template": "melds_{$env.actor}"
+          },
+          "value": {
+            "type": "gang",
+            "tiles": {
+              "map": {
+                "list": {
+                  "range": {
+                    "from": {
+                      "const": 0
+                    },
+                    "to": {
+                      "const": 4
+                    }
+                  }
+                },
+                "as": "$node",
+                "expr": {
+                  "var": "tile"
+                }
+              }
+            },
+            "from": {
+              "var": "$env.last_discarder"
+            }
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "var": "$env.actor"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "claim_queue",
+          "value": {
+            "const": []
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "claim_index",
+          "value": {
+            "const": 0
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_action",
+          "value": {
+            "const": "gang"
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "var": "$env.wall_count"
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "game_over",
+              "value": {
+                "const": true
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "game_over"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "last_action",
+              "value": {
+                "const": "wall_empty"
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "gang_draw"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_claim_chi": {
+      "description": "Chi (first responder only): meld a run",
+      "ops": [
+        {
+          "op": "setEnv",
+          "key": "actor",
+          "value": {
+            "at": [
+              {
+                "var": "$env.claim_queue"
+              },
+              {
+                "var": "$env.claim_index"
+              }
+            ]
+          }
+        },
+        {
+          "op": "forEach",
+          "list": {
+            "var": "tiles"
+          },
+          "do": [
+            {
+              "op": "remove",
+              "array": {
+                "template": "hand_{$env.actor}"
+              },
+              "value": {
+                "var": "$item"
+              },
+              "count": {
+                "const": 1
+              }
+            }
+          ]
+        },
+        {
+          "op": "append",
+          "array": {
+            "template": "melds_{$env.actor}"
+          },
+          "value": {
+            "type": "chi",
+            "tiles": {
+              "var": "tiles"
+            }
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "var": "$env.actor"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "claim_queue",
+          "value": {
+            "const": []
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "claim_index",
+          "value": {
+            "const": 0
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_action",
+          "value": {
+            "const": "chi"
+          }
+        },
+        {
+          "op": "callEffect",
+          "effectRef": "to_draw",
+          "args": {}
+        }
+      ]
+    },
+    "do_claim_win": {
+      "description": "Win off a discard (ron)",
+      "ops": [
+        {
+          "op": "callEffect",
+          "effectRef": "do_win",
+          "args": {
+            "pid": {
+              "at": [
+                {
+                  "var": "$env.claim_queue"
+                },
+                {
+                  "var": "$env.claim_index"
+                }
+              ]
+            },
+            "tile": {
+              "var": "$env.last_discard"
+            },
+            "self_win": {
+              "const": false
+            }
+          }
+        }
+      ]
+    },
+    "do_win_self": {
+      "description": "Win on the self-drawn tile (tsumo)",
+      "ops": [
+        {
+          "op": "callEffect",
+          "effectRef": "do_win",
+          "args": {
+            "pid": {
+              "var": "$env.turn"
+            },
+            "tile": {
+              "var": "$env.last_drawn"
+            },
+            "self_win": {
+              "const": true
+            }
+          }
+        }
+      ]
+    },
+    "do_gang_concealed": {
+      "description": "Concealed gang from four held tiles",
+      "ops": [
+        {
+          "op": "forEach",
+          "list": {
+            "range": {
+              "from": {
+                "const": 0
+              },
+              "to": {
+                "const": 4
+              }
+            }
+          },
+          "do": [
+            {
+              "op": "remove",
+              "array": {
+                "template": "hand_{$env.turn}"
+              },
+              "value": {
+                "var": "tile"
+              },
+              "count": {
+                "const": 1
+              }
+            }
+          ]
+        },
+        {
+          "op": "append",
+          "array": {
+            "template": "melds_{$env.turn}"
+          },
+          "value": {
+            "type": "concealed_gang",
+            "tiles": {
+              "map": {
+                "list": {
+                  "range": {
+                    "from": {
+                      "const": 0
+                    },
+                    "to": {
+                      "const": 4
+                    }
+                  }
+                },
+                "as": "$node",
+                "expr": {
+                  "var": "tile"
+                }
+              }
+            }
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_action",
+          "value": {
+            "const": "gang_concealed"
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "var": "$env.wall_count"
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "game_over",
+              "value": {
+                "const": true
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "game_over"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "last_action",
+              "value": {
+                "const": "wall_empty"
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "gang_draw"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_gang_added": {
+      "description": "Added gang: promote a pung to a quad",
+      "ops": [
+        {
+          "op": "remove",
+          "array": {
+            "template": "hand_{$env.turn}"
+          },
+          "value": {
+            "var": "tile"
+          },
+          "count": {
+            "const": 1
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "gang_tiles",
+          "value": {
+            "get": [
+              {
+                "at": [
+                  {
+                    "filter": {
+                      "list": {
+                        "call": [
+                          "melds_of",
+                          {
+                            "var": "$env.turn"
+                          }
+                        ]
+                      },
+                      "as": "$node",
+                      "where": {
+                        "and": [
+                          {
+                            "eq": [
+                              {
+                                "get": [
+                                  {
+                                    "var": "$node"
+                                  },
+                                  "type"
+                                ]
+                              },
+                              {
+                                "const": "peng"
+                              }
+                            ]
+                          },
+                          {
+                            "eq": [
+                              {
+                                "at": [
+                                  {
+                                    "get": [
+                                      {
+                                        "var": "$node"
+                                      },
+                                      "tiles"
+                                    ]
+                                  },
+                                  {
+                                    "const": 0
+                                  }
+                                ]
+                              },
+                              {
+                                "var": "tile"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              "tiles"
+            ]
+          }
+        },
+        {
+          "op": "setArray",
+          "array": {
+            "template": "melds_{$env.turn}"
+          },
+          "value": {
+            "filter": {
+              "list": {
+                "call": [
+                  "melds_of",
+                  {
+                    "var": "$env.turn"
+                  }
+                ]
+              },
+              "as": "$node",
+              "where": {
+                "not": {
+                  "and": [
+                    {
+                      "eq": [
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "type"
+                          ]
+                        },
+                        {
+                          "const": "peng"
+                        }
+                      ]
+                    },
+                    {
+                      "eq": [
+                        {
+                          "at": [
+                            {
+                              "get": [
+                                {
+                                  "var": "$node"
+                                },
+                                "tiles"
+                              ]
+                            },
+                            {
+                              "const": 0
+                            }
+                          ]
+                        },
+                        {
+                          "var": "tile"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "op": "append",
+          "array": {
+            "template": "melds_{$env.turn}"
+          },
+          "value": {
+            "type": "added_gang",
+            "tiles": {
+              "concat": [
+                {
+                  "var": "$env.gang_tiles"
+                },
+                {
+                  "map": {
+                    "list": {
+                      "range": {
+                        "from": {
+                          "const": 0
+                        },
+                        "to": {
+                          "const": 1
+                        }
+                      }
+                    },
+                    "as": "$node",
+                    "expr": {
+                      "var": "tile"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "last_action",
+          "value": {
+            "const": "gang_added"
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "var": "$env.wall_count"
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "game_over",
+              "value": {
+                "const": true
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "game_over"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "last_action",
+              "value": {
+                "const": "wall_empty"
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "gang_draw"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_win": {
+      "description": "Common win settlement: fans, winners, continue or end",
+      "ops": [
+        {
+          "op": "setEnv",
+          "key": "win_hand",
+          "value": {
+            "concat": [
+              {
+                "call": [
+                  "hand_of",
+                  {
+                    "var": "pid"
+                  }
+                ]
+              },
+              {
+                "map": {
+                  "list": {
+                    "range": {
+                      "from": {
+                        "const": 0
+                      },
+                      "to": {
+                        "const": 1
+                      }
+                    }
+                  },
+                  "as": "$node",
+                  "expr": {
+                    "var": "tile"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "fan_pay",
+          "value": {
+            "at": [
+              {
+                "var": "$constants.fan_pay"
+              },
+              {
+                "sub": [
+                  {
+                    "call": [
+                      "fan_sum",
+                      {
+                        "var": "$env.win_hand"
+                      }
+                    ]
+                  },
+                  {
+                    "const": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "not": {
+              "contains": [
+                {
+                  "var": "$env.winners"
+                },
+                {
+                  "var": "pid"
+                }
+              ]
+            }
+          },
+          "then": [
+            {
+              "op": "append",
+              "array": "winners",
+              "value": {
+                "var": "pid"
+              }
+            }
+          ],
+          "else": []
+        },
+        {
+          "op": "branch",
+          "if": {
+            "not": {
+              "contains": [
+                {
+                  "var": "$env.done"
+                },
+                {
+                  "var": "pid"
+                }
+              ]
+            }
+          },
+          "then": [
+            {
+              "op": "append",
+              "array": "done",
+              "value": {
+                "var": "pid"
+              }
+            }
+          ],
+          "else": []
+        },
+        {
+          "op": "setEnv",
+          "key": "last_action",
+          "value": {
+            "if": {
+              "cond": {
+                "var": "self_win"
+              },
+              "then": {
+                "const": "win_self"
+              },
+              "else": {
+                "const": "win_discard"
+              }
+            }
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "var": "$constants.variant"
+              },
+              {
+                "const": "blood"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "branch",
+              "if": {
+                "or": [
+                  {
+                    "gte": [
+                      {
+                        "count": {
+                          "var": "$env.done"
+                        }
+                      },
+                      {
+                        "const": 2
+                      }
+                    ]
+                  },
+                  {
+                    "eq": [
+                      {
+                        "var": "$env.wall_count"
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "game_over",
+                  "value": {
+                    "const": true
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "game_over"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "last_action",
+                  "value": {
+                    "const": "blood_over"
+                  }
+                }
+              ],
+              "else": [
+                {
+                  "op": "setEnv",
+                  "key": "turn",
+                  "value": {
+                    "if": {
+                      "cond": {
+                        "contains": [
+                          {
+                            "var": "$env.done"
+                          },
+                          {
+                            "call": [
+                              "next_turn",
+                              {
+                                "var": "pid"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "then": {
+                        "call": [
+                          "next_turn",
+                          {
+                            "call": [
+                              "next_turn",
+                              {
+                                "var": "pid"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "else": {
+                        "call": [
+                          "next_turn",
+                          {
+                            "var": "pid"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "op": "callEffect",
+                  "effectRef": "to_draw",
+                  "args": {}
+                }
+              ]
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "game_over",
+              "value": {
+                "const": true
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "game_over"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "winner",
+              "value": {
+                "var": "pid"
+              }
+            }
+          ]
+        },
+        {
+          "op": "setEnv",
+          "key": "payoffs",
+          "value": {
+            "map": {
+              "list": {
+                "var": "$players"
+              },
+              "as": "$node",
+              "expr": {
+                "call": [
+                  "payoff_for",
+                  {
+                    "get": [
+                      {
+                        "var": "$node"
+                      },
+                      "id"
+                    ]
+                  },
+                  {
+                    "var": "pid"
+                  },
+                  {
+                    "var": "$env.fan_pay"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "chance": [
+    {
+      "id": "draw",
+      "phases": [
+        "deal",
+        "draw",
+        "gang_draw"
+      ],
+      "params": {
+        "tile": {
+          "view": "tile",
+          "domain": {
+            "ref": "undrawn_tiles"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "tile"
+        }
+      },
+      "effectRef": "do_draw",
+      "canonicalKey": {
+        "template": "draw:{outcome}"
+      }
+    }
+  ],
+  "phases": [
+    {
+      "id": "deal",
+      "actions": [],
+      "description": "Chance: deal 13N+1 tiles"
+    },
+    {
+      "id": "action",
+      "actions": [
+        "discard",
+        "win_self",
+        "gang_concealed",
+        "gang_added"
+      ],
+      "description": "Player: discard / win / gang"
+    },
+    {
+      "id": "claim",
+      "actions": [
+        "claim_win",
+        "claim_peng",
+        "claim_gang",
+        "claim_chi",
+        "claim_pass"
+      ],
+      "description": "Player: respond to a discard"
+    },
+    {
+      "id": "draw",
+      "actions": [],
+      "description": "Chance: draw one tile"
+    },
+    {
+      "id": "gang_draw",
+      "actions": [],
+      "description": "Chance: gang replacement"
+    },
+    {
+      "id": "game_over",
+      "actions": [],
+      "description": "Round finished"
+    }
+  ],
+  "visibility": {
+    "default": "partial",
+    "rules": [
+      {
+        "view": "hand_view_p0",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              "p0"
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "hand_view_p1",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              "p1"
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "hand_view_p2",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              "p2"
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "hand_view_p3",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              "p3"
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      }
+    ]
+  },
+  "terminal": [
+    {
+      "id": "round_done",
+      "condition": {
+        "eq": [
+          {
+            "var": "$env.game_over"
+          },
+          {
+            "const": true
+          }
+        ]
+      }
+    }
+  ],
+  "utility": [
+    {
+      "player": "p0",
+      "value": {
+        "at": [
+          {
+            "var": "$env.payoffs"
+          },
+          {
+            "const": 0
+          }
+        ]
+      },
+      "when": {
+        "eq": [
+          {
+            "var": "$env.game_over"
+          },
+          {
+            "const": true
+          }
+        ]
+      }
+    },
+    {
+      "player": "p1",
+      "value": {
+        "at": [
+          {
+            "var": "$env.payoffs"
+          },
+          {
+            "const": 1
+          }
+        ]
+      },
+      "when": {
+        "eq": [
+          {
+            "var": "$env.game_over"
+          },
+          {
+            "const": true
+          }
+        ]
+      }
+    },
+    {
+      "player": "p2",
+      "value": {
+        "at": [
+          {
+            "var": "$env.payoffs"
+          },
+          {
+            "const": 2
+          }
+        ]
+      },
+      "when": {
+        "eq": [
+          {
+            "var": "$env.game_over"
+          },
+          {
+            "const": true
+          }
+        ]
+      }
+    },
+    {
+      "player": "p3",
+      "value": {
+        "at": [
+          {
+            "var": "$env.payoffs"
+          },
+          {
+            "const": 3
+          }
+        ]
+      },
+      "when": {
+        "eq": [
+          {
+            "var": "$env.game_over"
+          },
+          {
+            "const": true
+          }
+        ]
+      }
+    }
+  ],
+  "functions": {
+    "next_turn": {
+      "description": "Cyclic next player within constants.player_ids",
+      "params": [
+        "p"
+      ],
+      "expr": {
+        "at": [
+          {
+            "var": "$constants.player_ids"
+          },
+          {
+            "sub": [
+              {
+                "add": [
+                  {
+                    "count": {
+                      "filter": {
+                        "list": {
+                          "var": "$constants.player_ids"
+                        },
+                        "as": "$node",
+                        "where": {
+                          "lt": [
+                            {
+                              "var": "$node"
+                            },
+                            {
+                              "var": "$p"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "const": 1
+                  }
+                ]
+              },
+              {
+                "mul": [
+                  {
+                    "div": [
+                      {
+                        "add": [
+                          {
+                            "count": {
+                              "filter": {
+                                "list": {
+                                  "var": "$constants.player_ids"
+                                },
+                                "as": "$node",
+                                "where": {
+                                  "lt": [
+                                    {
+                                      "var": "$node"
+                                    },
+                                    {
+                                      "var": "$p"
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "const": 1
+                          }
+                        ]
+                      },
+                      {
+                        "count": {
+                          "var": "$constants.player_ids"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "count": {
+                      "var": "$constants.player_ids"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "hand_of": {
+      "description": "A player's hand array",
+      "params": [
+        "p"
+      ],
+      "expr": {
+        "switch": [
+          {
+            "case": "p0",
+            "then": {
+              "var": "$hand_p0"
+            }
+          },
+          {
+            "case": "p1",
+            "then": {
+              "var": "$hand_p1"
+            }
+          },
+          {
+            "case": "p2",
+            "then": {
+              "var": "$hand_p2"
+            }
+          },
+          {
+            "case": "p3",
+            "then": {
+              "var": "$hand_p3"
+            }
+          }
+        ],
+        "input": {
+          "var": "$p"
+        }
+      }
+    },
+    "melds_of": {
+      "description": "A player's meld list",
+      "params": [
+        "p"
+      ],
+      "expr": {
+        "switch": [
+          {
+            "case": "p0",
+            "then": {
+              "var": "$melds_p0"
+            }
+          },
+          {
+            "case": "p1",
+            "then": {
+              "var": "$melds_p1"
+            }
+          },
+          {
+            "case": "p2",
+            "then": {
+              "var": "$melds_p2"
+            }
+          },
+          {
+            "case": "p3",
+            "then": {
+              "var": "$melds_p3"
+            }
+          }
+        ],
+        "input": {
+          "var": "$p"
+        }
+      }
+    },
+    "is_qidui": {
+      "description": "Seven pairs (every group of size 2)",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "all": {
+          "list": {
+            "group": {
+              "list": {
+                "var": "$hand"
+              }
+            }
+          },
+          "as": "$node",
+          "where": {
+            "eq": [
+              {
+                "get": [
+                  {
+                    "var": "$node"
+                  },
+                  "count"
+                ]
+              },
+              {
+                "const": 2
+              }
+            ]
+          }
+        }
+      }
+    },
+    "is_win_hand": {
+      "description": "Winning hand: 7 pairs, thirteen orphans, or standard form with coverage",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "or": [
+          {
+            "call": [
+              "is_qidui",
+              {
+                "var": "$hand"
+              }
+            ]
+          },
+          {
+            "all": {
+              "list": {
+                "var": "$constants.thirteen_orphans"
+              },
+              "as": "$node",
+              "where": {
+                "contains": [
+                  {
+                    "var": "$hand"
+                  },
+                  {
+                    "var": "$node"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "choose": {
+              "items": {
+                "concat": [
+                  {
+                    "filter": {
+                      "list": {
+                        "var": "$constants.chi_runs"
+                      },
+                      "as": "$run",
+                      "where": {
+                        "gte": [
+                          {
+                            "add": [
+                              {
+                                "sum": {
+                                  "map": {
+                                    "list": {
+                                      "var": "$run"
+                                    },
+                                    "as": "$node2",
+                                    "expr": {
+                                      "min": {
+                                        "concat": [
+                                          {
+                                            "map": {
+                                              "list": {
+                                                "range": {
+                                                  "from": {
+                                                    "const": 0
+                                                  },
+                                                  "to": {
+                                                    "const": 1
+                                                  }
+                                                }
+                                              },
+                                              "as": "$ma",
+                                              "expr": {
+                                                "const": 1
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "map": {
+                                              "list": {
+                                                "range": {
+                                                  "from": {
+                                                    "const": 0
+                                                  },
+                                                  "to": {
+                                                    "const": 1
+                                                  }
+                                                }
+                                              },
+                                              "as": "$mb",
+                                              "expr": {
+                                                "count": {
+                                                  "filter": {
+                                                    "list": {
+                                                      "var": "$hand"
+                                                    },
+                                                    "as": "$h",
+                                                    "where": {
+                                                      "eq": [
+                                                        {
+                                                          "var": "$h"
+                                                        },
+                                                        {
+                                                          "var": "$node2"
+                                                        }
+                                                      ]
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "count": {
+                                  "filter": {
+                                    "list": {
+                                      "var": "$hand"
+                                    },
+                                    "as": "$h",
+                                    "where": {
+                                      "eq": [
+                                        {
+                                          "var": "$h"
+                                        },
+                                        {
+                                          "var": "$constants.wild_tile"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "const": 3
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "map": {
+                      "list": {
+                        "filter": {
+                          "list": {
+                            "group": {
+                              "list": {
+                                "var": "$hand"
+                              }
+                            }
+                          },
+                          "as": "$node",
+                          "where": {
+                            "gte": [
+                              {
+                                "add": [
+                                  {
+                                    "get": [
+                                      {
+                                        "var": "$node"
+                                      },
+                                      "count"
+                                    ]
+                                  },
+                                  {
+                                    "count": {
+                                      "filter": {
+                                        "list": {
+                                          "var": "$hand"
+                                        },
+                                        "as": "$h",
+                                        "where": {
+                                          "eq": [
+                                            {
+                                              "var": "$h"
+                                            },
+                                            {
+                                              "var": "$constants.wild_tile"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 3
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "as": "$node",
+                      "expr": {
+                        "get": [
+                          {
+                            "var": "$node"
+                          },
+                          "key"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              },
+              "k": 4,
+              "as": "$m",
+              "prefix": {
+                "gte": [
+                  {
+                    "add": [
+                      {
+                        "sum": {
+                          "map": {
+                            "list": {
+                              "group": {
+                                "list": {
+                                  "concat": [
+                                    {
+                                      "at": [
+                                        {
+                                          "var": "$m"
+                                        },
+                                        {
+                                          "const": 0
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "at": [
+                                        {
+                                          "var": "$m"
+                                        },
+                                        {
+                                          "const": 1
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "at": [
+                                        {
+                                          "var": "$m"
+                                        },
+                                        {
+                                          "const": 2
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "at": [
+                                        {
+                                          "var": "$m"
+                                        },
+                                        {
+                                          "const": 3
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "as": "$node",
+                            "expr": {
+                              "min": {
+                                "concat": [
+                                  {
+                                    "map": {
+                                      "list": {
+                                        "range": {
+                                          "from": {
+                                            "const": 0
+                                          },
+                                          "to": {
+                                            "const": 1
+                                          }
+                                        }
+                                      },
+                                      "as": "$ma",
+                                      "expr": {
+                                        "get": [
+                                          {
+                                            "var": "$node"
+                                          },
+                                          "count"
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "map": {
+                                      "list": {
+                                        "range": {
+                                          "from": {
+                                            "const": 0
+                                          },
+                                          "to": {
+                                            "const": 1
+                                          }
+                                        }
+                                      },
+                                      "as": "$mb",
+                                      "expr": {
+                                        "count": {
+                                          "filter": {
+                                            "list": {
+                                              "var": "$hand"
+                                            },
+                                            "as": "$h",
+                                            "where": {
+                                              "eq": [
+                                                {
+                                                  "var": "$h"
+                                                },
+                                                {
+                                                  "get": [
+                                                    {
+                                                      "var": "$node"
+                                                    },
+                                                    "key"
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "count": {
+                          "filter": {
+                            "list": {
+                              "var": "$hand"
+                            },
+                            "as": "$h",
+                            "where": {
+                              "eq": [
+                                {
+                                  "var": "$h"
+                                },
+                                {
+                                  "var": "$constants.wild_tile"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "mul": [
+                      {
+                        "const": 3
+                      },
+                      {
+                        "count": {
+                          "var": "$m"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "where": {
+                "choose": {
+                  "items": {
+                    "map": {
+                      "list": {
+                        "filter": {
+                          "list": {
+                            "group": {
+                              "list": {
+                                "var": "$hand"
+                              }
+                            }
+                          },
+                          "as": "$node",
+                          "where": {
+                            "gte": [
+                              {
+                                "add": [
+                                  {
+                                    "get": [
+                                      {
+                                        "var": "$node"
+                                      },
+                                      "count"
+                                    ]
+                                  },
+                                  {
+                                    "count": {
+                                      "filter": {
+                                        "list": {
+                                          "var": "$hand"
+                                        },
+                                        "as": "$h",
+                                        "where": {
+                                          "eq": [
+                                            {
+                                              "var": "$h"
+                                            },
+                                            {
+                                              "var": "$constants.wild_tile"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 2
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "as": "$node",
+                      "expr": {
+                        "get": [
+                          {
+                            "var": "$node"
+                          },
+                          "key"
+                        ]
+                      }
+                    }
+                  },
+                  "k": 1,
+                  "as": "$p",
+                  "where": {
+                    "gte": [
+                      {
+                        "add": [
+                          {
+                            "sum": {
+                              "map": {
+                                "list": {
+                                  "group": {
+                                    "list": {
+                                      "concat": [
+                                        {
+                                          "concat": [
+                                            {
+                                              "at": [
+                                                {
+                                                  "var": "$m"
+                                                },
+                                                {
+                                                  "const": 0
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "at": [
+                                                {
+                                                  "var": "$m"
+                                                },
+                                                {
+                                                  "const": 1
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "at": [
+                                                {
+                                                  "var": "$m"
+                                                },
+                                                {
+                                                  "const": 2
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "at": [
+                                                {
+                                                  "var": "$m"
+                                                },
+                                                {
+                                                  "const": 3
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "map": {
+                                            "list": {
+                                              "range": {
+                                                "from": {
+                                                  "const": 0
+                                                },
+                                                "to": {
+                                                  "const": 2
+                                                }
+                                              }
+                                            },
+                                            "as": "$node",
+                                            "expr": {
+                                              "at": [
+                                                {
+                                                  "var": "$p"
+                                                },
+                                                {
+                                                  "const": 0
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                "as": "$node",
+                                "expr": {
+                                  "min": {
+                                    "concat": [
+                                      {
+                                        "map": {
+                                          "list": {
+                                            "range": {
+                                              "from": {
+                                                "const": 0
+                                              },
+                                              "to": {
+                                                "const": 1
+                                              }
+                                            }
+                                          },
+                                          "as": "$ma",
+                                          "expr": {
+                                            "get": [
+                                              {
+                                                "var": "$node"
+                                              },
+                                              "count"
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "map": {
+                                          "list": {
+                                            "range": {
+                                              "from": {
+                                                "const": 0
+                                              },
+                                              "to": {
+                                                "const": 1
+                                              }
+                                            }
+                                          },
+                                          "as": "$mb",
+                                          "expr": {
+                                            "count": {
+                                              "filter": {
+                                                "list": {
+                                                  "var": "$hand"
+                                                },
+                                                "as": "$h",
+                                                "where": {
+                                                  "eq": [
+                                                    {
+                                                      "var": "$h"
+                                                    },
+                                                    {
+                                                      "get": [
+                                                        {
+                                                          "var": "$node"
+                                                        },
+                                                        "key"
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "count": {
+                              "filter": {
+                                "list": {
+                                  "var": "$hand"
+                                },
+                                "as": "$h",
+                                "where": {
+                                  "eq": [
+                                    {
+                                      "var": "$h"
+                                    },
+                                    {
+                                      "var": "$constants.wild_tile"
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "const": 14
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "fan_sum": {
+      "description": "Sum of all fan flags for a winning hand",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "add": [
+          {
+            "add": [
+              {
+                "add": [
+                  {
+                    "add": [
+                      {
+                        "add": [
+                          {
+                            "add": [
+                              {
+                                "add": [
+                                  {
+                                    "add": [
+                                      {
+                                        "add": [
+                                          {
+                                            "const": 0
+                                          },
+                                          {
+                                            "mul": [
+                                              {
+                                                "call": [
+                                                  "fan_jihu",
+                                                  {
+                                                    "var": "$hand"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "const": 1
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "mul": [
+                                          {
+                                            "call": [
+                                              "fan_pinghu",
+                                              {
+                                                "var": "$hand"
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "const": 2
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "mul": [
+                                      {
+                                        "call": [
+                                          "fan_pengpenghu",
+                                          {
+                                            "var": "$hand"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "const": 3
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "mul": [
+                                  {
+                                    "call": [
+                                      "fan_qingyise",
+                                      {
+                                        "var": "$hand"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "const": 5
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "mul": [
+                              {
+                                "call": [
+                                  "fan_hunyise",
+                                  {
+                                    "var": "$hand"
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 2
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "mul": [
+                          {
+                            "call": [
+                              "fan_qidui",
+                              {
+                                "var": "$hand"
+                              }
+                            ]
+                          },
+                          {
+                            "const": 4
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "mul": [
+                      {
+                        "call": [
+                          "fan_shisanyao",
+                          {
+                            "var": "$hand"
+                          }
+                        ]
+                      },
+                      {
+                        "const": 8
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "mul": [
+                  {
+                    "call": [
+                      "fan_hongzhongke",
+                      {
+                        "var": "$hand"
+                      }
+                    ]
+                  },
+                  {
+                    "const": 1
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "mul": [
+              {
+                "call": [
+                  "fan_jueshang",
+                  {
+                    "var": "$hand"
+                  }
+                ]
+              },
+              {
+                "const": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "payoff_for": {
+      "description": "Net score for one player when ``winner`` wins ``fan_pay``",
+      "params": [
+        "pid",
+        "winner",
+        "fan_pay"
+      ],
+      "expr": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "var": "pid"
+              },
+              {
+                "var": "winner"
+              }
+            ]
+          },
+          "then": {
+            "mul": [
+              {
+                "var": "fan_pay"
+              },
+              {
+                "sub": [
+                  {
+                    "var": "$constants.player_count"
+                  },
+                  {
+                    "count": {
+                      "var": "$env.done"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "else": {
+            "if": {
+              "cond": {
+                "contains": [
+                  {
+                    "var": "$env.done"
+                  },
+                  {
+                    "var": "pid"
+                  }
+                ]
+              },
+              "then": {
+                "const": 0
+              },
+              "else": {
+                "sub": [
+                  {
+                    "const": 0
+                  },
+                  {
+                    "var": "fan_pay"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "fan_jihu": {
+      "description": "鸡胡",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "const": 1
+      }
+    },
+    "fan_pinghu": {
+      "description": "平胡 (approx: no triplets)",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "eq": [
+          {
+            "count": {
+              "filter": {
+                "list": {
+                  "group": {
+                    "list": {
+                      "var": "$hand"
+                    }
+                  }
+                },
+                "as": "$node",
+                "where": {
+                  "gte": [
+                    {
+                      "get": [
+                        {
+                          "var": "$node"
+                        },
+                        "count"
+                      ]
+                    },
+                    {
+                      "const": 3
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "const": 0
+          }
+        ]
+      }
+    },
+    "fan_pengpenghu": {
+      "description": "碰碰胡 (approx: four triplets)",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "eq": [
+          {
+            "count": {
+              "filter": {
+                "list": {
+                  "group": {
+                    "list": {
+                      "var": "$hand"
+                    }
+                  }
+                },
+                "as": "$node",
+                "where": {
+                  "gte": [
+                    {
+                      "get": [
+                        {
+                          "var": "$node"
+                        },
+                        "count"
+                      ]
+                    },
+                    {
+                      "const": 3
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "const": 4
+          }
+        ]
+      }
+    },
+    "fan_qingyise": {
+      "description": "清一色",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "all": {
+          "list": {
+            "var": "$hand"
+          },
+          "as": "$node",
+          "where": {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$node"
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              {
+                "at": [
+                  {
+                    "at": [
+                      {
+                        "var": "$hand"
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "fan_hunyise": {
+      "description": "混一色 (approx: honors + one suit)",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "and": [
+          {
+            "any": {
+              "list": {
+                "var": "$hand"
+              },
+              "as": "$node",
+              "where": {
+                "eq": [
+                  {
+                    "at": [
+                      {
+                        "var": "$node"
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  {
+                    "const": "z"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "eq": [
+              {
+                "count": {
+                  "distinct": {
+                    "map": {
+                      "list": {
+                        "filter": {
+                          "list": {
+                            "var": "$hand"
+                          },
+                          "as": "$node",
+                          "where": {
+                            "not": {
+                              "eq": [
+                                {
+                                  "at": [
+                                    {
+                                      "var": "$node"
+                                    },
+                                    {
+                                      "const": 0
+                                    }
+                                  ]
+                                },
+                                {
+                                  "const": "z"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "as": "$node",
+                      "expr": {
+                        "at": [
+                          {
+                            "var": "$node"
+                          },
+                          {
+                            "const": 0
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "const": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "fan_qidui": {
+      "description": "七对",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "call": [
+          "is_qidui",
+          {
+            "var": "$hand"
+          }
+        ]
+      }
+    },
+    "fan_shisanyao": {
+      "description": "十三幺",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "all": {
+          "list": {
+            "var": "$constants.thirteen_orphans"
+          },
+          "as": "$node",
+          "where": {
+            "contains": [
+              {
+                "var": "$hand"
+              },
+              {
+                "var": "$node"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "fan_hongzhongke": {
+      "description": "红中刻 (hongzhong only)",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "var": "$constants.variant"
+              },
+              {
+                "const": "hongzhong"
+              }
+            ]
+          },
+          "then": {
+            "gte": [
+              {
+                "count": {
+                  "filter": {
+                    "list": {
+                      "var": "$hand"
+                    },
+                    "as": "$node",
+                    "where": {
+                      "eq": [
+                        {
+                          "var": "$node"
+                        },
+                        {
+                          "var": "$constants.wild_tile"
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "const": 3
+              }
+            ]
+          },
+          "else": {
+            "const": 0
+          }
+        }
+      }
+    },
+    "fan_jueshang": {
+      "description": "缺一门 (blood only, approx)",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "var": "$constants.variant"
+              },
+              {
+                "const": "blood"
+              }
+            ]
+          },
+          "then": {
+            "eq": [
+              {
+                "count": {
+                  "distinct": {
+                    "map": {
+                      "list": {
+                        "var": "$hand"
+                      },
+                      "as": "$node",
+                      "expr": {
+                        "at": [
+                          {
+                            "var": "$node"
+                          },
+                          {
+                            "const": 0
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "const": 2
+              }
+            ]
+          },
+          "else": {
+            "const": 0
+          }
+        }
+      }
+    }
+  }
+}

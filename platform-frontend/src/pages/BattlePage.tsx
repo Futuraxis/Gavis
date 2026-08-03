@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { apiGet, apiPost } from '../api/client'
-import type { BoardSnapshot, GameInfo, PokerSnapshot, Snapshot } from '../types'
+import type { BoardSnapshot, GameInfo, MahjongSnapshot, PokerSnapshot, Snapshot } from '../types'
 import BattleSetup from '../components/BattleSetup'
 import ResultOverlay from '../components/ResultOverlay'
 import VanishToast from '../components/VanishToast'
 import GomokuBoard from '../components/boards/GomokuBoard'
+import MahjongTable from '../components/boards/MahjongTable'
 import MoonBoard from '../components/boards/MoonBoard'
 import PokerTable from '../components/boards/PokerTable'
 
-const SEAT_SHORT: Record<string, string> = { p_black: '黑棋', p_white: '白棋', p_sb: '小盲位', p_bb: '大盲位' }
+const SEAT_SHORT: Record<string, string> = {
+  p_black: '黑棋', p_white: '白棋', p_sb: '小盲位', p_bb: '大盲位',
+  p0: '庄家', p1: '下家', p2: '对家', p3: '上家',
+}
 const DIFFICULTY_SHORT: Record<string, string> = { easy: '简单', normal: '普通', hard: '困难' }
 
 export default function BattlePage() {
@@ -42,7 +46,7 @@ export default function BattlePage() {
       })
   }, [activeId, session, setSearchParams])
 
-  async function start(playerPid: string, difficulty: string) {
+  async function start(playerPid: string, difficulty: string, playerCount: number) {
     setBusy(true)
     setError(null)
     try {
@@ -50,6 +54,7 @@ export default function BattlePage() {
         game_id: gameId,
         player_pid: playerPid,
         difficulty: difficulty,
+        player_count: playerCount,
       })
       setSession(data.session)
       setSearchParams({ game: data.session.game_id })
@@ -118,7 +123,13 @@ export default function BattlePage() {
           {game.kind === 'board' && game.board_size === 9 && <VanishToast snapshot={session} />}
         </div>
       )}
-      {game.kind === 'poker' ? (
+      {game.kind === 'mahjong' ? (
+        <MahjongTable
+          snapshot={session as MahjongSnapshot}
+          interactive={interactive}
+          onAction={(action) => move(action)}
+        />
+      ) : game.kind === 'poker' ? (
         <PokerTable
           snapshot={session as PokerSnapshot}
           interactive={interactive}

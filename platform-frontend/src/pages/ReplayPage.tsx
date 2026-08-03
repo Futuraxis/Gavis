@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { apiGet } from '../api/client'
-import type { BoardSnapshot, MatchLog, PokerSnapshot } from '../types'
+import type { BoardSnapshot, MahjongSnapshot, MatchLog, PokerSnapshot } from '../types'
 import GomokuBoard from '../components/boards/GomokuBoard'
+import MahjongTable from '../components/boards/MahjongTable'
 import MoonBoard from '../components/boards/MoonBoard'
 import PokerTable from '../components/boards/PokerTable'
 
@@ -10,6 +11,9 @@ const GAME_LABELS: Record<string, string> = {
   moon_chess: '月亮棋',
   stochastic_gomoku: '随机五子棋',
   texas_holdem: '德州扑克',
+  mahjong_guangdong: '广东麻将',
+  mahjong_hongzhong: '红中麻将',
+  mahjong_blood: '血战到底',
 }
 
 const SEAT_LABELS: Record<string, string> = {
@@ -17,6 +21,10 @@ const SEAT_LABELS: Record<string, string> = {
   p_white: '白棋',
   p_sb: '小盲位',
   p_bb: '大盲位',
+  p0: '庄家',
+  p1: '下家',
+  p2: '对家',
+  p3: '上家',
 }
 
 export default function ReplayPage() {
@@ -59,7 +67,9 @@ export default function ReplayPage() {
       </p>
 
       {snapshot &&
-        (match.game_id === 'texas_holdem' ? (
+        (match.game_id.startsWith('mahjong_') ? (
+          <MahjongTable snapshot={snapshot as MahjongSnapshot} interactive={false} />
+        ) : match.game_id === 'texas_holdem' ? (
           <PokerTable snapshot={snapshot as PokerSnapshot} interactive={false} />
         ) : match.game_id === 'moon_chess' ? (
           <MoonBoard snapshot={snapshot as BoardSnapshot} interactive={false} />

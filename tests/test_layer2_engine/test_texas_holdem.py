@@ -1,8 +1,11 @@
-"""Tests for Texas Hold'em (Layer 2, v5.0).
+"""Tests for Texas Hold'em (Layer 2, v5.1 — zero builtins).
 
-Covers: hand evaluation builtins, betting round rules, deal chance nodes,
-showdown / split pots, all-in refunds, utility zero-sum, and the
-imperfect-information observations that feed CFR info sets.
+The game logic (hand evaluation, betting rules, payoff) lives in
+``rules/texas_holdem.json`` as expression aliases.  Every expected
+value vector from the pre-refactor suite is ported verbatim — the
+tests assert engine-level behavior (``env.winner`` / ``get_utility`` /
+``get_observation``) and evaluate the aliases through the engine, so
+the JSON stays the single source of truth.
 """
 
 from __future__ import annotations
@@ -12,14 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from layer2_engine.core.poker_utils import (
-    card_rank,
-    contains,
-    poker_hand_name,
-    poker_hand_value,
-    poker_payoff,
-    poker_winner,
-)
 from layer2_engine.games.texas_holdem.texas_env_adapter import TexasHoldemAdapter
 from layer2_engine.interfaces.solver_adapter import SolverAdapter
 
@@ -59,45 +54,71 @@ def _crafted(adapter: TexasHoldemAdapter, env: dict, arrays: dict) -> dict:
     return adapter.load_state({'_arrays': arrays, 'env': env})
 
 
-# ── Hand evaluation builtins ──────────────────────────────────────────
+def _call(adapter: TexasHoldemAdapter, name: str, state: dict, *args) -> object:
+    """Evaluate one of the rules aliases (winner/payoff/...) on ``state``."""
+    ctx = adapter._build_context(state)  # noqa: SLF001 — engine-layer test
+    spec = {'call': [name, *({'const': a} for a in args)]}
+    return adapter.expr.eval(spec, ctx)
+
+
+def _eval_five(adapter: TexasHoldemAdapter, cards: list) -> list:
+    """Best-5 value list [category, tiebreaks...] for a card list."""
+    ctx = {'$constants': adapter._constants, '$env': {}}
+    return adapter.expr.eval({'call': ['best5', {'const': list(cards)}]}, ctx)
+
+
+# ── Hand evaluation (alias vectors, ported from the builtin suite) ─────
 
 class TestHandEvaluator:
-    def test_card_rank(self):
-        assert card_rank('s2') == 2
-        assert card_rank('sT') == 10
-        assert card_rank('hJ') == 11
-        assert card_rank('dQ') == 12
-        assert card_rank('cK') == 13
-        assert card_rank('hA') == 14
+    def test_rank_alias(self, adapter):
+        ctx = adapter._build_context(adapter.create_initial_state())
+        for card, expected in [('s2', 2), ('sT', 10), ('hJ', 11), ('dQ', 12),
+                               ('cK', 13), ('hA', 14)]:
+            assert adapter.expr.eval({'call': ['rank', {'const': card}]}, ctx) == expected
 
-    def test_contains(self):
-        assert contains(['sA', 'h2'], 'sA')
-        assert not contains(['sA', 'h2'], 'd3')
-        assert not contains([], 'sA')
+    def test_contains_expression(self, adapter):
+        spec = {'contains': [{'const': ['sA', 'h2']}, {'const': 'sA'}]}
+        assert adapter.expr.eval(spec, {}) is True
+        spec = {'contains': [{'const': ['sA', 'h2']}, {'const': 'd3'}]}
+        assert adapter.expr.eval(spec, {}) is False
 
-    def test_categories(self):
-        assert poker_hand_value(['sA', 'sK', 'sQ', 'sJ', 'sT']) == (8, 14)          # royal
-        assert poker_hand_value(['s2', 's3', 's4', 's5', 's6']) == (8, 6)           # straight flush
-        assert poker_hand_value(['hA', 'sA', 'dA', 'cA', 'sK']) == (7, 14, 13)      # quads
-        assert poker_hand_value(['c5', 's5', 'h5', 'dK', 'cK']) == (6, 5, 13)       # full house
-        assert poker_hand_value(['h9', 'h7', 'h5', 'h3', 'h2']) == (5, 9, 7, 5, 3, 2)  # flush
-        assert poker_hand_value(['s2', 's3', 'd4', 'd5', 'c6']) == (4, 6)           # straight
-        assert poker_hand_value(['hA', 'sA', 'dA', 'sK', 'd2']) == (3, 14, 13, 2)   # trips
-        assert poker_hand_value(['sA', 'sK', 'hA', 'hK', 'd2']) == (2, 14, 13, 2)   # two pair
-        assert poker_hand_value(['sA', 'sK', 'hA', 'd2', 'c3']) == (1, 14, 13, 3, 2)  # pair
-        assert poker_hand_value(['sA', 'sK', 'hQ', 'dJ', 'c9']) == (0, 14, 13, 12, 11, 9)
+    def test_categories(self, adapter):
+        """Ported verbatim from poker_hand_value vectors: category + first tiebreak."""
+        cases = [
+            (['sA', 'sK', 'sQ', 'sJ', 'sT'], (8, 14)),            # royal
+            (['s2', 's3', 's4', 's5', 's6'], (8, 6)),             # straight flush
+            (['hA', 'sA', 'dA', 'cA', 'sK'], (7, 14)),            # quads
+            (['c5', 's5', 'h5', 'dK', 'cK'], (6, 5)),             # full house
+            (['h9', 'h7', 'h5', 'h3', 'h2'], (5, 9)),             # flush
+            (['s2', 's3', 'd4', 'd5', 'c6'], (4, 6)),             # straight
+            (['hA', 'sA', 'dA', 'sK', 'd2'], (3, 14)),            # trips
+            (['sA', 'sK', 'hA', 'hK', 'd2'], (2, 14)),            # two pair
+            (['sA', 'sK', 'hA', 'd2', 'c3'], (1, 14)),            # pair
+            (['sA', 'sK', 'hQ', 'dJ', 'c9'], (0, 14)),            # high card
+        ]
+        for cards, (cat, s1) in cases:
+            value = _eval_five(adapter, cards)
+            assert value[0] == cat, f'{cards}: category'
+            assert value[1] == s1, f'{cards}: first tiebreak'
 
-    def test_best_five_of_seven(self):
+    def test_best_five_of_seven(self, adapter):
         # Community + hole: picks the straight flush over the pair of aces
         cards = ['sA', 's2', 's3', 's4', 's5', 'h2', 'c9']
-        assert poker_hand_value(cards) == (8, 5)
+        assert _eval_five(adapter, cards)[:2] == [8, 5]
         # Wheel (A-2-3-4-5) beats a pair
-        assert poker_hand_value(['hA', 'sA', 's2', 's3', 'd4', 'd5', 'c9']) == (4, 5)
+        cards = ['hA', 'sA', 's2', 's3', 'd4', 'd5', 'c9']
+        assert _eval_five(adapter, cards)[:2] == [4, 5]
 
-    def test_hand_name(self):
-        assert poker_hand_name(['sA', 'sK', 'sQ', 'sJ', 'sT']) == '同花顺'
-        assert poker_hand_name(['c5', 's5', 'h5', 'dK', 'cK']) == '葫芦'
-        assert poker_hand_name(['sA', 'sK', 'hQ', 'dJ', 'c9']) == '高牌'
+    def test_two_pair_kicker_ordering(self, adapter):
+        """Two pair with the same pairs is broken by the kicker."""
+        a = _eval_five(adapter, ['sA', 'sK', 'hA', 'hK', 'd2', 'c3', 's4'])
+        b = _eval_five(adapter, ['sA', 'sK', 'hA', 'hK', 'd2', 'c3', 's3'])
+        assert a > b  # kicker 4 > 3
+
+    def test_hand_name(self, adapter):
+        assert adapter.hand_name(['sA', 'sK', 'sQ', 'sJ', 'sT']) == '同花顺'
+        assert adapter.hand_name(['c5', 's5', 'h5', 'dK', 'cK']) == '葫芦'
+        assert adapter.hand_name(['sA', 'sK', 'hQ', 'dJ', 'c9']) == '高牌'
 
 
 # ── Engine basics ─────────────────────────────────────────────────────
@@ -203,7 +224,7 @@ class TestBetting:
         assert abs(u_sb) <= 60
 
 
-# ── Payoffs (fold / refund / split) ───────────────────────────────────
+# ── Payoffs (fold / refund / split) — vectors ported verbatim ─────────
 
 class TestPayoffs:
     def _state(self, adapter: TexasHoldemAdapter, env: dict, arrays: dict) -> dict:
@@ -216,9 +237,9 @@ class TestPayoffs:
             'sb_stack': 90, 'bb_stack': 98,
             'sb_folded': False, 'bb_folded': True,
         }, {'sb_hole': ['sA', 'sK'], 'bb_hole': ['hA', 'hK'], 'community': []})
-        assert poker_winner(state) == 'p_sb'
-        assert poker_payoff(state, 'p_sb') == 2   # pot 12 - committed 10
-        assert poker_payoff(state, 'p_bb') == -2
+        assert _call(adapter, 'winner', state) == 'p_sb'
+        assert adapter.get_utility(state, 'p_sb') == 2.0   # pot 12 - committed 10
+        assert adapter.get_utility(state, 'p_bb') == -2.0
 
     def test_showdown_winner(self, adapter: TexasHoldemAdapter):
         # SB royal flush vs BB straight flush — SB wins the full pot
@@ -231,9 +252,9 @@ class TestPayoffs:
             'bb_hole': ['hA', 'hK'],
             'community': ['sQ', 'sJ', 'sT', 'd2', 'c3'],
         })
-        assert poker_winner(state) == 'p_sb'
-        assert poker_payoff(state, 'p_sb') == 50
-        assert poker_payoff(state, 'p_bb') == -50
+        assert _call(adapter, 'winner', state) == 'p_sb'
+        assert adapter.get_utility(state, 'p_sb') == 50.0
+        assert adapter.get_utility(state, 'p_bb') == -50.0
 
     def test_allin_refund(self, adapter: TexasHoldemAdapter):
         # SB all-in 40, BB over-committed 100 → 60 refunded regardless of winner
@@ -246,10 +267,9 @@ class TestPayoffs:
             'bb_hole': ['hA', 'hK'],
             'community': ['sQ', 'sJ', 'sT', 'd2', 'c3'],
         })
-        winner = poker_winner(state)
-        assert winner == 'p_sb'
-        assert poker_payoff(state, 'p_sb') == 40   # main pot 80 - committed 40
-        assert poker_payoff(state, 'p_bb') == -40  # -100 + refund 60
+        assert _call(adapter, 'winner', state) == 'p_sb'
+        assert adapter.get_utility(state, 'p_sb') == 40.0   # main pot 80 - committed 40
+        assert adapter.get_utility(state, 'p_bb') == -40.0  # -100 + refund 60
 
     def test_split_pot(self, adapter: TexasHoldemAdapter):
         # Both make the same two pair (A-A-K-K, kicker 4) → split
@@ -262,9 +282,23 @@ class TestPayoffs:
             'bb_hole': ['hA', 'hK'],
             'community': ['dA', 'dK', 'c2', 'c3', 'c4'],
         })
-        assert poker_winner(state) is None
-        assert poker_payoff(state, 'p_sb') == 0
-        assert poker_payoff(state, 'p_bb') == 0
+        assert _call(adapter, 'winner', state) is None
+        assert adapter.get_utility(state, 'p_sb') == 0.0
+        assert adapter.get_utility(state, 'p_bb') == 0.0
+
+    def test_showdown_fold_winner_payoff(self, adapter: TexasHoldemAdapter):
+        """Wheel (A-2-3-4-5) must beat a pair of nines at showdown."""
+        state = self._state(adapter, {
+            'sb_committed': 20, 'bb_committed': 20,
+            'sb_stack': 80, 'bb_stack': 80,
+            'sb_folded': False, 'bb_folded': False,
+        }, {
+            'sb_hole': ['hA', 's2'],
+            'bb_hole': ['s9', 'd9'],
+            'community': ['s3', 'd4', 'c5', 'd2', 'c8'],
+        })
+        assert _call(adapter, 'winner', state) == 'p_sb'
+        assert adapter.get_utility(state, 'p_sb') == 20.0
 
 
 # ── Imperfect information ─────────────────────────────────────────────
@@ -302,16 +336,24 @@ class TestObservations:
         assert obs['my_stack'] == 99
 
 
-# ── Rules JSON sanity ─────────────────────────────────────────────────
+# ── Rules JSON sanity (v5.1 aliases) ──────────────────────────────────
 
 class TestRulesJSON:
-    def test_rules_parse_and_declare_builtins(self):
+    def test_rules_parse_with_alias_definitions(self):
         rules = json.load(open(RULES_PATH, encoding='utf-8'))
         assert rules['meta']['gameId'] == 'texas_holdem'
         assert len(rules['constants']['card_ids']) == 52
-        declared = set(rules['functions'].keys())
-        assert {'poker_hand_value', 'poker_call_to', 'poker_min_raise_to',
-                'poker_round_over', 'poker_winner', 'poker_payoff'} <= declared
+        for name, defn in rules['functions'].items():
+            assert isinstance(defn.get('params'), list), name
+            assert isinstance(defn.get('expr'), dict), name
+        declared = set(rules['functions'])
+        assert {'eval_five', 'best5', 'call_to', 'min_raise_to',
+                'round_over', 'winner', 'payoff', 'rank'} <= declared
+
+    def test_no_builtin_calls_remain(self):
+        text = json.dumps(json.load(open(RULES_PATH, encoding='utf-8')))
+        assert 'poker_' not in text
+        assert 'check_line' not in text
 
     def test_engine_loads_rules(self, adapter: TexasHoldemAdapter):
         state = adapter.create_initial_state()

@@ -7,13 +7,13 @@
 ## 目录结构
 
 ```
-rules/                 游戏规则 JSON (v5.0)
+rules/                 游戏规则 JSON (v5.1, 零 BUILTIN: texas_holdem / mahjong 纯 alias)
 layer1_translator/    LLM 规则翻译层 (预留)
 layer2_engine/        游戏引擎 (GameEngine + SolverAdapter)
-layer3_solvers/       求解器 (MCTS/CFR/PPO/PSRO)
+layer3_solvers/       求解器 (MCTS/CFR/PPO/PSRO + mahjong/heuristic)
 layer4_interface/     交互界面 (Binding/Encoding/Frontend 按应用分目录)
 demos/                演示入口 + 统一基准
-tests/                测试 (89 cases)
+tests/                测试 (351 cases)
 platform-frontend/    平台前端 (React + Vite + TS, 构建产物 dist/ 已 gitignore)
 data/                 运行时数据 (对局记录 data/matches/, 已 gitignore)
 archive/              原始旧代码只读存档
@@ -44,6 +44,14 @@ docs/                 架构设计 + 六篇合并分析文档
 - **禁止循环依赖**：Layer N 只能依赖 Layer N-1
 - Layer 4 (Interface) 不依赖 Layer 3 (Solver)
 - 规则 JSON 放在 `rules/` 顶层，不在层目录内
+- **v5.1 零 BUILTIN**：规则自足，`BUILTIN_FUNCTIONS` 已退役；引擎从
+  `rules["functions"]` 读取 alias 定义（`{"params": [...], "expr": {...}}`）
+- 语言原语只从数学操作角度增加（`choose/range/sort/group/at/add/sub/...`），
+  禁止游戏特供原语
+- 判定遵循增量局部原则：围绕 `lastPlacedCell` / `lastDiscard` /
+  `last_action` 做 O(1) 局部判定
+- `rules/mahjong.json` 由 `_gen_mahjong.py` 生成（变种/人数由
+  `MahjongAdapter` 注入 constants），改规则改生成器再重新生成
 
 ## 求解器注册
 
@@ -55,9 +63,10 @@ docs/                 架构设计 + 六篇合并分析文档
 |------|------|
 | `docs/design/architecture.md` | 当前四层架构设计 (v0.2) |
 | `docs/merge/01~06.md` | 六篇合并分析与方案文档 |
-| `docs/design/gamerule/v4.1.md` | 规则语言设计 (v5.0: `docs/design/gamerule/v5.0.md`) |
+| `docs/design/gamerule/v4.1.md` | 规则语言设计 (v5.0: `docs/design/gamerule/v5.0.md`, v5.1: `docs/design/gamerule/v5.1.md`) |
 | `docs/user/play_moon_chess.md` | 月亮棋人机对弈使用说明 |
 | `docs/user/play_texas_holdem.md` | 德州扑克人机对弈使用说明 |
+| `docs/user/play_mahjong.md` | 麻将人机对弈使用说明（三变种 × 2/4 人） |
 
 ## 常用命令
 
@@ -74,4 +83,5 @@ python -m layer4_interface.frontend.play_texas_holdem.server # 德州扑克人�
 python -m layer4_interface.frontend.platform.server          # 平台前端服务 (8770, 需先 npm run build)
 cd platform-frontend && npm install && npm run build         # 构建平台前端
 cd platform-frontend && npm run dev                          # 平台前端开发模式 (5173, /api 代理到 8770)
+python _gen_mahjong.py                                       # 重新生成 rules/mahjong.json (改 _gen_mahjong.py 后)
 ```

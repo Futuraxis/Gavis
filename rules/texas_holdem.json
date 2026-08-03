@@ -1,8 +1,8 @@
 {
   "meta": {
     "gameId": "texas_holdem",
-    "version": "5.0.0",
-    "description": "Heads-up no-limit Texas Hold'em — blinds 1/2, stacks 100, full betting rounds with min-raise rules, all-in handling and split pots"
+    "version": "5.1.0",
+    "description": "Heads-up no-limit Texas Hold'em — blinds 1/2, stacks 100, full betting rounds with min-raise rules, all-in handling and split pots. Pure-expression aliases (v5.1, zero builtins)."
   },
   "players": [
     "p_sb",
@@ -13,13 +13,209 @@
     "small_blind": 1,
     "big_blind": 2,
     "raise_grid": [
-      0, 2, 4, 6, 8, 10, 15, 20, 25, 30, 40, 50, 60, 75, 90, 100
+      0,
+      2,
+      4,
+      6,
+      8,
+      10,
+      15,
+      20,
+      25,
+      30,
+      40,
+      50,
+      60,
+      75,
+      90,
+      100
     ],
     "card_ids": [
-      "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "sT", "sJ", "sQ", "sK", "sA",
-      "h2", "h3", "h4", "h5", "h6", "h7", "h8", "h9", "hT", "hJ", "hQ", "hK", "hA",
-      "d2", "d3", "d4", "d5", "d6", "d7", "d8", "d9", "dT", "dJ", "dQ", "dK", "dA",
-      "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "cT", "cJ", "cQ", "cK", "cA"
+      "s2",
+      "s3",
+      "s4",
+      "s5",
+      "s6",
+      "s7",
+      "s8",
+      "s9",
+      "sT",
+      "sJ",
+      "sQ",
+      "sK",
+      "sA",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "h7",
+      "h8",
+      "h9",
+      "hT",
+      "hJ",
+      "hQ",
+      "hK",
+      "hA",
+      "d2",
+      "d3",
+      "d4",
+      "d5",
+      "d6",
+      "d7",
+      "d8",
+      "d9",
+      "dT",
+      "dJ",
+      "dQ",
+      "dK",
+      "dA",
+      "c2",
+      "c3",
+      "c4",
+      "c5",
+      "c6",
+      "c7",
+      "c8",
+      "c9",
+      "cT",
+      "cJ",
+      "cQ",
+      "cK",
+      "cA"
+    ],
+    "rank_of": {
+      "s2": 2,
+      "s3": 3,
+      "s4": 4,
+      "s5": 5,
+      "s6": 6,
+      "s7": 7,
+      "s8": 8,
+      "s9": 9,
+      "sT": 10,
+      "sJ": 11,
+      "sQ": 12,
+      "sK": 13,
+      "sA": 14,
+      "h2": 2,
+      "h3": 3,
+      "h4": 4,
+      "h5": 5,
+      "h6": 6,
+      "h7": 7,
+      "h8": 8,
+      "h9": 9,
+      "hT": 10,
+      "hJ": 11,
+      "hQ": 12,
+      "hK": 13,
+      "hA": 14,
+      "d2": 2,
+      "d3": 3,
+      "d4": 4,
+      "d5": 5,
+      "d6": 6,
+      "d7": 7,
+      "d8": 8,
+      "d9": 9,
+      "dT": 10,
+      "dJ": 11,
+      "dQ": 12,
+      "dK": 13,
+      "dA": 14,
+      "c2": 2,
+      "c3": 3,
+      "c4": 4,
+      "c5": 5,
+      "c6": 6,
+      "c7": 7,
+      "c8": 8,
+      "c9": 9,
+      "cT": 10,
+      "cJ": 11,
+      "cQ": 12,
+      "cK": 13,
+      "cA": 14
+    },
+    "straights": [
+      [
+        14,
+        13,
+        12,
+        11,
+        10
+      ],
+      [
+        13,
+        12,
+        11,
+        10,
+        9
+      ],
+      [
+        12,
+        11,
+        10,
+        9,
+        8
+      ],
+      [
+        11,
+        10,
+        9,
+        8,
+        7
+      ],
+      [
+        10,
+        9,
+        8,
+        7,
+        6
+      ],
+      [
+        9,
+        8,
+        7,
+        6,
+        5
+      ],
+      [
+        8,
+        7,
+        6,
+        5,
+        4
+      ],
+      [
+        7,
+        6,
+        5,
+        4,
+        3
+      ],
+      [
+        6,
+        5,
+        4,
+        3,
+        2
+      ],
+      [
+        5,
+        4,
+        3,
+        2,
+        1
+      ]
+    ],
+    "wheel": [
+      14,
+      5,
+      4,
+      3,
+      2
     ]
   },
   "groundState": {
@@ -279,8 +475,7 @@
       "view": "card",
       "filter": {
         "not": {
-          "call": [
-            "contains",
+          "contains": [
             {
               "var": "$drawn"
             },
@@ -315,7 +510,22 @@
         },
         "amount": {
           "domain": [
-            0, 2, 4, 6, 8, 10, 15, 20, 25, 30, 40, 50, 60, 75, 90, 100
+            0,
+            2,
+            4,
+            6,
+            8,
+            10,
+            15,
+            20,
+            25,
+            30,
+            40,
+            50,
+            60,
+            75,
+            90,
+            100
           ]
         }
       },
@@ -343,10 +553,7 @@
                 },
                 {
                   "call": [
-                    "poker_call_to",
-                    {
-                      "var": "$state"
-                    },
+                    "call_to",
                     {
                       "var": "$env.turn"
                     }
@@ -368,10 +575,7 @@
                         },
                         {
                           "call": [
-                            "poker_min_raise_to",
-                            {
-                              "var": "$state"
-                            },
+                            "min_raise_to",
                             {
                               "var": "$env.turn"
                             }
@@ -407,10 +611,7 @@
                       "lt": [
                         {
                           "call": [
-                            "poker_call_to",
-                            {
-                              "var": "$state"
-                            },
+                            "call_to",
                             {
                               "var": "$env.turn"
                             }
@@ -657,10 +858,7 @@
           "op": "branch",
           "if": {
             "call": [
-              "poker_round_over",
-              {
-                "var": "$state"
-              }
+              "round_over"
             ]
           },
           "then": [
@@ -740,10 +938,7 @@
           "op": "branch",
           "if": {
             "call": [
-              "poker_round_over",
-              {
-                "var": "$state"
-              }
+              "round_over"
             ]
           },
           "then": [
@@ -823,10 +1018,7 @@
           "op": "branch",
           "if": {
             "call": [
-              "poker_round_over",
-              {
-                "var": "$state"
-              }
+              "round_over"
             ]
           },
           "then": [
@@ -858,10 +1050,7 @@
           "key": "winner",
           "value": {
             "call": [
-              "poker_winner",
-              {
-                "var": "$state"
-              }
+              "winner"
             ]
           }
         },
@@ -889,10 +1078,7 @@
           "key": "last_call_to",
           "value": {
             "call": [
-              "poker_call_to",
-              {
-                "var": "$state"
-              },
+              "call_to",
               {
                 "var": "$env.turn"
               }
@@ -1014,10 +1200,7 @@
                         "case": "p_sb",
                         "then": {
                           "call": [
-                            "poker_call_to",
-                            {
-                              "var": "$state"
-                            },
+                            "call_to",
                             {
                               "const": "p_sb"
                             }
@@ -1045,10 +1228,7 @@
                         "case": "p_bb",
                         "then": {
                           "call": [
-                            "poker_call_to",
-                            {
-                              "var": "$state"
-                            },
+                            "call_to",
                             {
                               "const": "p_bb"
                             }
@@ -1287,10 +1467,7 @@
               },
               {
                 "call": [
-                  "poker_round_over",
-                  {
-                    "var": "$state"
-                  }
+                  "round_over"
                 ]
               }
             ]
@@ -1757,10 +1934,7 @@
       "player": "p_sb",
       "value": {
         "call": [
-          "poker_payoff",
-          {
-            "var": "$state"
-          },
+          "payoff",
           "p_sb"
         ]
       },
@@ -1780,10 +1954,7 @@
       "player": "p_bb",
       "value": {
         "call": [
-          "poker_payoff",
-          {
-            "var": "$state"
-          },
+          "payoff",
           "p_bb"
         ]
       },
@@ -1801,50 +1972,1799 @@
     }
   ],
   "functions": {
-    "contains": {
-      "description": "List membership test",
-      "solverSafe": true,
-      "pure": true
-    },
-    "card_rank": {
+    "rank": {
       "description": "Numeric rank of a card id (2..14)",
-      "solverSafe": true,
-      "pure": true
+      "params": [
+        "card"
+      ],
+      "expr": {
+        "at": [
+          {
+            "var": "$constants.rank_of"
+          },
+          {
+            "var": "$card"
+          }
+        ]
+      }
     },
-    "poker_hand_value": {
-      "description": "Best 5-card hand value from 2..7 cards",
-      "solverSafe": true,
-      "pure": true
+    "hand_ranks": {
+      "description": "Ranks of a card list, descending",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "sort": {
+          "list": {
+            "map": {
+              "list": {
+                "var": "$hand"
+              },
+              "expr": {
+                "call": [
+                  "rank",
+                  {
+                    "var": "$node"
+                  }
+                ]
+              }
+            }
+          },
+          "reverse": true
+        }
+      }
     },
-    "poker_call_to": {
-      "description": "Total committed amount the player reaches by calling",
-      "solverSafe": true,
-      "pure": true
+    "hand_uniq": {
+      "description": "Distinct ranks of a hand, descending",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "distinct": {
+          "call": [
+            "hand_ranks",
+            {
+              "var": "$hand"
+            }
+          ]
+        }
+      }
     },
-    "poker_min_raise_to": {
-      "description": "Minimum total for a legal raise",
-      "solverSafe": true,
-      "pure": true
+    "hand_groups": {
+      "description": "Ranks grouped by count then rank (count desc, rank desc)",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "sort": {
+          "list": {
+            "group": {
+              "list": {
+                "call": [
+                  "hand_ranks",
+                  {
+                    "var": "$hand"
+                  }
+                ]
+              }
+            }
+          },
+          "by": {
+            "expr": "-$node.count * 100 - $node.key"
+          }
+        }
+      }
     },
-    "poker_round_over": {
+    "hand_flush": {
+      "description": "All cards share the first card's suit",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "all": {
+          "list": {
+            "var": "$hand"
+          },
+          "as": "$c",
+          "where": {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$c"
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              {
+                "at": [
+                  {
+                    "at": [
+                      {
+                        "var": "$hand"
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "is_straight_uniq": {
+      "description": "5 distinct ranks forming a straight (incl. A-2-3-4-5 wheel)",
+      "params": [
+        "uniq"
+      ],
+      "expr": {
+        "and": [
+          {
+            "eq": [
+              {
+                "count": {
+                  "var": "$uniq"
+                }
+              },
+              {
+                "const": 5
+              }
+            ]
+          },
+          {
+            "or": [
+              {
+                "any": {
+                  "list": {
+                    "var": "$constants.straights"
+                  },
+                  "as": "$pat",
+                  "where": {
+                    "eq": [
+                      {
+                        "var": "$pat"
+                      },
+                      {
+                        "var": "$uniq"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "eq": [
+                  {
+                    "var": "$uniq"
+                  },
+                  {
+                    "var": "$constants.wheel"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "straight_high": {
+      "description": "High card of a straight (5 for the wheel)",
+      "params": [
+        "uniq"
+      ],
+      "expr": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "var": "$uniq"
+              },
+              {
+                "var": "$constants.wheel"
+              }
+            ]
+          },
+          "then": {
+            "const": 5
+          },
+          "else": {
+            "max": {
+              "var": "$uniq"
+            }
+          }
+        }
+      }
+    },
+    "hand_category": {
+      "description": "0 high card .. 8 straight flush",
+      "params": [
+        "groups",
+        "uniq",
+        "flush"
+      ],
+      "expr": {
+        "if": {
+          "cond": {
+            "and": [
+              {
+                "var": "$flush"
+              },
+              {
+                "call": [
+                  "is_straight_uniq",
+                  {
+                    "var": "$uniq"
+                  }
+                ]
+              }
+            ]
+          },
+          "then": {
+            "const": 8
+          },
+          "else": {
+            "if": {
+              "cond": {
+                "eq": [
+                  {
+                    "get": [
+                      {
+                        "at": [
+                          {
+                            "var": "$groups"
+                          },
+                          {
+                            "const": 0
+                          }
+                        ]
+                      },
+                      "count"
+                    ]
+                  },
+                  {
+                    "const": 4
+                  }
+                ]
+              },
+              "then": {
+                "const": 7
+              },
+              "else": {
+                "if": {
+                  "cond": {
+                    "and": [
+                      {
+                        "eq": [
+                          {
+                            "get": [
+                              {
+                                "at": [
+                                  {
+                                    "var": "$groups"
+                                  },
+                                  {
+                                    "const": 0
+                                  }
+                                ]
+                              },
+                              "count"
+                            ]
+                          },
+                          {
+                            "const": 3
+                          }
+                        ]
+                      },
+                      {
+                        "eq": [
+                          {
+                            "get": [
+                              {
+                                "at": [
+                                  {
+                                    "var": "$groups"
+                                  },
+                                  {
+                                    "const": 1
+                                  }
+                                ]
+                              },
+                              "count"
+                            ]
+                          },
+                          {
+                            "const": 2
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "then": {
+                    "const": 6
+                  },
+                  "else": {
+                    "if": {
+                      "cond": {
+                        "var": "$flush"
+                      },
+                      "then": {
+                        "const": 5
+                      },
+                      "else": {
+                        "if": {
+                          "cond": {
+                            "call": [
+                              "is_straight_uniq",
+                              {
+                                "var": "$uniq"
+                              }
+                            ]
+                          },
+                          "then": {
+                            "const": 4
+                          },
+                          "else": {
+                            "if": {
+                              "cond": {
+                                "eq": [
+                                  {
+                                    "get": [
+                                      {
+                                        "at": [
+                                          {
+                                            "var": "$groups"
+                                          },
+                                          {
+                                            "const": 0
+                                          }
+                                        ]
+                                      },
+                                      "count"
+                                    ]
+                                  },
+                                  {
+                                    "const": 3
+                                  }
+                                ]
+                              },
+                              "then": {
+                                "const": 3
+                              },
+                              "else": {
+                                "if": {
+                                  "cond": {
+                                    "and": [
+                                      {
+                                        "eq": [
+                                          {
+                                            "get": [
+                                              {
+                                                "at": [
+                                                  {
+                                                    "var": "$groups"
+                                                  },
+                                                  {
+                                                    "const": 0
+                                                  }
+                                                ]
+                                              },
+                                              "count"
+                                            ]
+                                          },
+                                          {
+                                            "const": 2
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "eq": [
+                                          {
+                                            "get": [
+                                              {
+                                                "at": [
+                                                  {
+                                                    "var": "$groups"
+                                                  },
+                                                  {
+                                                    "const": 1
+                                                  }
+                                                ]
+                                              },
+                                              "count"
+                                            ]
+                                          },
+                                          {
+                                            "const": 2
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "then": {
+                                    "const": 2
+                                  },
+                                  "else": {
+                                    "if": {
+                                      "cond": {
+                                        "eq": [
+                                          {
+                                            "get": [
+                                              {
+                                                "at": [
+                                                  {
+                                                    "var": "$groups"
+                                                  },
+                                                  {
+                                                    "const": 0
+                                                  }
+                                                ]
+                                              },
+                                              "count"
+                                            ]
+                                          },
+                                          {
+                                            "const": 2
+                                          }
+                                        ]
+                                      },
+                                      "then": {
+                                        "const": 1
+                                      },
+                                      "else": {
+                                        "const": 0
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "slot_value": {
+      "description": "Tiebreak slot i (0-based) of a hand value list",
+      "params": [
+        "groups",
+        "uniq",
+        "cat",
+        "i"
+      ],
+      "expr": {
+        "if": {
+          "cond": {
+            "or": [
+              {
+                "eq": [
+                  {
+                    "var": "$cat"
+                  },
+                  {
+                    "const": 4
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "var": "$cat"
+                  },
+                  {
+                    "const": 8
+                  }
+                ]
+              }
+            ]
+          },
+          "then": {
+            "if": {
+              "cond": {
+                "eq": [
+                  {
+                    "var": "$i"
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              "then": {
+                "call": [
+                  "straight_high",
+                  {
+                    "var": "$uniq"
+                  }
+                ]
+              },
+              "else": {
+                "const": 0
+              }
+            }
+          },
+          "else": {
+            "if": {
+              "cond": {
+                "eq": [
+                  {
+                    "at": [
+                      {
+                        "var": "$groups"
+                      },
+                      {
+                        "var": "$i"
+                      }
+                    ]
+                  },
+                  {
+                    "const": null
+                  }
+                ]
+              },
+              "then": {
+                "const": 0
+              },
+              "else": {
+                "get": [
+                  {
+                    "at": [
+                      {
+                        "var": "$groups"
+                      },
+                      {
+                        "var": "$i"
+                      }
+                    ]
+                  },
+                  "key"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "eval_five": {
+      "description": "5-card hand value as [category, tiebreak slots...] — category-dominant, lexicographic",
+      "params": [
+        "hand"
+      ],
+      "expr": {
+        "call": [
+          "hand_value",
+          {
+            "call": [
+              "hand_groups",
+              {
+                "var": "$hand"
+              }
+            ]
+          },
+          {
+            "call": [
+              "hand_uniq",
+              {
+                "var": "$hand"
+              }
+            ]
+          },
+          {
+            "call": [
+              "hand_flush",
+              {
+                "var": "$hand"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "hand_value": {
+      "description": "[category, s1..s5] from derived hand data",
+      "params": [
+        "groups",
+        "uniq",
+        "flush"
+      ],
+      "expr": {
+        "call": [
+          "value_slots",
+          {
+            "var": "$groups"
+          },
+          {
+            "var": "$uniq"
+          },
+          {
+            "call": [
+              "hand_category",
+              {
+                "var": "$groups"
+              },
+              {
+                "var": "$uniq"
+              },
+              {
+                "var": "$flush"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "value_slots": {
+      "description": "Build [cat, s1..s5]",
+      "params": [
+        "groups",
+        "uniq",
+        "cat"
+      ],
+      "expr": {
+        "map": {
+          "list": {
+            "range": {
+              "from": 0,
+              "to": 6
+            }
+          },
+          "as": "$i",
+          "expr": {
+            "if": {
+              "cond": {
+                "eq": [
+                  {
+                    "var": "$i"
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              "then": {
+                "var": "$cat"
+              },
+              "else": {
+                "call": [
+                  "slot_value",
+                  {
+                    "var": "$groups"
+                  },
+                  {
+                    "var": "$uniq"
+                  },
+                  {
+                    "var": "$cat"
+                  },
+                  {
+                    "expr": "$i - 1"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "call_to": {
+      "description": "Total committed amount the player reaches by calling (0 = check)",
+      "params": [
+        "player"
+      ],
+      "expr": {
+        "if": {
+          "cond": {
+            "switch": [
+              {
+                "case": "p_sb",
+                "then": {
+                  "var": "$env.bb_folded"
+                }
+              },
+              {
+                "case": "p_bb",
+                "then": {
+                  "var": "$env.sb_folded"
+                }
+              }
+            ],
+            "input": {
+              "var": "$player"
+            }
+          },
+          "then": {
+            "switch": [
+              {
+                "case": "p_sb",
+                "then": {
+                  "var": "$env.sb_committed"
+                }
+              },
+              {
+                "case": "p_bb",
+                "then": {
+                  "var": "$env.bb_committed"
+                }
+              }
+            ],
+            "input": {
+              "var": "$player"
+            }
+          },
+          "else": {
+            "if": {
+              "cond": {
+                "gte": [
+                  {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "var": "$env.sb_committed"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "var": "$env.bb_committed"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$player"
+                    }
+                  },
+                  {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "var": "$env.bb_committed"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "var": "$env.sb_committed"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$player"
+                    }
+                  }
+                ]
+              },
+              "then": {
+                "switch": [
+                  {
+                    "case": "p_sb",
+                    "then": {
+                      "var": "$env.sb_committed"
+                    }
+                  },
+                  {
+                    "case": "p_bb",
+                    "then": {
+                      "var": "$env.bb_committed"
+                    }
+                  }
+                ],
+                "input": {
+                  "var": "$player"
+                }
+              },
+              "else": {
+                "if": {
+                  "cond": {
+                    "gte": [
+                      {
+                        "switch": [
+                          {
+                            "case": "p_sb",
+                            "then": {
+                              "var": "$env.bb_committed"
+                            }
+                          },
+                          {
+                            "case": "p_bb",
+                            "then": {
+                              "var": "$env.sb_committed"
+                            }
+                          }
+                        ],
+                        "input": {
+                          "var": "$player"
+                        }
+                      },
+                      {
+                        "switch": [
+                          {
+                            "case": "p_sb",
+                            "then": {
+                              "expr": "$env.sb_stack + $env.sb_committed"
+                            }
+                          },
+                          {
+                            "case": "p_bb",
+                            "then": {
+                              "expr": "$env.bb_stack + $env.bb_committed"
+                            }
+                          }
+                        ],
+                        "input": {
+                          "var": "$player"
+                        }
+                      }
+                    ]
+                  },
+                  "then": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "expr": "$env.sb_stack + $env.sb_committed"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "expr": "$env.bb_stack + $env.bb_committed"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$player"
+                    }
+                  },
+                  "else": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "var": "$env.bb_committed"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "var": "$env.sb_committed"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$player"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "min_raise_to": {
+      "description": "Minimum total for a legal raise = call_to + max(delta, BB)",
+      "params": [
+        "player"
+      ],
+      "expr": {
+        "if": {
+          "cond": {
+            "lte": [
+              {
+                "switch": [
+                  {
+                    "case": "p_sb",
+                    "then": {
+                      "var": "$env.sb_stack"
+                    }
+                  },
+                  {
+                    "case": "p_bb",
+                    "then": {
+                      "var": "$env.bb_stack"
+                    }
+                  }
+                ],
+                "input": {
+                  "var": "$player"
+                }
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": {
+            "const": 1073741824
+          },
+          "else": {
+            "if": {
+              "cond": {
+                "switch": [
+                  {
+                    "case": "p_sb",
+                    "then": {
+                      "var": "$env.bb_folded"
+                    }
+                  },
+                  {
+                    "case": "p_bb",
+                    "then": {
+                      "var": "$env.sb_folded"
+                    }
+                  }
+                ],
+                "input": {
+                  "var": "$player"
+                }
+              },
+              "then": {
+                "call": [
+                  "raise_delta",
+                  {
+                    "var": "$player"
+                  },
+                  "base",
+                  "own_c"
+                ]
+              },
+              "else": {
+                "if": {
+                  "cond": {
+                    "gte": [
+                      {
+                        "switch": [
+                          {
+                            "case": "p_sb",
+                            "then": {
+                              "var": "$env.sb_committed"
+                            }
+                          },
+                          {
+                            "case": "p_bb",
+                            "then": {
+                              "var": "$env.bb_committed"
+                            }
+                          }
+                        ],
+                        "input": {
+                          "var": "$player"
+                        }
+                      },
+                      {
+                        "switch": [
+                          {
+                            "case": "p_sb",
+                            "then": {
+                              "var": "$env.bb_committed"
+                            }
+                          },
+                          {
+                            "case": "p_bb",
+                            "then": {
+                              "var": "$env.sb_committed"
+                            }
+                          }
+                        ],
+                        "input": {
+                          "var": "$player"
+                        }
+                      }
+                    ]
+                  },
+                  "then": {
+                    "call": [
+                      "raise_delta",
+                      {
+                        "var": "$player"
+                      },
+                      "base",
+                      "own_c"
+                    ]
+                  },
+                  "else": {
+                    "if": {
+                      "cond": {
+                        "gte": [
+                          {
+                            "switch": [
+                              {
+                                "case": "p_sb",
+                                "then": {
+                                  "var": "$env.bb_committed"
+                                }
+                              },
+                              {
+                                "case": "p_bb",
+                                "then": {
+                                  "var": "$env.sb_committed"
+                                }
+                              }
+                            ],
+                            "input": {
+                              "var": "$player"
+                            }
+                          },
+                          {
+                            "switch": [
+                              {
+                                "case": "p_sb",
+                                "then": {
+                                  "expr": "$env.sb_stack + $env.sb_committed"
+                                }
+                              },
+                              {
+                                "case": "p_bb",
+                                "then": {
+                                  "expr": "$env.bb_stack + $env.bb_committed"
+                                }
+                              }
+                            ],
+                            "input": {
+                              "var": "$player"
+                            }
+                          }
+                        ]
+                      },
+                      "then": {
+                        "call": [
+                          "raise_delta",
+                          {
+                            "var": "$player"
+                          },
+                          "base",
+                          "total"
+                        ]
+                      },
+                      "else": {
+                        "call": [
+                          "raise_delta",
+                          {
+                            "var": "$player"
+                          },
+                          "base",
+                          "opp_c"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "raise_delta": {
+      "description": "call_to-style base + max(last_raise_delta, big_blind), as a scalar-path arithmetic selection",
+      "params": [
+        "player",
+        "base",
+        "kind"
+      ],
+      "expr": {
+        "if": {
+          "cond": {
+            "gte": [
+              {
+                "var": "$env.last_raise_delta"
+              },
+              {
+                "var": "$constants.big_blind"
+              }
+            ]
+          },
+          "then": {
+            "if": {
+              "cond": {
+                "eq": [
+                  {
+                    "var": "$kind"
+                  },
+                  {
+                    "const": "total"
+                  }
+                ]
+              },
+              "then": {
+                "switch": [
+                  {
+                    "case": "p_sb",
+                    "then": {
+                      "expr": "$env.sb_stack + $env.sb_committed + $env.last_raise_delta"
+                    }
+                  },
+                  {
+                    "case": "p_bb",
+                    "then": {
+                      "expr": "$env.bb_stack + $env.bb_committed + $env.last_raise_delta"
+                    }
+                  }
+                ],
+                "input": {
+                  "var": "$player"
+                }
+              },
+              "else": {
+                "if": {
+                  "cond": {
+                    "eq": [
+                      {
+                        "var": "$kind"
+                      },
+                      {
+                        "const": "opp_c"
+                      }
+                    ]
+                  },
+                  "then": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "expr": "$env.bb_committed + $env.last_raise_delta"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "expr": "$env.sb_committed + $env.last_raise_delta"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$player"
+                    }
+                  },
+                  "else": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "expr": "$env.sb_committed + $env.last_raise_delta"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "expr": "$env.bb_committed + $env.last_raise_delta"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$player"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "if": {
+              "cond": {
+                "eq": [
+                  {
+                    "var": "$kind"
+                  },
+                  {
+                    "const": "total"
+                  }
+                ]
+              },
+              "then": {
+                "switch": [
+                  {
+                    "case": "p_sb",
+                    "then": {
+                      "expr": "$env.sb_stack + $env.sb_committed + big_blind"
+                    }
+                  },
+                  {
+                    "case": "p_bb",
+                    "then": {
+                      "expr": "$env.bb_stack + $env.bb_committed + big_blind"
+                    }
+                  }
+                ],
+                "input": {
+                  "var": "$player"
+                }
+              },
+              "else": {
+                "if": {
+                  "cond": {
+                    "eq": [
+                      {
+                        "var": "$kind"
+                      },
+                      {
+                        "const": "opp_c"
+                      }
+                    ]
+                  },
+                  "then": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "expr": "$env.bb_committed + big_blind"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "expr": "$env.sb_committed + big_blind"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$player"
+                    }
+                  },
+                  "else": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "expr": "$env.sb_committed + big_blind"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "expr": "$env.bb_committed + big_blind"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$player"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "round_over": {
       "description": "Whether the current betting round is finished",
-      "solverSafe": true,
-      "pure": true
+      "params": [],
+      "expr": {
+        "or": [
+          {
+            "var": "$env.sb_folded"
+          },
+          {
+            "var": "$env.bb_folded"
+          },
+          {
+            "and": [
+              {
+                "lte": [
+                  {
+                    "var": "$env.sb_stack"
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              {
+                "lte": [
+                  {
+                    "var": "$env.bb_stack"
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "and": [
+              {
+                "eq": [
+                  {
+                    "var": "$env.sb_committed"
+                  },
+                  {
+                    "var": "$env.bb_committed"
+                  }
+                ]
+              },
+              {
+                "var": "$env.sb_acted"
+              },
+              {
+                "var": "$env.bb_acted"
+              }
+            ]
+          }
+        ]
+      }
     },
-    "poker_winner": {
+    "hand_cards": {
+      "description": "A player's 7 cards: hole + community",
+      "params": [
+        "player"
+      ],
+      "expr": {
+        "switch": [
+          {
+            "case": "p_sb",
+            "then": {
+              "concat": [
+                {
+                  "var": "$sb_hole"
+                },
+                {
+                  "var": "$community"
+                }
+              ]
+            }
+          },
+          {
+            "case": "p_bb",
+            "then": {
+              "concat": [
+                {
+                  "var": "$bb_hole"
+                },
+                {
+                  "var": "$community"
+                }
+              ]
+            }
+          }
+        ],
+        "input": {
+          "var": "$player"
+        }
+      }
+    },
+    "best5": {
+      "description": "Best 5-card value from 2..7 cards (max over C(n,5))",
+      "params": [
+        "cards"
+      ],
+      "expr": {
+        "choose": {
+          "items": {
+            "var": "$cards"
+          },
+          "k": 5,
+          "as": "$c",
+          "then": {
+            "call": [
+              "eval_five",
+              {
+                "var": "$c"
+              }
+            ]
+          },
+          "agg": "max"
+        }
+      }
+    },
+    "winner": {
       "description": "Hand winner id, or null for a split pot",
-      "solverSafe": true,
-      "pure": true
+      "params": [],
+      "expr": {
+        "if": {
+          "cond": {
+            "or": [
+              {
+                "var": "$env.sb_folded"
+              },
+              {
+                "var": "$env.bb_folded"
+              }
+            ]
+          },
+          "then": {
+            "if": {
+              "cond": {
+                "var": "$env.sb_folded"
+              },
+              "then": {
+                "if": {
+                  "cond": {
+                    "var": "$env.bb_folded"
+                  },
+                  "then": {
+                    "const": null
+                  },
+                  "else": {
+                    "const": "p_bb"
+                  }
+                }
+              },
+              "else": {
+                "const": "p_sb"
+              }
+            }
+          },
+          "else": {
+            "if": {
+              "cond": {
+                "gt": [
+                  {
+                    "call": [
+                      "best5",
+                      {
+                        "call": [
+                          "hand_cards",
+                          {
+                            "const": "p_sb"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "call": [
+                      "best5",
+                      {
+                        "call": [
+                          "hand_cards",
+                          {
+                            "const": "p_bb"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "then": {
+                "const": "p_sb"
+              },
+              "else": {
+                "if": {
+                  "cond": {
+                    "lt": [
+                      {
+                        "call": [
+                          "best5",
+                          {
+                            "call": [
+                              "hand_cards",
+                              {
+                                "const": "p_sb"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "call": [
+                          "best5",
+                          {
+                            "call": [
+                              "hand_cards",
+                              {
+                                "const": "p_bb"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "then": {
+                    "const": "p_bb"
+                  },
+                  "else": {
+                    "const": null
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     },
-    "poker_payoff": {
+    "payoff": {
       "description": "Net chip change for a player at a terminal state",
-      "solverSafe": true,
-      "pure": true
-    },
-    "poker_pot": {
-      "description": "Total chips committed to the pot",
-      "solverSafe": true,
-      "pure": true
+      "params": [
+        "player"
+      ],
+      "expr": {
+        "if": {
+          "cond": {
+            "or": [
+              {
+                "var": "$env.sb_folded"
+              },
+              {
+                "var": "$env.bb_folded"
+              }
+            ]
+          },
+          "then": {
+            "if": {
+              "cond": {
+                "eq": [
+                  {
+                    "call": [
+                      "winner"
+                    ]
+                  },
+                  {
+                    "const": null
+                  }
+                ]
+              },
+              "then": {
+                "const": 0
+              },
+              "else": {
+                "if": {
+                  "cond": {
+                    "eq": [
+                      {
+                        "call": [
+                          "winner"
+                        ]
+                      },
+                      {
+                        "var": "$player"
+                      }
+                    ]
+                  },
+                  "then": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "expr": "$env.sb_committed + $env.bb_committed - $env.sb_committed"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "expr": "$env.sb_committed + $env.bb_committed - $env.bb_committed"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$player"
+                    }
+                  },
+                  "else": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "expr": "-$env.sb_committed"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "expr": "-$env.bb_committed"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$player"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "if": {
+              "cond": {
+                "lte": [
+                  {
+                    "var": "$env.sb_committed"
+                  },
+                  {
+                    "var": "$env.bb_committed"
+                  }
+                ]
+              },
+              "then": {
+                "if": {
+                  "cond": {
+                    "eq": [
+                      {
+                        "call": [
+                          "winner"
+                        ]
+                      },
+                      {
+                        "const": null
+                      }
+                    ]
+                  },
+                  "then": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "expr": "$env.sb_committed - $env.sb_committed"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "expr": "$env.sb_committed - $env.bb_committed + $env.bb_committed - $env.sb_committed"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$player"
+                    }
+                  },
+                  "else": {
+                    "if": {
+                      "cond": {
+                        "eq": [
+                          {
+                            "call": [
+                              "winner"
+                            ]
+                          },
+                          {
+                            "var": "$player"
+                          }
+                        ]
+                      },
+                      "then": {
+                        "switch": [
+                          {
+                            "case": "p_sb",
+                            "then": {
+                              "expr": "$env.sb_committed"
+                            }
+                          },
+                          {
+                            "case": "p_bb",
+                            "then": {
+                              "expr": "$env.sb_committed * 2 - $env.bb_committed + $env.bb_committed - $env.sb_committed"
+                            }
+                          }
+                        ],
+                        "input": {
+                          "var": "$player"
+                        }
+                      },
+                      "else": {
+                        "switch": [
+                          {
+                            "case": "p_sb",
+                            "then": {
+                              "expr": "-$env.sb_committed"
+                            }
+                          },
+                          {
+                            "case": "p_bb",
+                            "then": {
+                              "expr": "-$env.bb_committed + $env.bb_committed - $env.sb_committed"
+                            }
+                          }
+                        ],
+                        "input": {
+                          "var": "$player"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "else": {
+                "if": {
+                  "cond": {
+                    "eq": [
+                      {
+                        "call": [
+                          "winner"
+                        ]
+                      },
+                      {
+                        "const": null
+                      }
+                    ]
+                  },
+                  "then": {
+                    "switch": [
+                      {
+                        "case": "p_sb",
+                        "then": {
+                          "expr": "$env.bb_committed - $env.sb_committed + $env.sb_committed - $env.bb_committed"
+                        }
+                      },
+                      {
+                        "case": "p_bb",
+                        "then": {
+                          "expr": "$env.bb_committed - $env.bb_committed"
+                        }
+                      }
+                    ],
+                    "input": {
+                      "var": "$player"
+                    }
+                  },
+                  "else": {
+                    "if": {
+                      "cond": {
+                        "eq": [
+                          {
+                            "call": [
+                              "winner"
+                            ]
+                          },
+                          {
+                            "var": "$player"
+                          }
+                        ]
+                      },
+                      "then": {
+                        "switch": [
+                          {
+                            "case": "p_sb",
+                            "then": {
+                              "expr": "$env.bb_committed * 2 - $env.sb_committed + $env.sb_committed - $env.bb_committed"
+                            }
+                          },
+                          {
+                            "case": "p_bb",
+                            "then": {
+                              "expr": "$env.bb_committed"
+                            }
+                          }
+                        ],
+                        "input": {
+                          "var": "$player"
+                        }
+                      },
+                      "else": {
+                        "switch": [
+                          {
+                            "case": "p_sb",
+                            "then": {
+                              "expr": "-$env.sb_committed + $env.sb_committed - $env.bb_committed"
+                            }
+                          },
+                          {
+                            "case": "p_bb",
+                            "then": {
+                              "expr": "-$env.bb_committed"
+                            }
+                          }
+                        ],
+                        "input": {
+                          "var": "$player"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

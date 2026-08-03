@@ -1,9 +1,12 @@
-"""Texas Hold'em — thin GameEngine adapter (heads-up NLHE, v5.0).
+"""Texas Hold'em — thin GameEngine adapter (heads-up NLHE, v5.1).
 
 The game logic lives entirely in ``rules/texas_holdem.json`` via
-effectors + chance nodes.  This adapter only adds:
+effectors + chance nodes + expression aliases (zero builtins).  This
+adapter only adds:
   1. Structured observations (``get_observation``) for UI/RL consumers
   2. ``resolve_chance`` — advance through pending chance nodes
+  3. Display helpers (pot, Chinese hand names) that evaluate the JSON
+     aliases so the rules stay the single source of truth
 """
 
 from __future__ import annotations
@@ -13,18 +16,22 @@ from pathlib import Path
 from typing import Optional
 
 from ...core.engine import GameEngine
-from ...core.poker_utils import poker_hand_name, poker_pot, PLAYER_SB, PLAYER_BB
 from ...core.state_graph import clone_state
 
 STREET_NAMES = {0: '翻前', 1: '翻牌', 2: '转牌', 3: '河牌'}
+
+_HAND_NAMES = {
+    0: '高牌', 1: '一对', 2: '两对', 3: '三条', 4: '顺子',
+    5: '同花', 6: '葫芦', 7: '四条', 8: '同花顺',
+}
 
 
 class TexasHoldemAdapter(GameEngine):
     """GameEngine subclass for heads-up Texas Hold'em."""
 
     STACK_SIZE = 100
-    PLAYER_SB = PLAYER_SB
-    PLAYER_BB = PLAYER_BB
+    PLAYER_SB = 'p_sb'
+    PLAYER_BB = 'p_bb'
 
     def __init__(self, seed: Optional[int] = None):
         rules_path = Path(__file__).resolve().parent.parent.parent.parent / 'rules' / 'texas_holdem.json'
@@ -52,9 +59,9 @@ class TexasHoldemAdapter(GameEngine):
         """
         env = state.get('env', {})
         actor = env.get('turn')
-        if actor not in (PLAYER_SB, PLAYER_BB):
+        if actor not in (self.PLAYER_SB, self.PLAYER_BB):
             return clone_state(state)
-        opp = PLAYER_BB if actor == PLAYER_SB else PLAYER_SB
+        opp = self.PLAYER_BB if actor == self.PLAYER_SB else self.PLAYER_SB
         arrs = state.get('_arrays', {})
         hole = list(arrs.get(f'{opp[2:]}_hole', []))
         if len(hole) != 2:
@@ -69,9 +76,27 @@ class TexasHoldemAdapter(GameEngine):
         world['_arrays'][f'{opp[2:]}_hole'] = self.rng.sample(remaining, 2)
         return world
 
+    # ── Display helpers (rule aliases are the single source of truth) ──
+
+    def pot(self, state: dict) -> int:
+        """Total chips committed to the pot."""
+        env = state.get('env', {})
+        return int(env.get('sb_committed', 0) + env.get('bb_committed', 0))
+
+    def hand_value(self, cards: list) -> list:
+        """Best-5 value list ``[category, tiebreaks...]`` via the rules alias."""
+        ctx = {'$constants': self._constants, '$env': {}}
+        return self.expr.eval({'call': ['best5', {'const': list(cards)}]}, ctx)
+
+    def hand_name(self, cards: list) -> str:
+        """Chinese name of the best hand (e.g. ``'葫芦'``), for display."""
+        value = self.hand_value(cards)
+        category = value[0] if isinstance(value, list) and value else None
+        return _HAND_NAMES.get(category, '未知')
+
     # ── Structured observation ───────────────────────────────────────
 
-    def get_observation(self, state: dict, player_id: str = PLAYER_SB) -> dict:
+    def get_observation(self, state: dict, player_id: str = 'p_sb') -> dict:
         """Return a structured observation for ``player_id``.
 
         Opponent hole cards are only revealed at ``game_over`` (showdown);
@@ -90,7 +115,7 @@ class TexasHoldemAdapter(GameEngine):
         def _folded(pid: str) -> bool:
             return bool(env.get(f'{pid[2:]}_folded'))
 
-        opp = PLAYER_BB if player_id == PLAYER_SB else PLAYER_SB
+        opp = self.PLAYER_BB if player_id == self.PLAYER_SB else self.PLAYER_SB
         over = env.get('phase') == 'game_over'
         opp_hole = list(arrs.get(f'{opp[2:]}_hole', [])) if over else []
 
@@ -98,7 +123,7 @@ class TexasHoldemAdapter(GameEngine):
             'community': list(arrs.get('community', [])),
             'hole': list(arrs.get(f'{player_id[2:]}_hole', [])),
             'opponent_hole': opp_hole,
-            'pot': poker_pot(state),
+            'pot': self.pot(state),
             'street': env.get('street', 0),
             'street_name': STREET_NAMES.get(env.get('street', 0), ''),
             'phase': env.get('phase', ''),
@@ -115,7 +140,7 @@ class TexasHoldemAdapter(GameEngine):
             'opp_committed': _committed(opp),
             'my_folded': _folded(player_id),
             'opp_folded': _folded(opp),
-            'hand_name': poker_hand_name(
+            'hand_name': self.hand_name(
                 [*list(arrs.get(f'{player_id[2:]}_hole', [])), *list(arrs.get('community', []))]
             ) if over else None,
         }

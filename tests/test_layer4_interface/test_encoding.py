@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
 import numpy as np
+import pytest
 
+from layer4_interface.encoding.game_state_adapter import GameStateAdapter
 from layer4_interface.encoding.moon_state_encoder import (
     MoonStateEncoder,
     action_index_to_cell_id,
     cell_id_to_action_index,
 )
-from layer4_interface.encoding.game_state_adapter import GameStateAdapter
 
 
 class TestGameStateAdapter:
