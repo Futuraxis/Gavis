@@ -14,6 +14,8 @@ layer3_solvers/       求解器 (MCTS/CFR/PPO/PSRO)
 layer4_interface/     交互界面 (Binding/Encoding/Frontend 按应用分目录)
 demos/                演示入口 + 统一基准
 tests/                测试 (89 cases)
+platform-frontend/    平台前端 (React + Vite + TS, 构建产物 dist/ 已 gitignore)
+data/                 运行时数据 (对局记录 data/matches/, 已 gitignore)
 archive/              原始旧代码只读存档
 docs/                 架构设计 + 六篇合并分析文档
 ```
@@ -62,10 +64,14 @@ docs/                 架构设计 + 六篇合并分析文档
 ```bash
 python -m pytest tests/ -v                          # 跑测试
 python -m demos.benchmark_all --game moon_chess     # 基准评测
+python -m demos.train_hybrid --game all             # 三游戏训练 Hybrid 模型 (产物在 models/hybrid/, 已 gitignore)
 python -m demos.demo_mcts --size 9 --budget 5000    # MCTS 演示
 python -m demos.demo_texas_holdem --budget 1500     # 德州扑克 MCTS 演示
 python -m layer4_interface.frontend.play_moon_chess.server   # 月亮棋人机对弈 (8765)
 python -m layer4_interface.frontend.vision.server            # 视觉识别应用 (8766)
 python -m layer4_interface.frontend.play_gomoku.server       # 随机五子棋人机对弈 (8767)
 python -m layer4_interface.frontend.play_texas_holdem.server # 德州扑克人机对弈 (8768)
+python -m layer4_interface.frontend.platform.server          # 平台前端服务 (8770, 需先 npm run build)
+cd platform-frontend && npm install && npm run build         # 构建平台前端
+cd platform-frontend && npm run dev                          # 平台前端开发模式 (5173, /api 代理到 8770)
 ```

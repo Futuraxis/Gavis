@@ -30,6 +30,8 @@
 │  Binding: ImageBinding / VisionLLMBinding / StateTracker   │
 │  Encoding: MoonStateEncoder → 特征向量                     │
 │  VisionBridge: Observation → Engine State (不通 Solver)    │
+│  Frontend: play_* 单应用服务 + platform 平台前端           │
+│   (React 前端: 大厅/对战/评测/历史, 见 frontend/platform/) │
 │  OnlineLearning: 反馈收集 (预留)                           │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -84,8 +86,18 @@ layer4_interface/                   # 交互界面
 ├── encoding/                        # 状态编码
 │   ├── moon_state_encoder.py        # 38 维特征向量
 │   └── game_state_adapter.py
-├── frontend/                        # Web 服务
-│   └── app_server.py
+├── frontend/                        # Web 服务 (按应用分目录)
+│   ├── common/http_utils.py         # send_json / read_json_body
+│   ├── play_moon_chess/             # 月亮棋人机对弈 (8765)
+│   ├── play_gomoku/                 # 随机五子棋人机对弈 (8767)
+│   ├── play_texas_holdem/           # 德州扑克人机对弈 (8768)
+│   └── platform/                    # 平台前端服务 (8770)
+│       ├── server.py                # HTTP 路由 + 静态服务 dist/
+│       ├── games.py                 # GameSpec 游戏注册表 (三游戏)
+│       ├── session.py               # 通用 GameSession + PlayManager
+│       ├── history.py               # 对局记录 (data/matches/*.json)
+│       └── benchmark.py             # 求解器评测 (后台线程 job)
+│       # 前端: platform-frontend/ (React+Vite+TS, npm run build → dist/)
 ├── online_learning/                 # (预留) 在线学习
 └── vision_bridge.py                 # Observation → Engine State
 

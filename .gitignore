@@ -2,3 +2,7 @@ __pycache__
 .claude
 .pytest_cache
 .venv
+models/
+data/
+platform-frontend/node_modules/
+platform-frontend/dist/

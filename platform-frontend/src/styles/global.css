@@ -1,0 +1,589 @@
+/* Gavis 平台全局样式 — 沿用现有 play 应用的 GitHub-dark 色板 */
+
+:root {
+  --bg: #10141c;
+  --panel: #1a2130;
+  --board: #2a3b52;
+  --accent: #58a6ff;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --win: #3fb950;
+  --lose: #f85149;
+  --border: #30363d;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ── 布局 ─────────────────────────────────────────────────────── */
+
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 210px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 20px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.brand {
+  font-size: 18px;
+  font-weight: 700;
+  padding: 0 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--muted);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.nav-item:hover {
+  background: var(--board);
+  color: var(--text);
+}
+
+.nav-item.active {
+  background: var(--board);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.content {
+  flex: 1;
+  padding: 28px 36px;
+  max-width: 1100px;
+}
+
+/* ── 通用组件 ─────────────────────────────────────────────────── */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+}
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--board);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.btn:hover:not(:disabled) {
+  background: #3a4f6e;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0d1117;
+  font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #79c0ff;
+}
+
+.btn-danger {
+  background: var(--lose);
+  border-color: var(--lose);
+  color: #fff;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--board);
+  color: var(--muted);
+}
+
+.badge.win {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--win);
+}
+
+.badge.lose {
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--lose);
+}
+
+.badge.accent {
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent);
+}
+
+select,
+input[type='number'],
+input[type='range'] {
+  background: var(--board);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+select:focus,
+input:focus {
+  outline: 1px solid var(--accent);
+}
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table.data th,
+table.data td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+table.data th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+table.data tr.clickable:hover td {
+  background: var(--board);
+}
+
+.error-banner {
+  background: rgba(248, 81, 73, 0.12);
+  border: 1px solid var(--lose);
+  color: var(--lose);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: -2px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── 页面通用 ─────────────────────────────────────────────────── */
+
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.page-sub {
+  color: var(--muted);
+  margin-bottom: 22px;
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.form-row label {
+  color: var(--muted);
+  min-width: 80px;
+}
+
+.progress-bar {
+  height: 8px;
+  background: var(--board);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.3s;
+}
+
+/* ── 游戏棋盘 (月亮棋 / 五子棋) ──────────────────────────────── */
+
+.board-grid {
+  display: grid;
+  background: var(--board);
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  gap: 6px;
+  user-select: none;
+}
+
+.cell {
+  position: relative;
+  background: #223149;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+
+.cell.interactive.empty:hover {
+  background: #2b4266;
+  cursor: pointer;
+}
+
+.piece {
+  border-radius: 50%;
+  width: 68%;
+  height: 68%;
+}
+
+.piece.p_black {
+  background: radial-gradient(circle at 35% 30%, #4a5568, #0f1115 70%);
+  border: 2px solid #8b949e;
+}
+
+.piece.p_white {
+  background: radial-gradient(circle at 35% 30%, #ffffff, #c9d1d9 70%);
+  border: 2px solid #8b949e;
+}
+
+.age-badge {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.ai-move-ring {
+  position: absolute;
+  inset: -3px;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  pointer-events: none;
+}
+
+/* 五子棋棋子被抹去的幽灵消散动画 */
+.ghost-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.ghost-piece {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  animation: vanish-dissolve 0.9s ease-out forwards;
+}
+
+.ghost-piece.p_black {
+  background: radial-gradient(circle at 35% 30%, #4a5568, #0f1115 70%);
+  border: 2px solid #8b949e;
+}
+
+.ghost-piece.p_white {
+  background: radial-gradient(circle at 35% 30%, #ffffff, #c9d1d9 70%);
+  border: 2px solid #8b949e;
+}
+
+@keyframes vanish-dissolve {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.75);
+  }
+  40% {
+    opacity: 0.75;
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.45);
+  }
+}
+
+.vanish-smoke {
+  position: absolute;
+  font-size: 14px;
+  animation: smoke-rise 0.9s ease-out forwards;
+}
+
+@keyframes smoke-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.7);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-20px) scale(1.2);
+  }
+}
+
+.vanish-toast {
+  display: inline-block;
+  color: var(--accent);
+  font-size: 14px;
+  background: rgba(88, 166, 255, 0.12);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 3px 12px;
+  animation: toast-in 0.25s ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ── 德州扑克桌面 ────────────────────────────────────────────── */
+
+.poker-table-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+}
+
+.poker-table {
+  width: min(760px, 100%);
+  background: radial-gradient(ellipse at center, #1d5c46, #0d2f22 80%);
+  border: 6px solid #7a5230;
+  border-radius: 42px;
+  padding: 26px 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.45);
+}
+
+.player-zone {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 62px;
+}
+
+.player-zone .zone-label {
+  width: 76px;
+  font-size: 13px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.zone-cards {
+  display: flex;
+  gap: 6px;
+}
+
+.poker-card {
+  width: 46px;
+  height: 64px;
+  border-radius: 6px;
+  background: #f5f5f5;
+  color: #1a1a1a;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-weight: 700;
+  font-size: 16px;
+  border: 1px solid #d0d0d0;
+}
+
+.poker-card.red {
+  color: #c62828;
+}
+
+.poker-card-back {
+  background: repeating-linear-gradient(45deg, var(--accent), var(--accent) 6px, #1a2130 6px, #1a2130 12px);
+  border: 1px solid var(--border);
+}
+
+.stack-info {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.folded-tag {
+  font-size: 13px;
+  color: var(--lose);
+  font-weight: 600;
+}
+
+.table-center {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+
+.pot {
+  font-size: 15px;
+  font-weight: 600;
+  color: #ffd76a;
+}
+
+.street {
+  font-size: 13px;
+  color: #9ec5b5;
+}
+
+.community {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  min-height: 64px;
+}
+
+.hand-names {
+  font-size: 13px;
+  color: #ffd76a;
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+}
+
+/* 操作面板 */
+
+.action-panel {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* ── 回放时间轴 ──────────────────────────────────────────────── */
+
+.replay-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.replay-slider {
+  width: 100%;
+}
+
+.step-caption {
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+/* ── 结果横幅 ────────────────────────────────────────────────── */
+
+.result-overlay {
+  margin-top: 18px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+
+.result-title {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.result-title.win {
+  color: var(--win);
+}
+
+.result-title.lose {
+  color: var(--lose);
+}
+
+.result-title.draw {
+  color: var(--muted);
+}
