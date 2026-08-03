@@ -27,21 +27,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 from layer2_engine.core.state_graph import clone_state
 from layer2_engine.interfaces.solver_adapter import (
-    SolverAdapter,
-    State,
     ActionInstance,
     ChanceOutcome,
+    SolverAdapter,
+    State,
 )
+
 from ..base import SolverBase, SolverConfig, SolverMetrics
 from ..cfr.solver import CFR, CFRConfig
 from ..mcts.solver import MCTS, MCTSConfig, MCTSNode
-from ..psro.solver import PSROSolver, PSROConfig
+from ..psro.solver import PSROConfig, PSROSolver
 from .opponent_model import (
     CFRTableModel,
     OpponentModel,
     PSROMixModel,
+    TabularPolicyMember,
     UniformModel,
     sample_action,
 )
@@ -49,17 +53,17 @@ from .opponent_model import (
 
 @dataclass
 class HybridConfig(SolverConfig):
-    mode: str = 'search'                      # 'search' | 'table' | 'pool'
-    imperfect_information: bool = False       # enable the sampled-worlds path
+    mode: str = "search"  # 'search' | 'table' | 'pool'
+    imperfect_information: bool = False  # enable the sampled-worlds path
     mcts_budget: int = 500
     mcts_rollout_depth: int = 20
     cfr_iterations: int = 1000
-    cfr_depth_limit: int = 6               # bound CFR's tree walk (big games explode)
+    cfr_depth_limit: int = 6  # bound CFR's tree walk (big games explode)
     psro_iters: int = 3
     psro_steps_per_iter: int = 2000
-    opponent_model: str = 'uniform'           # 'uniform' | 'cfr' | 'psro'
-    tree_samples: int = 50                    # sampled worlds per search round
-    cfr_table_path: Optional[str] = None      # load/save CFR strategy table
+    opponent_model: str = "uniform"  # 'uniform' | 'cfr' | 'psro'
+    tree_samples: int = 50  # sampled worlds per search round
+    cfr_table_path: Optional[str] = None  # load/save CFR strategy table
 
 
 class HybridSolver(SolverBase):
@@ -70,14 +74,15 @@ class HybridSolver(SolverBase):
         cfg: HybridConfig = self.config
         self.rng = random.Random(cfg.seed)
 
-        self.mcts = MCTS(adapter, MCTSConfig(
-            seed=cfg.seed, budget=cfg.mcts_budget, rollout_depth=cfg.mcts_rollout_depth))
-        self.cfr = CFR(adapter, CFRConfig(
-            seed=cfg.seed, iterations=cfg.cfr_iterations,
-            depth_limit=cfg.cfr_depth_limit))
-        self.psro = PSROSolver(adapter, PSROConfig(
-            seed=cfg.seed, num_iters=cfg.psro_iters,
-            num_steps_per_iter=cfg.psro_steps_per_iter))
+        self.mcts = MCTS(
+            adapter, MCTSConfig(seed=cfg.seed, budget=cfg.mcts_budget, rollout_depth=cfg.mcts_rollout_depth)
+        )
+        self.cfr = CFR(
+            adapter, CFRConfig(seed=cfg.seed, iterations=cfg.cfr_iterations, depth_limit=cfg.cfr_depth_limit)
+        )
+        self.psro = PSROSolver(
+            adapter, PSROConfig(seed=cfg.seed, num_iters=cfg.psro_iters, num_steps_per_iter=cfg.psro_steps_per_iter)
+        )
 
         self._cfr_table: Optional[dict] = None
         self._pool: list = []
@@ -96,9 +101,9 @@ class HybridSolver(SolverBase):
 
     def select_action(self, state: State) -> Optional[ActionInstance]:
         cfg: HybridConfig = self.config
-        if cfg.mode == 'table':
+        if cfg.mode == "table":
             return self._select_from_table(state)
-        if cfg.mode == 'pool':
+        if cfg.mode == "pool":
             return self._select_from_pool(state)
         return self._select_search(state)
 
@@ -110,30 +115,36 @@ class HybridSolver(SolverBase):
         mixture becomes the opponent model.
         """
         cfg: HybridConfig = self.config
-        verbose = kwargs.get('verbose', False)
+        verbose = kwargs.get("verbose", False)
 
         # 1) CFR prior (equilibrium table).  ``solve`` only returns the
         # root info-set's strategy, so the full table is built from the
         # solver's normalized strategy sums.
         state = self.adapter.create_initial_state()
         if verbose:
-            print(f'  Hybrid: training CFR ({cfg.cfr_iterations} iters)...')
+            print(f"  Hybrid: training CFR ({cfg.cfr_iterations} iters)...")
         self.cfr.solve(state, verbose=verbose)
         self._cfr_table = self._build_cfr_table()
         self.mcts.rollout_policy = self._cfr_rollout_policy
-        if cfg.opponent_model == 'cfr':
+        if cfg.opponent_model == "cfr":
             self._opponent = CFRTableModel(self._cfr_table)
         if cfg.cfr_table_path:
             self._save_cfr_table(cfg.cfr_table_path)
 
         # 2) PSRO pool + Nash mixture (opponent model).
-        if cfg.opponent_model == 'psro' or cfg.mode == 'pool':
+        if cfg.opponent_model == "psro" or cfg.mode == "pool":
             if verbose:
-                print(f'  Hybrid: running PSRO ({cfg.psro_iters} iters)...')
+                print(f"  Hybrid: running PSRO ({cfg.psro_iters} iters)...")
             self.psro.train(episodes=max(1, cfg.psro_iters), verbose=verbose)
-            self._pool = self.psro._policy_pool          # noqa: SLF001 — pool access
-            self._pool_weights = self.psro._nash_mixture  # noqa: SLF001
-            if cfg.opponent_model == 'psro':
+            # Pool members are tabular policies (ndarray keyed by the
+            # GymAdapter encoding) — wrap them into callables so the
+            # mixture model and pool-mode decisions can sample them.
+            self._pool = [TabularPolicyMember(pi, self.adapter, self.rng) for pi in self.psro._policy_pool]  # noqa: SLF001
+            weights = np.asarray(self.psro._nash_weights, dtype=float)  # noqa: SLF001
+            if weights.size != len(self._pool):
+                weights = np.ones(len(self._pool)) / len(self._pool)
+            self._pool_weights = list(weights / weights.sum())
+            if cfg.opponent_model == "psro":
                 self._opponent = PSROMixModel(self._pool, self._pool_weights, self.rng)
 
         return SolverMetrics(episodes=episodes, win_rate=0.0, avg_return=0.0)
@@ -149,7 +160,7 @@ class HybridSolver(SolverBase):
 
     def _select_search(self, state: State) -> Optional[ActionInstance]:
         cfg: HybridConfig = self.config
-        if cfg.imperfect_information and hasattr(self.adapter, 'sample_hidden'):
+        if cfg.imperfect_information and hasattr(self.adapter, "sample_hidden"):
             return self._opponent_mcts(state)
         if self.mcts.rollout_policy is None and self._cfr_table:
             self.mcts.rollout_policy = self._cfr_rollout_policy
@@ -200,7 +211,7 @@ class HybridSolver(SolverBase):
         cfg: HybridConfig = self.config
         root_player = self._our_player_id(state)
         self._edge_replies = {}  # fresh cache per search
-        root = MCTSNode(node_type='player')
+        root = MCTSNode(node_type="player")
         root.untried_actions = self.adapter.get_legal_actions(state)
         if not root.untried_actions:
             return None
@@ -223,10 +234,10 @@ class HybridSolver(SolverBase):
 
         for _ in range(guard):
             nt = self.adapter.get_node_type(sim)
-            if nt == 'terminal':
+            if nt == "terminal":
                 break
-            if nt == 'chance':
-                if node.node_type != 'chance':
+            if nt == "chance":
+                if node.node_type != "chance":
                     break  # tree/sim out of sync — abandon this walk
                 if not node.is_fully_expanded():
                     self._expand_omcts_chance(node, sim, root_player)
@@ -243,7 +254,7 @@ class HybridSolver(SolverBase):
 
             # Player node: must be OURS (opponent nodes are only crossed
             # at tree edges, where the cached reply handles them).
-            if sim['env'].get('turn') != root_player:
+            if sim["env"].get("turn") != root_player:
                 break
             if not node.is_fully_expanded():
                 expanded = self._expand_omcts_player(node, sim, root_player)
@@ -269,16 +280,15 @@ class HybridSolver(SolverBase):
 
     def _sample_opponent_reply(self, sim: State, root_player: str) -> Optional[ActionInstance]:
         """Sample one opponent-model action if it is the opponent's turn."""
-        if self.adapter.get_node_type(sim) != 'player':
+        if self.adapter.get_node_type(sim) != "player":
             return None
-        if sim['env'].get('turn') == root_player:
+        if sim["env"].get("turn") == root_player:
             return None
         actions = self.adapter.get_legal_actions(sim)
         dist = self._opponent.action_distribution(self.adapter, sim)
         return sample_action(dist, actions, self.rng)
 
-    def _apply_cached_reply(self, sim: State, child: MCTSNode,
-                            root_player: str) -> State:
+    def _apply_cached_reply(self, sim: State, child: MCTSNode, root_player: str) -> State:
         """Apply the child edge's cached opponent reply (sample + cache on first use).
 
         The cached reply is what makes the subtree under ``child``
@@ -300,13 +310,12 @@ class HybridSolver(SolverBase):
         """Set untried actions/outcomes according to the child's node type."""
         child_type = adapter.get_node_type(sim)
         child.node_type = child_type
-        if child_type == 'player':
+        if child_type == "player":
             child.untried_actions = adapter.get_legal_actions(sim)
-        elif child_type == 'chance':
+        elif child_type == "chance":
             child.untried_outcomes = list(adapter.get_chance_outcomes(sim))
 
-    def _expand_omcts_player(self, node: MCTSNode, state: State,
-                             root_player: str) -> Optional[tuple[MCTSNode, State]]:
+    def _expand_omcts_player(self, node: MCTSNode, state: State, root_player: str) -> Optional[tuple[MCTSNode, State]]:
         """Expand one of OUR actions; the child is the node AFTER the
         opponent's (cached) reply — chance, our-player, or terminal."""
         if not node.untried_actions:
@@ -320,12 +329,11 @@ class HybridSolver(SolverBase):
         # The post-reply type may differ from the pre-reply one (e.g. an
         # opponent fold vs a call); re-derive it from the advanced state.
         self._fill_child(child, sim, self.adapter)
-        if child.node_type == 'player' and sim['env'].get('turn') != root_player:
+        if child.node_type == "player" and sim["env"].get("turn") != root_player:
             return None  # opponent still to act — degenerate edge, skip
         return child, sim
 
-    def _expand_omcts_chance(self, node: MCTSNode, state: State,
-                             root_player: str) -> None:
+    def _expand_omcts_chance(self, node: MCTSNode, state: State, root_player: str) -> None:
         """Expand every chance outcome at once (mirrors plain MCTS)."""
         for outcome in node.untried_outcomes:
             sim = self.adapter.apply_chance(state, outcome)
@@ -352,8 +360,9 @@ class HybridSolver(SolverBase):
     def _select_ucb1(self, node: MCTSNode) -> Optional[str]:
         """UCB1 over our node's children (all values: root perspective)."""
         import math
+
         best_key = None
-        best_ucb = -float('inf')
+        best_ucb = -float("inf")
         for key, child in node.children.items():
             if child.visits == 0:
                 return key
@@ -376,9 +385,9 @@ class HybridSolver(SolverBase):
         depth = self.config.mcts_rollout_depth
         for _ in range(depth):
             nt = self.adapter.get_node_type(sim)
-            if nt == 'terminal':
+            if nt == "terminal":
                 break
-            if nt == 'chance':
+            if nt == "chance":
                 _, sim = self.adapter.sample_chance(sim)
                 continue
             actions = self.adapter.get_legal_actions(sim)
@@ -400,9 +409,9 @@ class HybridSolver(SolverBase):
 
     @staticmethod
     def _our_player_id(world: State) -> str:
-        player = world['env'].get('turn')
+        player = world["env"].get("turn")
         if isinstance(player, dict):
-            player = player.get('currentPlayerId', player)
+            player = player.get("currentPlayerId", player)
         return player
 
     # ── CFR prior as rollout policy for the plain MCTS ──────────────
@@ -425,19 +434,19 @@ class HybridSolver(SolverBase):
         """Normalize the CFR solver's strategy sums into a full table."""
         table: dict[str, dict[str, float]] = {}
         for info_key, info in self.cfr.info_sets.items():
-            sums = info.get('strategy_sum', {})
+            sums = info.get("strategy_sum", {})
             total = sum(sums.values())
             if total > 0:
                 table[info_key] = {k: v / total for k, v in sums.items()}
         return table
 
     def _save_cfr_table(self, path: str) -> None:
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(self._cfr_table, f, ensure_ascii=False)
 
     def _load_cfr_table(self, path: str) -> None:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, "r", encoding="utf-8") as f:
             self._cfr_table = json.load(f)
         self.mcts.rollout_policy = self._cfr_rollout_policy
-        if self.config.opponent_model == 'cfr':
+        if self.config.opponent_model == "cfr":
             self._opponent = CFRTableModel(self._cfr_table)

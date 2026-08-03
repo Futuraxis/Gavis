@@ -56,6 +56,7 @@ class PSROSolver(SolverBase):
         pi = np.eye(n_actions)[tmp.argmax(-1)]
         self._policy_pool: list[np.ndarray] = [pi]
         self._nash_mixture: np.ndarray | None = None
+        self._nash_weights: np.ndarray | None = None  # per-member mixture weights
         self._expl_history: list[float] = []
         self._div_history: list[float] = []
 
@@ -87,13 +88,13 @@ class PSROSolver(SolverBase):
         episodes : int
             Number of PSRO iterations (not episodes — PSRO is not episode-based).
         """
-        num_iters = episodes if episodes > 0 else getattr(self.config, 'num_iters', 20)
-        num_steps = getattr(self.config, 'num_steps_per_iter', 5000)
-        eps = getattr(self.config, 'epsilon', 0.1)
-        alpha = getattr(self.config, 'alpha', 0.1)
-        Ne = getattr(self.config, 'evaluation_episodes', 10)
+        num_iters = episodes if episodes > 0 else getattr(self.config, "num_iters", 20)
+        num_steps = getattr(self.config, "num_steps_per_iter", 5000)
+        eps = getattr(self.config, "epsilon", 0.1)
+        alpha = getattr(self.config, "alpha", 0.1)
+        Ne = getattr(self.config, "evaluation_episodes", 10)
 
-        verbose = kwargs.get('verbose', False)
+        verbose = kwargs.get("verbose", False)
 
         for niter in range(1, num_iters + 1):
             # Compute gamescape
@@ -102,6 +103,7 @@ class PSROSolver(SolverBase):
             # Solve for Nash
             nash_p = solve_nash(R)
             self._nash_mixture = self._build_nash_mixture(nash_p)
+            self._nash_weights = nash_p
 
             # Compute exploitability
             expl = exploitability(self._gym, self._nash_mixture, self._policy_pool, Ne=Ne)
@@ -116,10 +118,7 @@ class PSROSolver(SolverBase):
             )
 
             # Check for duplicate policy
-            is_duplicate = any(
-                (p == beta).all()
-                for p in self._policy_pool
-            )
+            is_duplicate = any((p == beta).all() for p in self._policy_pool)
             if is_duplicate:
                 if verbose:
                     print(f"  PSRO iter {niter}: strategy exhausted, stopping")
@@ -129,37 +128,43 @@ class PSROSolver(SolverBase):
             self._expl_history.append(expl)
 
             if verbose:
-                print(f'  PSRO iter {niter:3d}/{num_iters}  '
-                      f'expl={expl:.4f}  '
-                      f'pool={len(self._policy_pool)}  '
-                      f'nash_w={nash_p[0]:.3f}')
+                print(
+                    f"  PSRO iter {niter:3d}/{num_iters}  "
+                    f"expl={expl:.4f}  "
+                    f"pool={len(self._policy_pool)}  "
+                    f"nash_w={nash_p[0]:.3f}"
+                )
 
         return SolverMetrics(
             episodes=num_iters,
             win_rate=0.0,
             avg_return=0.0,
             extra={
-                'pool_size': len(self._policy_pool),
-                'final_exploitability': self._expl_history[-1] if self._expl_history else 0.0,
-                'num_policies': len(self._policy_pool),
+                "pool_size": len(self._policy_pool),
+                "final_exploitability": self._expl_history[-1] if self._expl_history else 0.0,
+                "num_policies": len(self._policy_pool),
             },
         )
 
     def save(self, path: str) -> None:
-        """Save PSRO state (policy pool + Nash mixture)."""
+        """Save PSRO state (policy pool + Nash mixture + member weights)."""
+        weights = self._nash_weights
         np.savez_compressed(
             path,
             policy_pool=np.array(self._policy_pool, dtype=object),
             nash_mixture=self._nash_mixture,
+            nash_weights=weights if weights is not None else np.zeros(0),
             expl_history=np.array(self._expl_history),
         )
 
     def load(self, path: str) -> None:
         """Load PSRO state."""
         data = np.load(path, allow_pickle=True)
-        self._policy_pool = list(data['policy_pool'])
-        self._nash_mixture = data['nash_mixture']
-        self._expl_history = list(data['expl_history'])
+        self._policy_pool = list(data["policy_pool"])
+        self._nash_mixture = data["nash_mixture"]
+        weights = data["nash_weights"]
+        self._nash_weights = weights if weights.size else None
+        self._expl_history = list(data["expl_history"])
 
     def _build_nash_mixture(self, weights: np.ndarray) -> np.ndarray:
         """Build the Nash mixture policy from weighted pool."""

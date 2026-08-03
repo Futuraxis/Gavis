@@ -21,7 +21,7 @@ from __future__ import annotations
 import random
 from typing import Optional, Protocol
 
-from layer2_engine.interfaces.solver_adapter import SolverAdapter, State, ActionInstance
+from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter, State
 
 
 class OpponentModel(Protocol):
@@ -41,6 +41,45 @@ class UniformModel:
         actions = adapter.get_legal_actions(state)
         prob = 1.0 / len(actions) if actions else 1.0
         return {a.canonical_key: prob for a in actions}
+
+
+class TabularPolicyMember:
+    """Callable wrapper making a PSRO tabular policy a pool member.
+
+    ``PSROSolver._policy_pool`` stores members as ``np.ndarray`` policies
+    of shape ``(state_dim, action_dim)`` keyed by the ``GymAdapter`` state
+    encoding — not as callables.  This wrapper bridges the two: calling
+    it with ``(adapter, state)`` encodes the state, samples one action
+    from the policy via ``Agent.step``, and returns its canonical key.
+    Illegal actions (policy outside the table) fall back to uniform.
+
+    Encodes with the same ``GymAdapter`` that produced the policy, so the
+    state index space always matches.
+    """
+
+    def __init__(self, policy, adapter: SolverAdapter, rng: random.Random):
+        from ..psro.agent import Agent
+        from ..psro.gym_adapter import GymAdapter
+
+        self._policy = policy
+        self._gym = GymAdapter(adapter)
+        self._agent = Agent(policy)
+        self._agent.reset_rng(rng.randrange(1 << 30))
+        self._rng = rng
+
+    def __call__(self, adapter: SolverAdapter, state: State) -> Optional[str]:
+        """Sample one action; return its canonical key (None if no moves)."""
+        actions = adapter.get_legal_actions(state)
+        if not actions:
+            return None
+        self._gym._state = state  # noqa: SLF001 — point the encoder at the live state
+        obs = self._gym._encode_state(state)  # noqa: SLF001 — shared with training
+        mask = self._gym.available_actions()
+        idx = self._agent.step(obs, Amask=mask)
+        action = self._gym._int_to_action(idx, actions)  # noqa: SLF001
+        if action is None:
+            action = self._rng.choice(actions)
+        return action.canonical_key
 
 
 class CFRTableModel:
