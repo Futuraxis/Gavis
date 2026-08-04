@@ -161,6 +161,11 @@ class PSROSolver(SolverBase):
             policy_pool=np.array(self._policy_pool, dtype=object),
             nash_mixture=self._nash_mixture,
             nash_weights=weights if weights is not None else np.zeros(0),
+            payoff_matrix=(
+                self._payoff_matrix
+                if self._payoff_matrix is not None
+                else np.zeros((0, 0))
+           ),
             expl_history=np.array(self._expl_history),
         )
 
@@ -171,7 +176,12 @@ class PSROSolver(SolverBase):
         self._nash_mixture = data["nash_mixture"]
         weights = data["nash_weights"]
         self._nash_weights = weights if weights.size else None
-        self._expl_history = list(data["expl_history"])
+        if "payoff_matrix" in data.files:
+            payoff_matrix = data["payoff_matrix"]
+            self._payoff_matrix = payoff_matrix if payoff_matrix.size else None
+        else:
+            # Compatibility with model files saved before payoff caching.
+            self._payoff_matrix = None
 
     def _build_nash_mixture(self, weights: np.ndarray) -> np.ndarray:
         """Build the Nash mixture policy from weighted pool."""

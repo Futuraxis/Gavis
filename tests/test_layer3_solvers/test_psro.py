@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from layer2_engine.interfaces.solver_adapter import ActionInstance
 from layer3_solvers.psro.gym_adapter import GymAdapter
 from layer3_solvers.psro.meta_game import estimate_reward, gamescape
+from layer3_solvers.psro.solver import PSROConfig, PSROSolver
 
 
 class CountingAgent:
@@ -153,3 +156,32 @@ def test_gamescape_reuses_previous_payoffs() -> None:
     assert env.reset_calls == 6
     assert expanded_matrix.shape == (3, 3)
     assert np.array_equal(expanded_matrix[:2, :2], first_matrix)
+def test_psro_save_load_preserves_payoff_matrix(tmp_path: Path) -> None:
+    """A saved solver should restore its cached payoff matrix."""
+    adapter = PerspectiveAdapter()
+    config = PSROConfig(
+        seed=42,
+        num_iters=1,
+        num_steps_per_iter=1,
+    )
+
+    solver = PSROSolver(adapter, config)
+    expected_matrix = np.array(
+        [
+            [0.0, 0.5],
+            [-0.5, 0.0],
+        ]
+    )
+    solver._payoff_matrix = expected_matrix
+
+    model_path = tmp_path / "psro_cache.npz"
+    solver.save(str(model_path))
+
+    restored_solver = PSROSolver(adapter, config)
+    restored_solver.load(str(model_path))
+
+    assert restored_solver._payoff_matrix is not None
+    np.testing.assert_array_equal(
+        restored_solver._payoff_matrix,
+        expected_matrix,
+    )
