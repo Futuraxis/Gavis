@@ -25,48 +25,90 @@ def estimate_reward(env, num_episodes: int, p1: Agent, p2: Agent, max_steps: int
     float
         Average reward for p1.
     """
-    R = 0.0
+    total_reward = 0.0
+
     for _ in range(num_episodes):
         obs, _ = env.reset()
         done = False
         steps = 0
+
         while not done and steps < max_steps:
+            # Player one acts on even turns; player two acts on odd turns.
+            actor = p1 if steps % 2 == 0 else p2
             mask = env.available_actions()
-            action = p1.step(obs, Amask=mask)
-            obs, r, done, _, _ = env.step(action)
-            R += r
+            action = actor.step(obs, Amask=mask)
+
+            obs, reward, terminated, truncated, _ = env.step(action)
+            total_reward += reward
+            done = terminated or truncated
             steps += 1
-    return R / num_episodes
+
+    return total_reward / num_episodes
 
 
-def gamescape(env, pi: list[np.ndarray], Ne: int = 10) -> np.ndarray:
-    """Compute the payoff matrix for a set of policies.
+def gamescape(
+    env,
+    pi: list[np.ndarray],
+    Ne: int = 10,  # noqa: N803 — preserved for API compatibility
+    previous: np.ndarray | None = None,
+) -> np.ndarray:
+    """Compute or incrementally expand the policy payoff matrix.
 
     Parameters
     ----------
     env : GymAdapter
+        Environment used to evaluate policy match-ups.
     pi : list of np.ndarray
-        List of policies, each shape ``(state_dim, action_dim)``.
+        Policies, each with shape ``(state_dim, action_dim)``.
     Ne : int
-        Episodes per match-up.
+        Evaluation episodes per new match-up.
+    previous : np.ndarray, optional
+        Previously computed square payoff matrix. Existing entries are copied,
+        so only match-ups involving newly added policies are evaluated.
 
     Returns
     -------
-    np.ndarray, shape (len(pi), len(pi))
-        Payoff matrix (row player = pi[i], column player = pi[j]).
+    np.ndarray
+        Antisymmetric payoff matrix with shape ``(len(pi), len(pi))``.
     """
     n = len(pi)
-    R = np.zeros((n, n))
+    payoff_matrix = np.zeros((n, n))
+    previous_size = 0
+
+    if previous is not None:
+        if previous.ndim != 2 or previous.shape[0] != previous.shape[1]:
+            raise ValueError("previous payoff matrix must be square")
+
+        previous_size = previous.shape[0]
+        if previous_size > n:
+            raise ValueError("previous payoff matrix is larger than the policy pool")
+
+        payoff_matrix[:previous_size, :previous_size] = previous
+
     for i in tqdm(range(n), desc="Gamescape", position=1, leave=False):
-        for j in range(n):
-            if j <= i:
-                R[i, j] = -R[j, i]
-                continue
-            R[i, j] = estimate_reward(env, Ne, Agent(pi[i]), Agent(pi[j]))
-    return R
+        # Old-vs-old entries have already been copied. Start at the first
+        # new policy, while still keeping j above the diagonal.
+        first_opponent = max(i + 1, previous_size)
+
+        for j in range(first_opponent, n):
+            payoff = estimate_reward(
+                env,
+                Ne,
+                Agent(pi[i]),
+                Agent(pi[j]),
+            )
+            payoff_matrix[i, j] = payoff
+            payoff_matrix[j, i] = -payoff
+
+    return payoff_matrix
 
 
-def exploitability(env, nash_pi: np.ndarray, pi: list[np.ndarray], Ne: int = 50) -> float:
+def exploitability(
+    env,
+    nash_pi: np.ndarray,
+    pi: list[np.ndarray],
+    Ne: int = 50,  # noqa: N803 — preserved for API compatibility
+) -> float:
     """Compute the exploitability of a Nash mixture.
 
     Parameters
