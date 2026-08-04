@@ -26,8 +26,26 @@ class GymAdapter:
     def __init__(self, adapter: SolverAdapter, state_dim: int = 19683):
         self._adapter = adapter
         self._state: State | None = None
-        self._p1 = 'p_black'
-        self._p2 = 'p_white'
+        raw_players = getattr(adapter, "rules", {}).get("players", [])
+
+        if len(raw_players) >= 2:
+            first_player = raw_players[0]
+            second_player = raw_players[1]
+
+            self._p1 = (
+                str(first_player.get("id", "p_black"))
+                if isinstance(first_player, dict)
+                else str(first_player)
+            )
+            self._p2 = (
+                str(second_player.get("id", "p_white"))
+                if isinstance(second_player, dict)
+                else str(second_player)
+            )
+        else:
+            self._p1 = "p_black"
+            self._p2 = "p_white"
+
         self._turn = 0
 
         self.observation_space = spaces.Discrete(state_dim)
@@ -49,9 +67,6 @@ class GymAdapter:
         if self._state is None:
             raise RuntimeError("Call reset() before step().")
 
-        # Determine current player
-        cp = self._adapter.get_current_player(self._state)
-        player_id = self._p1 if self._turn % 2 == 0 else self._p2
         self._turn += 1
 
         # Convert int action to ActionInstance
@@ -84,7 +99,8 @@ class GymAdapter:
             self._state = self._adapter.apply_chance(self._state, chosen)
 
         done = self._adapter.is_terminal(self._state)
-        reward = self._adapter.get_utility(self._state, player_id)
+        # Meta-game payoffs are always measured from the row player's perspective.
+        reward = self._adapter.get_utility(self._state, self._p1)
 
         return self._encode_state(self._state), reward, done, False, {}
 

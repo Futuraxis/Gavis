@@ -57,6 +57,7 @@ class PSROSolver(SolverBase):
         self._policy_pool: list[np.ndarray] = [pi]
         self._nash_mixture: np.ndarray | None = None
         self._nash_weights: np.ndarray | None = None  # per-member mixture weights
+        self._payoff_matrix: np.ndarray | None = None
         self._expl_history: list[float] = []
         self._div_history: list[float] = []
 
@@ -97,11 +98,17 @@ class PSROSolver(SolverBase):
         verbose = kwargs.get("verbose", False)
 
         for niter in range(1, num_iters + 1):
-            # Compute gamescape
-            R = gamescape(self._gym, self._policy_pool, Ne=Ne)
+            # Expand the cached gamescape with only the newly added policies.
+            payoff_matrix = gamescape(
+                self._gym,
+                self._policy_pool,
+                Ne=Ne,
+                previous=self._payoff_matrix,
+            )
+            self._payoff_matrix = payoff_matrix
 
             # Solve for Nash
-            nash_p = solve_nash(R)
+            nash_p = solve_nash(payoff_matrix)
             self._nash_mixture = self._build_nash_mixture(nash_p)
             self._nash_weights = nash_p
 
