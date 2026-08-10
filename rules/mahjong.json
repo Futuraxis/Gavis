@@ -1215,12 +1215,40 @@
         }
       },
       "legal": {
-        "eq": [
+        "and": [
           {
-            "var": "$env.claim_index"
+            "eq": [
+              {
+                "var": "$env.claim_index"
+              },
+              {
+                "const": 0
+              }
+            ]
           },
           {
-            "const": 0
+            "gte": [
+              {
+                "count": {
+                  "call": [
+                    "hand_of",
+                    {
+                      "at": [
+                        {
+                          "var": "$env.claim_queue"
+                        },
+                        {
+                          "var": "$env.claim_index"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "const": 2
+              }
+            ]
           }
         ]
       },
@@ -2468,19 +2496,106 @@
                 "var": "$constants.fan_pay"
               },
               {
-                "sub": [
-                  {
-                    "call": [
-                      "fan_sum",
-                      {
-                        "var": "$env.win_hand"
+                "max": {
+                  "concat": [
+                    {
+                      "map": {
+                        "list": {
+                          "range": {
+                            "from": {
+                              "const": 0
+                            },
+                            "to": {
+                              "const": 1
+                            }
+                          }
+                        },
+                        "as": "$ma",
+                        "expr": {
+                          "const": 0
+                        }
                       }
-                    ]
-                  },
-                  {
-                    "const": 1
-                  }
-                ]
+                    },
+                    {
+                      "map": {
+                        "list": {
+                          "range": {
+                            "from": {
+                              "const": 0
+                            },
+                            "to": {
+                              "const": 1
+                            }
+                          }
+                        },
+                        "as": "$mb",
+                        "expr": {
+                          "min": {
+                            "concat": [
+                              {
+                                "map": {
+                                  "list": {
+                                    "range": {
+                                      "from": {
+                                        "const": 0
+                                      },
+                                      "to": {
+                                        "const": 1
+                                      }
+                                    }
+                                  },
+                                  "as": "$ma",
+                                  "expr": {
+                                    "sub": [
+                                      {
+                                        "call": [
+                                          "fan_sum",
+                                          {
+                                            "var": "$env.win_hand"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "const": 1
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "map": {
+                                  "list": {
+                                    "range": {
+                                      "from": {
+                                        "const": 0
+                                      },
+                                      "to": {
+                                        "const": 1
+                                      }
+                                    }
+                                  },
+                                  "as": "$mb",
+                                  "expr": {
+                                    "sub": [
+                                      {
+                                        "count": {
+                                          "var": "$constants.fan_pay"
+                                        }
+                                      },
+                                      {
+                                        "const": 1
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
               }
             ]
           }
@@ -3145,31 +3260,47 @@
         "hand"
       ],
       "expr": {
-        "all": {
-          "list": {
-            "group": {
-              "list": {
-                "var": "$hand"
-              }
-            }
-          },
-          "as": "$node",
-          "where": {
+        "and": [
+          {
             "eq": [
               {
-                "get": [
-                  {
-                    "var": "$node"
-                  },
-                  "count"
-                ]
+                "count": {
+                  "var": "$hand"
+                }
               },
               {
-                "const": 2
+                "const": 14
               }
             ]
+          },
+          {
+            "all": {
+              "list": {
+                "group": {
+                  "list": {
+                    "var": "$hand"
+                  }
+                }
+              },
+              "as": "$node",
+              "where": {
+                "eq": [
+                  {
+                    "get": [
+                      {
+                        "var": "$node"
+                      },
+                      "count"
+                    ]
+                  },
+                  {
+                    "const": 2
+                  }
+                ]
+              }
+            }
           }
-        }
+        ]
       }
     },
     "is_win_hand": {
@@ -3188,22 +3319,38 @@
             ]
           },
           {
-            "all": {
-              "list": {
-                "var": "$constants.thirteen_orphans"
-              },
-              "as": "$node",
-              "where": {
-                "contains": [
+            "and": [
+              {
+                "eq": [
                   {
-                    "var": "$hand"
+                    "count": {
+                      "var": "$hand"
+                    }
                   },
                   {
-                    "var": "$node"
+                    "const": 14
                   }
                 ]
+              },
+              {
+                "all": {
+                  "list": {
+                    "var": "$constants.thirteen_orphans"
+                  },
+                  "as": "$node",
+                  "where": {
+                    "contains": [
+                      {
+                        "var": "$hand"
+                      },
+                      {
+                        "var": "$node"
+                      }
+                    ]
+                  }
+                }
               }
-            }
+            ]
           },
           {
             "choose": {

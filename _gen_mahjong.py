@@ -122,6 +122,14 @@ def MIN2(a, b):
     return {'min': CONCAT(_sing(a, '$ma'), _sing(b, '$mb'))}
 
 
+def MAX2(a, b):
+    """max(a, b) — mirrors :func:`MIN2`."""
+    def _sing(item, v):
+        return MAP(RANGE(C(0), C(1)), item, as_var=v)
+
+    return {'max': CONCAT(_sing(a, '$ma'), _sing(b, '$mb'))}
+
+
 def FILTER(lst, where, as_var='$node'):
     return {'filter': {'list': lst, 'as': as_var, 'where': where}}
 
@@ -258,7 +266,14 @@ def _pair_pool(hand_expr):
 
 
 def _qidui(hand_expr):
-    return ALL(GROUP(hand_expr), EQ(GET(V('$node'), 'count'), C(2)))
+    """Seven pairs: exactly 14 tiles, every group of size 2.
+
+    The size check is essential: without it a 2-tile pair hand (from a
+    degenerate chi chain) vacuously passes and ``win_self`` becomes
+    legal on a non-winning hand.
+    """
+    return AND(EQ(COUNT(hand_expr), C(14)),
+               ALL(GROUP(hand_expr), EQ(GET(V('$node'), 'count'), C(2))))
 
 
 def _standard_win(hand_expr):
@@ -407,7 +422,11 @@ def _actions():
          'params': {'tiles': {'domain': {'expr': FILTER(
              V('$constants.chi_runs'),
              {'contains': [V('$node'), V('$env.last_discard')]})}}},
-         'legal': EQ(V('$env.claim_index'), C(0)),
+         # Chi needs two hand tiles (discard supplies the third); without
+         # this gate degenerate chi chains shrink hands to 0-1 tiles and
+         # loop without drawing until the wall empties.
+         'legal': AND(EQ(V('$env.claim_index'), C(0)),
+                      GTE(COUNT(CALL('hand_of', CLAIM_ACTOR)), C(2))),
          'effectRef': 'do_claim_chi',
          'canonicalKey': {'template': 'claim_chi:{tiles}'}},
         {'id': 'claim_pass', 'type': 'move', 'phases': ['claim'],
@@ -635,8 +654,12 @@ def _effectors():
             'ops': [
                 _set_env('win_hand', CONCAT(CALL('hand_of', V('pid')),
                                             SINGLE(V('tile')))),
+                # Clamp the fan table index: `at` returns None out of
+                # range, and a None fan_pay crashes payoff arithmetic.
                 _set_env('fan_pay', AT(V('$constants.fan_pay'),
-                                       SUB(CALL('fan_sum', V('$env.win_hand')), C(1)))),
+                                       MAX2(C(0), MIN2(SUB(CALL('fan_sum', V('$env.win_hand')),
+                                                           C(1)),
+                                                       SUB(COUNT(V('$constants.fan_pay')), C(1)))))),
                 _branch(NOT({'contains': [V('$env.winners'), V('pid')]}),
                         [_append('winners', V('pid'))], []),
                 _branch(NOT({'contains': [V('$env.done'), V('pid')]}),
@@ -767,8 +790,9 @@ def _aliases():
                            'or standard form with coverage',
             'params': ['hand'],
             'expr': OR(CALL('is_qidui', hand),
-                       ALL(V('$constants.thirteen_orphans'),
-                           {'contains': [hand, V('$node')]}),
+                       AND(EQ(COUNT(hand), C(14)),
+                           ALL(V('$constants.thirteen_orphans'),
+                               {'contains': [hand, V('$node')]})),
                        _standard_win(hand)),
         },
         'fan_sum': {
