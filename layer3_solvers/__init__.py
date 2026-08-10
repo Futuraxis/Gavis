@@ -5,24 +5,38 @@ through the ``SolverAdapter`` Protocol from Layer 2.
 """
 
 from .base import SolverBase, SolverConfig
-from .mcts.solver import MCTS, MCTSConfig
 from .cfr.solver import CFR, CFRConfig
-from .psro.solver import PSROSolver, PSROConfig
-from .hybrid.solver import HybridSolver, HybridConfig
+from .hybrid.solver import HybridConfig, HybridSolver
+from .mcts.solver import MCTS, MCTSConfig
+from .psro.solver import PSROConfig, PSROSolver
 
 try:
-    from .ppo.solver import PPOSolver, PPOConfig
+    from .ppo.solver import PPOConfig, PPOSolver
 except ImportError:
     PPOSolver = None
     PPOConfig = None
 
+try:
+    from .marl.happo import HAPPOConfig, HAPPOSolver
+    from .marl.maac import MAACConfig, MAACSolver
+    from .marl.qmix import QMixConfig, QMixSolver
+except ImportError:
+    QMixSolver = HAPPOSolver = MAACSolver = None
+    QMixConfig = HAPPOConfig = MAACConfig = None
+
 __all__ = [
     "SolverBase",
     "SolverConfig",
-    "MCTS", "MCTSConfig",
-    "CFR", "CFRConfig",
-    "PSROSolver", "PSROConfig",
-    "HybridSolver", "HybridConfig",
+    "MCTS",
+    "MCTSConfig",
+    "CFR",
+    "CFRConfig",
+    "PSROSolver",
+    "PSROConfig",
+    "HybridSolver",
+    "HybridConfig",
 ]
 if PPOSolver is not None:
     __all__.extend(["PPOSolver", "PPOConfig"])
+if QMixSolver is not None:
+    __all__.extend(["QMixSolver", "QMixConfig", "HAPPOSolver", "HAPPOConfig", "MAACSolver", "MAACConfig"])
