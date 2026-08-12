@@ -3,10 +3,11 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const COLORS = { p_black: '黑棋', p_white: '白棋' };
+const PIECE_CLASSES = { p_black: 'x', p_white: 'o' };
 
 let gameId = null;
 let busy = false;
+let observationFrameSeq = 0;
 
 /* ── API helpers ─────────────────────────────────────────────────── */
 
@@ -47,7 +48,7 @@ function render(session) {
     cell.classList.remove('occupied', 'ai-move');
     if (owner) {
       const piece = document.createElement('div');
-      piece.className = `piece ${owner}`;
+      piece.className = `piece ${PIECE_CLASSES[owner]}`;
       piece.textContent = String(session.roundAge ? session.roundAge[i] || '' : '');
       cell.appendChild(piece);
       cell.classList.add('occupied');
@@ -120,6 +121,22 @@ async function startGame() {
   }
 }
 
+function exportObservation() {
+  const result = $("observation-result");
+  try {
+    const observation = buildDomObservation({
+      gameId: gameId || "moon_demo_001",
+      frameSeq: observationFrameSeq++,
+    });
+    result.textContent = JSON.stringify(observation, null, 2);
+    result.classList.remove("hidden", "error");
+  } catch (err) {
+    result.textContent = `DOM 识别失败: ${err.message}`;
+    result.classList.remove("hidden");
+    result.classList.add("error");
+  }
+}
+
 async function onCellClick(index) {
   if (busy || !gameId) return;
   busy = true;
@@ -137,4 +154,5 @@ async function onCellClick(index) {
 
 $('start-btn').addEventListener('click', startGame);
 $('restart-btn').addEventListener('click', showSetup);
+$('export-observation-btn').addEventListener('click', exportObservation);
 buildBoard();

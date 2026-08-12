@@ -85,7 +85,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-weight: 700;
   color: var(--muted);
 }
+.piece.x,
 .piece.p_black { background: radial-gradient(circle at 35% 30%, #4a5264, var(--black)); color: #b9c4d4; }
+.piece.o,
 .piece.p_white { background: radial-gradient(circle at 35% 30%, #ffffff, #c8cfda); color: #4a5264; }
 
 .result {
@@ -102,3 +104,23 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .result.draw { color: #d2a8ff; }
 
 .restart { width: 100%; margin-top: 0.3rem; }
+
+.vision-actions { margin-top: 1rem; }
+
+.vision-actions button { width: 100%; }
+
+.observation-result {
+  margin-top: 0.8rem;
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: #0d1117;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.8rem;
+  color: var(--text);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.observation-result.error { color: #ff7b72; }

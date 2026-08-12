@@ -37,10 +37,15 @@
       <div id="status" class="status">准备中…</div>
       <div id="board" class="board" aria-label="棋盘"></div>
       <div id="result" class="result hidden"></div>
+      <div class="vision-actions">
+        <button id="export-observation-btn" type="button">导出并识别</button>
+      </div>
+      <pre id="observation-result" class="observation-result hidden" aria-live="polite"></pre>
       <button id="restart-btn" type="button" class="restart hidden">再来一局</button>
     </section>
   </main>
 
+  <script src="js/dom_observation.js"></script>
   <script src="js/game.js"></script>
 </body>
 </html>

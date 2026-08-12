@@ -6,6 +6,7 @@ Two parallel pipelines:
 """
 
 from .base_binding import BaseBinding
+from .dom_binding import DomBinding
 from .exceptions import (
     AmbiguousObservationError,
     BindingError,
@@ -29,6 +30,7 @@ __all__ = [
     "BaseBinding",
     "BindingError",
     "CellClassifier",
+    "DomBinding",
     "ImageBinding",
     "ImageLoadError",
     "InvalidActionMaskError",
