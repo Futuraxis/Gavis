@@ -7,13 +7,13 @@
 ## 目录结构
 
 ```
-rules/                 游戏规则 JSON (v5.1, 零 BUILTIN: texas_holdem / mahjong 纯 alias)
+rules/                 游戏规则 JSON (v5.1, 零 BUILTIN: texas_holdem / mahjong / werewolf 纯 alias)
 layer1_translator/    LLM 规则翻译层 (预留)
 layer2_engine/        游戏引擎 (GameEngine + SolverAdapter)
-layer3_solvers/       求解器 (MCTS/CFR/PPO/PSRO + mahjong/heuristic)
+layer3_solvers/       求解器 (MCTS/CFR/PPO/PSRO + mahjong/heuristic + marl/(QMix/HAPPO/MAAC))
 layer4_interface/     交互界面 (Binding/Encoding/Frontend 按应用分目录)
 demos/                演示入口 + 统一基准
-tests/                测试 (351 cases)
+tests/                测试 (386 cases)
 platform-frontend/    平台前端 (React + Vite + TS, 构建产物 dist/ 已 gitignore)
 data/                 运行时数据 (对局记录 data/matches/, 已 gitignore)
 archive/              原始旧代码只读存档
@@ -52,6 +52,14 @@ docs/                 架构设计 + 六篇合并分析文档
   `last_action` 做 O(1) 局部判定
 - `rules/mahjong.json` 由 `_gen_mahjong.py` 生成（变种/人数由
   `MahjongAdapter` 注入 constants），改规则改生成器再重新生成
+- `rules/werewolf.json` 由 `_gen_werewolf.py` 生成（人数/角色配比由
+  `WerewolfAdapter` 注入 constants）；结算阶段（夜晚/放逐）用
+  `chance` 模板 + `effectMap` 表达（explicit 概率 1.0），轮转映射在
+  adapter 的 `get_current_player`（狼人杀 `speak` 用 text 参数预制能力）
+- **text 参数预制能力**：动作参数声明 `"type": "text"` 时不参与合法
+  动作枚举（占位 `""`），solver 把文本放进 `ActionInstance.params`，
+  effector 经 `$text` 读取（`_build_context` 自动平铺 params）——
+  自由文本发言游戏（狼人杀等）用，规则语言通用能力非游戏特供
 
 ## 求解器注册
 
@@ -80,8 +88,14 @@ python -m layer4_interface.frontend.play_moon_chess.server   # 月亮棋人机�
 python -m layer4_interface.frontend.vision.server            # 视觉识别应用 (8766)
 python -m layer4_interface.frontend.play_gomoku.server       # 随机五子棋人机对弈 (8767)
 python -m layer4_interface.frontend.play_texas_holdem.server # 德州扑克人机对弈 (8768)
+python -m layer4_interface.frontend.play_werewolf.server      # 狼人杀人机对弈 (8771, 需本地 ollama qwen3:8b)
+python -m demos.demo_werewolf_llm                             # 狼人杀 LLM 自对弈演示
 python -m layer4_interface.frontend.platform.server          # 平台前端服务 (8770, 需先 npm run build)
 cd platform-frontend && npm install && npm run build         # 构建平台前端
 cd platform-frontend && npm run dev                          # 平台前端开发模式 (5173, /api 代理到 8770)
 python _gen_mahjong.py                                       # 重新生成 rules/mahjong.json (改 _gen_mahjong.py 后)
+python _gen_werewolf.py                                      # 重新生成 rules/werewolf.json (改 _gen_werewolf.py 后)
+python -m demos.train_marl --game mahjong_2p                # MARL 训练 (moon_chess/texas_holdem/mahjong_2p)
+python -m demos.marl_tournament --game all                  # MARL 单循环赛 (产物 data/marl_tournament/)
+python -m demos.marl_report                                 # 循环赛分析报告 (data/marl_tournament/REPORT.md)
 ```
