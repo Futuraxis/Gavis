@@ -76,13 +76,26 @@ class GameEngine:
         # Validation samples chance nodes, so the rng stream is saved and
         # restored to keep engine construction side-effect free.
         try:
-            artifacts = RulesCompiler().compile(rules)
+            artifacts = RulesCompiler().compile(rules, engine=self)
             rng_state = self.rng.getstate()
             artifacts.validate(self)
             self.rng.setstate(rng_state)
             self._compiled = artifacts
         except Exception:
             self._compiled = None
+
+    def _expand_missing(self, template_ids: list[str], state: dict) -> list:
+        """Interpreter fallback for action templates the compiler skipped.
+
+        Phase filter mirrors ``_interp_legal_actions`` (the compiler's
+        generated phase guards only cover compiled templates).
+        """
+        out = []
+        phase = state['env'].get('phase', '')
+        for tmpl in self._actions:
+            if tmpl['id'] in template_ids and phase in tmpl.get('phases', []):
+                out.extend(self._expand_template(tmpl, state))
+        return out
 
     # ── Initial state ─────────────────────────────────────────────────
 
@@ -307,6 +320,12 @@ class GameEngine:
 
         param_domains: dict[str, list] = {}
         for pname, pdef in tmpl.get('params', {}).items():
+            if pdef.get('type') == 'text':
+                # 自由文本参数（预制能力）：不参与枚举，展开占位空串。
+                # solver 在 apply_action 时把实际文本放入 ActionInstance.params，
+                # effector 经 ctx['$text'] 读取（_build_context 自动平铺 params）。
+                param_domains[pname] = [""]
+                continue
             domain = self._resolve_param_domain(pdef, state, ctx)
             if pdef.get('filter'):
                 filtered = []

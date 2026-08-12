@@ -53,22 +53,126 @@ class _Gen:
     ``view_fns`` maps view name → generated ``_materialize_<view>`` fn name.
     ``view_defs`` maps view name → raw view def (for source-array lookup).
     ``node_scan`` binds ``$node.<occupant|value>`` to the raw array value.
+    ``functions`` are the rules' alias definitions, inlined for ``call``.
     """
 
-    __slots__ = ('constants', 'view_fns', 'view_defs', 'binder', 'node_scan')
+    __slots__ = ('constants', 'view_fns', 'view_defs', 'binder', 'node_scan', 'functions')
 
     def __init__(self, constants: dict, view_fns: dict, view_defs: dict,
-                 binder: dict | None = None, node_scan: bool = False):
+                 binder: dict | None = None, node_scan: bool = False,
+                 functions: dict | None = None):
         self.constants = constants
         self.view_fns = view_fns
         self.view_defs = view_defs
         self.binder = binder or {}
         self.node_scan = node_scan
+        self.functions = functions or {}
 
     # ── Expression → Python ──────────────────────────────────────────
 
+    def _list_guard(self, list_py: str) -> str:
+        """Wrap a list expression: None → [] (mirrors the interpreter's
+        ``not isinstance(items, list) → []`` behaviour for switch misses).
+
+        list/tuple/range 均视为可迭代（解释器对 range 也迭代）。
+        """
+        return f'(({list_py}) if isinstance(({list_py}), (list, tuple, range)) else [])'
+
+    def _with_item(self, as_var: str, body_py: str) -> str:
+        """Bind ``as_var`` (e.g. '$node' → 'node') to the loop variable ``_it``."""
+        return self._Gen_expr(body_py, as_var)
+
+    def _Gen_expr(self, spec: Any, as_var: str) -> str:
+        """Compile ``spec`` with ``as_var`` bound to the loop item ``_it``."""
+        sub = _Gen(self.constants, self.view_fns, self.view_defs,
+                   {**self.binder, as_var.lstrip('$'): '_it'}, functions=self.functions)
+        return sub.expr(spec)
+        """Compile ``spec`` with ``as_var`` bound to the loop item ``_it``."""
+        sub = _Gen(self.constants, self.view_fns, self.view_defs,
+                   {**self.binder, as_var.lstrip('$'): '_it'}, functions=self.functions)
+        return sub.expr(spec)
+
+    def _expr_rest(self, spec: Any) -> str:
+        """Remaining expression types (list primitives + aliases)."""
+        if 'filter' in spec:
+            fspec = spec['filter']
+            list_py = self._list_guard(self.expr(fspec['list']))
+            pred = self._Gen_expr(fspec['where'], fspec.get('as', '$node'))
+            return f'[_it for _it in {list_py} if {pred}]'
+
+        if 'concat' in spec:
+            return '(' + ' + '.join(self.expr(s) for s in spec['concat']) + ')'
+
+        if 'contains' in spec:
+            # [list, item] → item in list
+            return f'({self.expr(spec["contains"][1])} in {self._list_guard(self.expr(spec["contains"][0]))})'
+
+        if 'map' in spec:
+            mspec = spec['map']
+            list_py = self._list_guard(self.expr(mspec['list']))
+            body = self._Gen_expr(mspec['expr'], mspec.get('as', '$node'))
+            return f'[{body} for _it in {list_py}]'
+
+        if 'range' in spec:
+            rspec = spec['range']
+            return f'range({self.expr(rspec["from"])}, {self.expr(rspec["to"])})'
+
+        if 'any' in spec or 'all' in spec:
+            key = 'any' if 'any' in spec else 'all'
+            aspec = spec[key]
+            list_py = self._list_guard(self.expr(aspec['list']))
+            pred = self._Gen_expr(aspec['where'], aspec.get('as', '$node'))
+            return f'({key}(bool({pred}) for _it in {list_py}))'
+
+        if 'group' in spec:
+            # {'group': {'list': ..., 'by': ...}} → [{'key','count','items'}...]
+            # （保序：dict.fromkeys 去重保持首次出现顺序）
+            gspec = spec['group']
+            list_py = self.expr(gspec['list'])
+            by_py: str | None = None
+            if 'by' in gspec:
+                by_py = self._Gen_expr(gspec['by'], '$item')
+            if by_py is None:
+                keys_py = f'dict.fromkeys({self._list_guard(list_py)})'
+                pred_py = '_x == _k'
+            else:
+                keys_py = f'dict.fromkeys(({by_py} for _it in {self._list_guard(list_py)}))'
+                pred_py = f'({by_py}) == _k'
+            return (
+                f'[{{"key": _k, '
+                f'"count": sum(1 for _x in {self._list_guard(list_py)} if {pred_py}), '
+                f'"items": [_x for _x in {self._list_guard(list_py)} if {pred_py}]}} '
+                f'for _k in {keys_py}]'
+            )
+
+        if 'at' in spec:
+            arr_py = self.expr(spec['at'][0])
+            idx_py = self.expr(spec['at'][1])
+            return f'(({arr_py})[{idx_py}] if isinstance({idx_py}, int) and 0 <= {idx_py} < len({arr_py}) else None)'
+
+        if 'call' in spec:
+            fn_name = spec['call'][0]
+            defn = self.functions.get(fn_name)
+            if defn is None or not isinstance(defn, dict):
+                raise UnsupportedShape(f'call:{fn_name}')
+            params = defn.get('params', [])
+            args = spec['call'][1:]
+            if len(args) != len(params):
+                raise UnsupportedShape(f'call:{fn_name} arity')
+            # 内联别名：参数表达式编译后绑定进别名 expr 的 binder
+            sub = _Gen(self.constants, self.view_fns, self.view_defs,
+                       dict(self.binder), functions=self.functions)
+            for pname, arg in zip(params, args):
+                sub.binder[pname] = f'({self.expr(arg)})'
+            return sub.expr(defn['expr'])
+
+        raise UnsupportedShape(spec)
+
     def expr(self, spec: Any) -> str:
         """Compile a static expression spec into a Python expression string."""
+        if isinstance(spec, list):
+            # 字面量列表：逐元素编译（expr_eval 对 list 逐元素求值）
+            return '[' + ', '.join(self.expr(s) for s in spec) + ']'
         if not isinstance(spec, dict):
             return repr(spec)
 
@@ -82,7 +186,8 @@ class _Gen:
             target, field = spec['get']
             head = (self.expr(target) if isinstance(target, dict)
                     else self._path(target))
-            return f'{head}[{field!r}]'
+            # dict 守卫：非 dict 目标返回 None（与解释器一致）
+            return f'(({head})[{field!r}] if isinstance(({head}), dict) else None)'
 
         if 'template' in spec:
             parts: list[str] = []
@@ -133,12 +238,12 @@ class _Gen:
                 arg = arg['query']
             if isinstance(arg, dict) and arg.get('view', '') in self.view_fns:
                 return self._count_py(arg)
-            return f'len({self.expr(arg)})'
+            return f'len({self._list_guard(self.expr(arg))})'
 
         if 'query' in spec:
             return self._query_py(spec['query'])
 
-        raise UnsupportedShape(spec)
+        return self._expr_rest(spec)
 
     def _path(self, path: str | list) -> str:
         """Compile a ``var``/``get`` path into a Python access expression."""
@@ -174,7 +279,9 @@ class _Gen:
 
         head = self.binder.get(first)
         if head is None:
-            raise UnsupportedShape(path)
+            # 未知名 → 引擎 ctx 的数组平铺引用（$hand_p0 → state['_arrays']['hand_p0']）；
+            # probe 验证兜底：编译产物与解释器不一致会被禁用
+            head = f"state['_arrays'].get({first!r}, [])"
         for r in rest:
             head = self._field_get(head, r)
         return head
@@ -368,8 +475,20 @@ def _gen_is_terminal(terminal: list[dict], constants: dict,
 
 
 def _gen_legal_actions(actions: list[dict], queries: dict, constants: dict,
-                       view_fns: dict, view_defs: dict) -> str:
-    """Generate ``legal_actions(state)`` for the supported template shape."""
+                       view_fns: dict, view_defs: dict,
+                       functions: dict | None = None) -> str:
+    """Generate ``legal_actions(state)`` for the supported template shapes.
+
+    Per-template compilation: templates outside the supported subset are
+    skipped and re-expanded at runtime by the engine's interpreter
+    (``_engine._expand_missing``), so one unsupported action no longer
+    disables the compiler for the whole ruleset.  Supported shapes:
+      - params: 0 or 1 parameter; domain is a query ``ref`` or a dynamic
+        ``array`` expression
+      - ``legal``: ``const true`` or any compilable expression
+      - expressions: const/var/get/template/switch/comparisons/boolean/
+        arith/count/query/filter/at + inlined rule-alias ``call``
+    """
     if not actions:
         raise UnsupportedShape('no actions')
     lines = [
@@ -377,46 +496,97 @@ def _gen_legal_actions(actions: list[dict], queries: dict, constants: dict,
         '    env = state["env"]',
         '    _out = []',
     ]
+    skipped: list[str] = []
     for tmpl in actions:
-        params = tmpl.get('params', {})
-        if len(params) != 1:
-            raise UnsupportedShape(f'action: {tmpl["id"]} params != 1')
-        if tmpl.get('legal', {'const': True}) != {'const': True}:
-            raise UnsupportedShape(f'action: {tmpl["id"]} legal not const true')
-        phases = tmpl.get('phases', [])
-        if not phases or not all(isinstance(p, str) for p in phases):
-            raise UnsupportedShape(f'action: {tmpl["id"]} phases')
-
-        pname, pdef = next(iter(params.items()))
-        domain = pdef.get('domain', [])
-        if not (isinstance(domain, dict) and 'ref' in domain):
-            raise UnsupportedShape(f'action: {tmpl["id"]} domain not query ref')
-        qname = domain['ref']
-        qdef = queries.get(qname)
-        if qdef is None:
-            raise UnsupportedShape(f'action: {tmpl["id"]} unknown query {qname}')
-
-        actor = tmpl.get('actor', {'var': '$env.turn'})
-        ck = tmpl.get('canonicalKey', {'template': tmpl['id']})
-        bind = {'env': 'env', 'state': 'state', 'players': 'players',
-                'node': 'node', 'cell': 'node', pname: 'node'}
-        gen = _Gen(constants, view_fns, view_defs, bind)
         try:
-            actor_py = gen.expr(actor)
-            ck_py = gen.expr(ck)
-            qpy = gen._query_py({'view': qdef.get('view', ''),  # noqa: SLF001
-                                 'filter': qdef.get('filter') or qdef.get('where')})
+            lines.extend(_gen_one_template(tmpl, queries, constants, view_fns, view_defs, functions))
         except UnsupportedShape as exc:
-            raise UnsupportedShape(f'action: {tmpl["id"]}: {exc}') from exc
-
-        phase_guard = ' or '.join(f"env['phase'] == {p!r}" for p in phases)
-        lines.append(f'    if {phase_guard}:')
-        lines.append(f'        for node in {qpy}:')
-        lines.append(f"            _out.append(ActionInstance({tmpl['id']!r}, "
-                     f"{tmpl.get('type', 'action')!r}, {actor_py}, "
-                     f"{{{pname!r}: node}}, {ck_py}))")
+            skipped.append(tmpl['id'])
+    if not skipped and len(lines) == 3:
+        raise UnsupportedShape('no supported action templates')
+    if skipped:
+        lines.append(f'    _out.extend(_engine._expand_missing({skipped!r}, state))')
     lines.append('    return _out')
     return '\n'.join(lines) + '\n'
+
+
+def _gen_one_template(tmpl: dict, queries: dict, constants: dict,
+                      view_fns: dict, view_defs: dict,
+                      functions: dict | None = None) -> list[str]:
+    """Generate the body lines for one action template (raises UnsupportedShape)."""
+    params = tmpl.get('params', {})
+    if len(params) > 1:
+        raise UnsupportedShape(f'action: {tmpl["id"]} params > 1')
+    phases = tmpl.get('phases', [])
+    if not phases or not all(isinstance(p, str) for p in phases):
+        raise UnsupportedShape(f'action: {tmpl["id"]} phases')
+
+    actor = tmpl.get('actor', {'var': '$env.turn'})
+    ck = tmpl.get('canonicalKey', {'template': tmpl['id']})
+    legal = tmpl.get('legal', {'const': True})
+    bind = {'env': 'env', 'state': 'state', 'players': 'players',
+            'node': 'node', 'cell': 'node'}
+    for pname in params:
+        bind[pname] = 'node'
+
+    gen = _Gen(constants, view_fns, view_defs, bind, functions=functions)
+    try:
+        actor_py = gen.expr(actor)
+        ck_py = gen.expr(ck)
+        legal_py = gen.expr(legal) if legal != {'const': True} else None
+    except UnsupportedShape as exc:
+        raise UnsupportedShape(f'action: {tmpl["id"]}: {exc}') from exc
+
+    # 参数 domain：query ref（视图实体）/ 动态 array 表达式 / 任意表达式
+    param_py: str | None = None
+    param_name: str | None = None
+    pre_lines: list[str] = []
+    if params:
+        pname, pdef = next(iter(params.items()))
+        domain = pdef.get('domain', [])
+        if isinstance(domain, dict) and 'ref' in domain:
+            qname = domain['ref']
+            qdef = queries.get(qname)
+            if qdef is None:
+                raise UnsupportedShape(f'action: {tmpl["id"]} unknown query {qname}')
+            try:
+                param_py = gen._query_py({'view': qdef.get('view', ''),  # noqa: SLF001
+                                          'filter': qdef.get('filter') or qdef.get('where')})
+            except UnsupportedShape as exc:
+                raise UnsupportedShape(f'action: {tmpl["id"]}: {exc}') from exc
+        elif isinstance(domain, dict) and 'array' in domain:
+            try:
+                arr_py = gen.expr(domain['array'])
+            except UnsupportedShape as exc:
+                raise UnsupportedShape(f'action: {tmpl["id"]}: {exc}') from exc
+            param_py = f'state["_arrays"].get({arr_py}) or []'
+        elif isinstance(domain, dict) and 'expr' in domain:
+            try:
+                expr_py = gen.expr(domain['expr'])
+            except UnsupportedShape as exc:
+                raise UnsupportedShape(f'action: {tmpl["id"]}: {exc}') from exc
+            pre_lines.append(f'        _dom = {expr_py}')
+            param_py = '_dom if isinstance(_dom, list) else ([_dom] if _dom is not None else [])'
+        else:
+            raise UnsupportedShape(f'action: {tmpl["id"]} domain not query ref / array / expr')
+        param_name = pname
+
+    phase_guard = ' or '.join(f"env['phase'] == {p!r}" for p in phases)
+    lines = [f'    if {phase_guard}:']
+    if param_name is None:
+        if legal_py is not None:
+            lines.append(f'        if {legal_py}:')
+        lines.append(f"            _out.append(ActionInstance({tmpl['id']!r}, "
+                     f"{tmpl.get('type', 'action')!r}, {actor_py}, {{}}, {ck_py}))")
+        return lines
+    lines.extend(pre_lines)
+    lines.append(f'        for node in {param_py}:')
+    if legal_py is not None:
+        lines.append(f'            if {legal_py}:')
+    lines.append(f"                _out.append(ActionInstance({tmpl['id']!r}, "
+                 f"{tmpl.get('type', 'action')!r}, {actor_py}, "
+                 f"{{{param_name!r}: node}}, {ck_py}))")
+    return lines
 
 
 def _gen_chance(chance: list[dict], constants: dict,
@@ -500,8 +670,10 @@ class CompiledArtifacts:
                 if self.is_terminal is not None and self.is_terminal(p) != engine.is_terminal(p):
                     self.is_terminal = None
                 if self.legal_actions is not None:
-                    mine = [a.canonical_key for a in self.legal_actions(p)]
-                    theirs = [a.canonical_key for a in engine.get_legal_actions(p)]
+                    # 集合语义对比：部分编译时 fallback 展开的顺序可能与
+                    # 解释器不同，但动作集合必须完全一致
+                    mine = sorted(a.canonical_key for a in self.legal_actions(p))
+                    theirs = sorted(a.canonical_key for a in engine.get_legal_actions(p))
                     if mine != theirs:
                         self.legal_actions = None
                 if self.chance_outcomes is not None:
@@ -532,11 +704,13 @@ class CompiledArtifacts:
 class RulesCompiler:
     """Compiles a rules dict into probe-validated native functions."""
 
-    def compile(self, rules: dict) -> CompiledArtifacts:
+    def compile(self, rules: dict, engine=None) -> CompiledArtifacts:
         constants = rules.get('constants', {})
         artifacts = CompiledArtifacts()
         src_parts = ['def _s(x):\n    return "" if x is None else str(x)\n']
         view_fns: dict[str, str] = {}
+        # 供部分编译的运行时 fallback 使用（_expand_missing）
+        self._engine_ref = engine
 
         for vname, vdef in rules.get('derivedViews', {}).items():
             try:
@@ -555,7 +729,8 @@ class RulesCompiler:
         try:
             src_parts.append(_gen_legal_actions(rules.get('actions', []),
                                                 rules.get('queries', {}),
-                                                constants, view_fns, artifacts._view_defs))
+                                                constants, view_fns, artifacts._view_defs,
+                                                rules.get('functions', {})))
         except UnsupportedShape:
             pass
         try:
@@ -568,6 +743,8 @@ class RulesCompiler:
             'ActionInstance': ActionInstance,
             'ChanceOutcome': ChanceOutcome,
         }
+        if self._engine_ref is not None:
+            namespace['_engine'] = self._engine_ref
         source = '\n'.join(src_parts)
         exec(compile(source, '<rules_codegen>', 'exec'), namespace)  # noqa: S102 — generated
         for vname, fn_name in view_fns.items():
