@@ -1,0 +1,4985 @@
+{
+  "meta": {
+    "name": "werewolf",
+    "version": "5.1",
+    "description": "Werewolf 9-player (3狼人/3村民/1预言家/1女巫/1猎人) win=side"
+  },
+  "players": [
+    {
+      "id": "p0",
+      "type": "player"
+    },
+    {
+      "id": "p1",
+      "type": "player"
+    },
+    {
+      "id": "p2",
+      "type": "player"
+    },
+    {
+      "id": "p3",
+      "type": "player"
+    },
+    {
+      "id": "p4",
+      "type": "player"
+    },
+    {
+      "id": "p5",
+      "type": "player"
+    },
+    {
+      "id": "p6",
+      "type": "player"
+    },
+    {
+      "id": "p7",
+      "type": "player"
+    },
+    {
+      "id": "p8",
+      "type": "player"
+    }
+  ],
+  "groundState": {
+    "roles": {
+      "type": "array",
+      "length": {
+        "expr": "9"
+      },
+      "mutable": true
+    },
+    "alive": {
+      "type": "array",
+      "length": {
+        "expr": "9"
+      },
+      "mutable": true
+    },
+    "speechLog": {
+      "type": "array",
+      "mutable": true
+    },
+    "voteLog": {
+      "type": "array",
+      "mutable": true
+    },
+    "deathsArr": {
+      "type": "array",
+      "mutable": true
+    },
+    "env": {
+      "type": "env",
+      "fields": {
+        "phase": {
+          "type": "string",
+          "initial": "deal_0"
+        },
+        "turn": {
+          "type": "player_id",
+          "initial": "p0"
+        },
+        "round": {
+          "type": "int",
+          "initial": 1
+        },
+        "speechIdx": {
+          "type": "int",
+          "initial": 0
+        },
+        "voteIdx": {
+          "type": "int",
+          "initial": 0
+        },
+        "nightKill": {
+          "type": "string",
+          "initial": null
+        },
+        "poisonTarget": {
+          "type": "string",
+          "initial": null
+        },
+        "guardTarget": {
+          "type": "string",
+          "initial": null
+        },
+        "guardLastTarget": {
+          "type": "string",
+          "initial": null
+        },
+        "witchSavedTarget": {
+          "type": "string",
+          "initial": null
+        },
+        "witchSaveUsed": {
+          "type": "int",
+          "initial": 0
+        },
+        "witchPoisonUsed": {
+          "type": "int",
+          "initial": 0
+        },
+        "seerResult": {
+          "type": "string",
+          "initial": null
+        },
+        "hunterShoot": {
+          "type": "string",
+          "initial": null
+        },
+        "lynched": {
+          "type": "string",
+          "initial": null
+        },
+        "winner": {
+          "type": "string",
+          "initial": null
+        }
+      }
+    }
+  },
+  "derivedViews": {
+    "player": {
+      "from": {
+        "type": "literal",
+        "list": {
+          "var": "player_ids"
+        }
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "role": {
+      "from": {
+        "type": "literal",
+        "list": {
+          "var": "role_pool"
+        }
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "intent": {
+      "from": {
+        "type": "literal",
+        "list": {
+          "var": "intents"
+        }
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "resolve": {
+      "from": {
+        "type": "literal",
+        "list": {
+          "var": "resolve_outcomes"
+        }
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "shoot_target": {
+      "from": {
+        "type": "literal",
+        "list": {
+          "var": "shoot_targets"
+        }
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    }
+  },
+  "constants": {
+    "player_ids": [
+      "p0",
+      "p1",
+      "p2",
+      "p3",
+      "p4",
+      "p5",
+      "p6",
+      "p7",
+      "p8"
+    ],
+    "role_pool": [
+      "wolf",
+      "wolf",
+      "wolf",
+      "villager",
+      "villager",
+      "villager",
+      "seer",
+      "witch",
+      "hunter"
+    ],
+    "intents": [
+      "claim",
+      "accuse",
+      "defend",
+      "question",
+      "persuade"
+    ],
+    "resolve_outcomes": [
+      "resolve"
+    ],
+    "shoot_targets": [
+      "p0",
+      "p1",
+      "p2",
+      "p3",
+      "p4",
+      "p5",
+      "p6",
+      "p7",
+      "p8",
+      "pass"
+    ],
+    "win_mode": "side",
+    "first_night_protect": 1,
+    "witch_self_save": 0,
+    "hunter_shoots_when_lynched": 1
+  },
+  "queries": {
+    "unassigned_roles": {
+      "view": "role",
+      "filter": {
+        "lt": [
+          {
+            "count": {
+              "filter": {
+                "list": {
+                  "var": "$roles"
+                },
+                "as": "$r",
+                "where": {
+                  "eq": [
+                    {
+                      "var": "$r"
+                    },
+                    {
+                      "get": [
+                        {
+                          "var": "$node"
+                        },
+                        "id"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "count": {
+              "filter": {
+                "list": {
+                  "var": "$constants.role_pool"
+                },
+                "as": "$p",
+                "where": {
+                  "eq": [
+                    {
+                      "var": "$p"
+                    },
+                    {
+                      "get": [
+                        {
+                          "var": "$node"
+                        },
+                        "id"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "alive_players": {
+      "view": "player",
+      "filter": {
+        "eq": [
+          {
+            "at": [
+              {
+                "var": "$alive"
+              },
+              {
+                "get": [
+                  {
+                    "var": "$node"
+                  },
+                  "_index"
+                ]
+              }
+            ]
+          },
+          {
+            "const": 1
+          }
+        ]
+      }
+    },
+    "intents": {
+      "view": "intent"
+    },
+    "resolves": {
+      "view": "resolve"
+    },
+    "shoot_targets": {
+      "view": "shoot_target"
+    }
+  },
+  "functions": {
+    "player_index": {
+      "description": "Index of player p within player_ids (count of smaller ids)",
+      "params": [
+        "p"
+      ],
+      "expr": {
+        "count": {
+          "filter": {
+            "list": {
+              "var": "$constants.player_ids"
+            },
+            "as": "$n",
+            "where": {
+              "lt": [
+                {
+                  "var": "$n"
+                },
+                {
+                  "var": "$p"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "alive_count": {
+      "description": "Number of alive players",
+      "params": [],
+      "expr": {
+        "count": {
+          "filter": {
+            "list": {
+              "var": "$alive"
+            },
+            "as": "$v",
+            "where": {
+              "eq": [
+                {
+                  "var": "$v"
+                },
+                {
+                  "const": 1
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "alive_wolves": {
+      "params": [],
+      "expr": {
+        "count": {
+          "query": {
+            "view": "player",
+            "filter": {
+              "and": [
+                {
+                  "eq": [
+                    {
+                      "at": [
+                        {
+                          "var": "$alive"
+                        },
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "_index"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "const": 1
+                    }
+                  ]
+                },
+                {
+                  "eq": [
+                    {
+                      "at": [
+                        {
+                          "var": "$roles"
+                        },
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "_index"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "const": "wolf"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "alive_villagers": {
+      "params": [],
+      "expr": {
+        "count": {
+          "query": {
+            "view": "player",
+            "filter": {
+              "and": [
+                {
+                  "eq": [
+                    {
+                      "at": [
+                        {
+                          "var": "$alive"
+                        },
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "_index"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "const": 1
+                    }
+                  ]
+                },
+                {
+                  "eq": [
+                    {
+                      "at": [
+                        {
+                          "var": "$roles"
+                        },
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "_index"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "const": "villager"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "alive_gods": {
+      "params": [],
+      "expr": {
+        "count": {
+          "query": {
+            "view": "player",
+            "filter": {
+              "or": [
+                {
+                  "and": [
+                    {
+                      "eq": [
+                        {
+                          "at": [
+                            {
+                              "var": "$alive"
+                            },
+                            {
+                              "get": [
+                                {
+                                  "var": "$node"
+                                },
+                                "_index"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "const": 1
+                        }
+                      ]
+                    },
+                    {
+                      "eq": [
+                        {
+                          "at": [
+                            {
+                              "var": "$roles"
+                            },
+                            {
+                              "get": [
+                                {
+                                  "var": "$node"
+                                },
+                                "_index"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "const": "seer"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "and": [
+                    {
+                      "eq": [
+                        {
+                          "at": [
+                            {
+                              "var": "$alive"
+                            },
+                            {
+                              "get": [
+                                {
+                                  "var": "$node"
+                                },
+                                "_index"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "const": 1
+                        }
+                      ]
+                    },
+                    {
+                      "eq": [
+                        {
+                          "at": [
+                            {
+                              "var": "$roles"
+                            },
+                            {
+                              "get": [
+                                {
+                                  "var": "$node"
+                                },
+                                "_index"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "const": "witch"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "and": [
+                    {
+                      "eq": [
+                        {
+                          "at": [
+                            {
+                              "var": "$alive"
+                            },
+                            {
+                              "get": [
+                                {
+                                  "var": "$node"
+                                },
+                                "_index"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "const": 1
+                        }
+                      ]
+                    },
+                    {
+                      "eq": [
+                        {
+                          "at": [
+                            {
+                              "var": "$roles"
+                            },
+                            {
+                              "get": [
+                                {
+                                  "var": "$node"
+                                },
+                                "_index"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "const": "hunter"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "and": [
+                    {
+                      "eq": [
+                        {
+                          "at": [
+                            {
+                              "var": "$alive"
+                            },
+                            {
+                              "get": [
+                                {
+                                  "var": "$node"
+                                },
+                                "_index"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "const": 1
+                        }
+                      ]
+                    },
+                    {
+                      "eq": [
+                        {
+                          "at": [
+                            {
+                              "var": "$roles"
+                            },
+                            {
+                              "get": [
+                                {
+                                  "var": "$node"
+                                },
+                                "_index"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "const": "guard"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "alive_good": {
+      "description": "Alive non-wolves (used by total win mode)",
+      "params": [],
+      "expr": {
+        "count": {
+          "query": {
+            "view": "player",
+            "filter": {
+              "and": [
+                {
+                  "eq": [
+                    {
+                      "at": [
+                        {
+                          "var": "$alive"
+                        },
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "_index"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "const": 1
+                    }
+                  ]
+                },
+                {
+                  "neq": [
+                    {
+                      "at": [
+                        {
+                          "var": "$roles"
+                        },
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "_index"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "const": "wolf"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "most_voted": {
+      "description": "Most-voted target THIS round (first-voted wins ties)",
+      "params": [],
+      "expr": {
+        "get": [
+          {
+            "at": [
+              {
+                "sort": {
+                  "list": {
+                    "group": {
+                      "list": {
+                        "filter": {
+                          "list": {
+                            "var": "$voteLog"
+                          },
+                          "as": "$v",
+                          "where": {
+                            "eq": [
+                              {
+                                "get": [
+                                  {
+                                    "var": "$v"
+                                  },
+                                  "round"
+                                ]
+                              },
+                              {
+                                "var": "$env.round"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "by": {
+                        "get": [
+                          {
+                            "var": "$item"
+                          },
+                          "target"
+                        ]
+                      }
+                    }
+                  },
+                  "by": {
+                    "get": [
+                      {
+                        "var": "$node"
+                      },
+                      "count"
+                    ]
+                  },
+                  "reverse": true
+                }
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "key"
+        ]
+      }
+    },
+    "seer_alive": {
+      "params": [],
+      "expr": {
+        "count": {
+          "query": {
+            "view": "player",
+            "filter": {
+              "and": [
+                {
+                  "eq": [
+                    {
+                      "at": [
+                        {
+                          "var": "$alive"
+                        },
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "_index"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "const": 1
+                    }
+                  ]
+                },
+                {
+                  "eq": [
+                    {
+                      "at": [
+                        {
+                          "var": "$roles"
+                        },
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "_index"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "const": "seer"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "witch_alive": {
+      "params": [],
+      "expr": {
+        "count": {
+          "query": {
+            "view": "player",
+            "filter": {
+              "and": [
+                {
+                  "eq": [
+                    {
+                      "at": [
+                        {
+                          "var": "$alive"
+                        },
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "_index"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "const": 1
+                    }
+                  ]
+                },
+                {
+                  "eq": [
+                    {
+                      "at": [
+                        {
+                          "var": "$roles"
+                        },
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "_index"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "const": "witch"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "hunter_alive": {
+      "params": [],
+      "expr": {
+        "count": {
+          "query": {
+            "view": "player",
+            "filter": {
+              "and": [
+                {
+                  "eq": [
+                    {
+                      "at": [
+                        {
+                          "var": "$alive"
+                        },
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "_index"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "const": 1
+                    }
+                  ]
+                },
+                {
+                  "eq": [
+                    {
+                      "at": [
+                        {
+                          "var": "$roles"
+                        },
+                        {
+                          "get": [
+                            {
+                              "var": "$node"
+                            },
+                            "_index"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "const": "hunter"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "actions": [
+    {
+      "id": "kill",
+      "type": "night",
+      "phases": [
+        "night_wolf"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {
+        "target": {
+          "view": "player",
+          "domain": {
+            "ref": "alive_players"
+          }
+        }
+      },
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_kill",
+      "canonicalKey": {
+        "template": "kill:{$target.id}"
+      }
+    },
+    {
+      "id": "heal",
+      "type": "night",
+      "phases": [
+        "night_witch"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {
+        "target": {
+          "view": "player",
+          "domain": {
+            "expr": [
+              {
+                "var": "$env.nightKill"
+              }
+            ]
+          }
+        }
+      },
+      "legal": {
+        "and": [
+          {
+            "eq": [
+              {
+                "var": "$env.witchSaveUsed"
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          {
+            "neq": [
+              {
+                "var": "$env.nightKill"
+              },
+              {
+                "const": null
+              }
+            ]
+          }
+        ]
+      },
+      "effectRef": "do_heal",
+      "canonicalKey": {
+        "template": "heal:{$target}"
+      }
+    },
+    {
+      "id": "poison",
+      "type": "night",
+      "phases": [
+        "night_witch"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {
+        "target": {
+          "view": "player",
+          "domain": {
+            "ref": "alive_players"
+          }
+        }
+      },
+      "legal": {
+        "eq": [
+          {
+            "var": "$env.witchPoisonUsed"
+          },
+          {
+            "const": 0
+          }
+        ]
+      },
+      "effectRef": "do_poison",
+      "canonicalKey": {
+        "template": "poison:{$target.id}"
+      }
+    },
+    {
+      "id": "check",
+      "type": "night",
+      "phases": [
+        "night_seer"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {
+        "target": {
+          "view": "player",
+          "domain": {
+            "ref": "alive_players"
+          }
+        }
+      },
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_check",
+      "canonicalKey": {
+        "template": "check:{$target.id}"
+      }
+    },
+    {
+      "id": "shoot",
+      "type": "night",
+      "phases": [
+        "night_hunter"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {
+        "target": {
+          "view": "shoot_target",
+          "domain": {
+            "ref": "shoot_targets"
+          }
+        }
+      },
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_hunter_shoot",
+      "canonicalKey": {
+        "template": "shoot:{$target.id}"
+      }
+    },
+    {
+      "id": "shoot_lynched",
+      "type": "night",
+      "phases": [
+        "vote_hunter"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {
+        "target": {
+          "view": "shoot_target",
+          "domain": {
+            "ref": "shoot_targets"
+          }
+        }
+      },
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_vote_hunter_shoot",
+      "canonicalKey": {
+        "template": "shoot:{$target.id}"
+      }
+    },
+    {
+      "id": "speak",
+      "type": "speech",
+      "phases": [
+        "day_speech"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {
+        "intent": {
+          "view": "intent",
+          "domain": {
+            "ref": "intents"
+          }
+        },
+        "text": {
+          "type": "text"
+        }
+      },
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_speak",
+      "canonicalKey": {
+        "template": "speak:{$intent.id}"
+      }
+    },
+    {
+      "id": "vote",
+      "type": "vote",
+      "phases": [
+        "day_vote"
+      ],
+      "actor": {
+        "var": "$env.turn"
+      },
+      "params": {
+        "target": {
+          "view": "player",
+          "domain": {
+            "ref": "alive_players"
+          }
+        }
+      },
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_vote",
+      "canonicalKey": {
+        "template": "vote:{$target.id}"
+      }
+    }
+  ],
+  "chance": [
+    {
+      "id": "deal_0",
+      "phases": [
+        "deal_0"
+      ],
+      "params": {
+        "role": {
+          "view": "role",
+          "domain": {
+            "ref": "unassigned_roles"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "role"
+        }
+      },
+      "effectRef": "do_deal_0",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_1",
+      "phases": [
+        "deal_1"
+      ],
+      "params": {
+        "role": {
+          "view": "role",
+          "domain": {
+            "ref": "unassigned_roles"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "role"
+        }
+      },
+      "effectRef": "do_deal_1",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_2",
+      "phases": [
+        "deal_2"
+      ],
+      "params": {
+        "role": {
+          "view": "role",
+          "domain": {
+            "ref": "unassigned_roles"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "role"
+        }
+      },
+      "effectRef": "do_deal_2",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_3",
+      "phases": [
+        "deal_3"
+      ],
+      "params": {
+        "role": {
+          "view": "role",
+          "domain": {
+            "ref": "unassigned_roles"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "role"
+        }
+      },
+      "effectRef": "do_deal_3",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_4",
+      "phases": [
+        "deal_4"
+      ],
+      "params": {
+        "role": {
+          "view": "role",
+          "domain": {
+            "ref": "unassigned_roles"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "role"
+        }
+      },
+      "effectRef": "do_deal_4",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_5",
+      "phases": [
+        "deal_5"
+      ],
+      "params": {
+        "role": {
+          "view": "role",
+          "domain": {
+            "ref": "unassigned_roles"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "role"
+        }
+      },
+      "effectRef": "do_deal_5",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_6",
+      "phases": [
+        "deal_6"
+      ],
+      "params": {
+        "role": {
+          "view": "role",
+          "domain": {
+            "ref": "unassigned_roles"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "role"
+        }
+      },
+      "effectRef": "do_deal_6",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_7",
+      "phases": [
+        "deal_7"
+      ],
+      "params": {
+        "role": {
+          "view": "role",
+          "domain": {
+            "ref": "unassigned_roles"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "role"
+        }
+      },
+      "effectRef": "do_deal_7",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "deal_8",
+      "phases": [
+        "deal_8"
+      ],
+      "params": {
+        "role": {
+          "view": "role",
+          "domain": {
+            "ref": "unassigned_roles"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "role"
+        }
+      },
+      "effectRef": "do_deal_8",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "night_end",
+      "phases": [
+        "night_end"
+      ],
+      "params": {
+        "resolve": {
+          "view": "resolve",
+          "domain": {
+            "ref": "resolves"
+          }
+        }
+      },
+      "probability": {
+        "explicit": [
+          {
+            "outcome": "resolve",
+            "prob": 1.0
+          }
+        ]
+      },
+      "effectMap": {
+        "resolve": "do_night_end"
+      },
+      "canonicalKey": {
+        "template": "night:{outcome}"
+      }
+    },
+    {
+      "id": "vote_resolve",
+      "phases": [
+        "vote_resolve"
+      ],
+      "params": {
+        "resolve": {
+          "view": "resolve",
+          "domain": {
+            "ref": "resolves"
+          }
+        }
+      },
+      "probability": {
+        "explicit": [
+          {
+            "outcome": "resolve",
+            "prob": 1.0
+          }
+        ]
+      },
+      "effectMap": {
+        "resolve": "do_vote_resolve"
+      },
+      "canonicalKey": {
+        "template": "resolve:{outcome}"
+      }
+    }
+  ],
+  "effectors": {
+    "do_deal_0": {
+      "description": "Deal role to p0",
+      "ops": [
+        {
+          "op": "append",
+          "array": "roles",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "alive",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_1"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p1"
+          }
+        }
+      ]
+    },
+    "do_deal_1": {
+      "description": "Deal role to p1",
+      "ops": [
+        {
+          "op": "append",
+          "array": "roles",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "alive",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_2"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p2"
+          }
+        }
+      ]
+    },
+    "do_deal_2": {
+      "description": "Deal role to p2",
+      "ops": [
+        {
+          "op": "append",
+          "array": "roles",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "alive",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_3"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p3"
+          }
+        }
+      ]
+    },
+    "do_deal_3": {
+      "description": "Deal role to p3",
+      "ops": [
+        {
+          "op": "append",
+          "array": "roles",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "alive",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_4"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p4"
+          }
+        }
+      ]
+    },
+    "do_deal_4": {
+      "description": "Deal role to p4",
+      "ops": [
+        {
+          "op": "append",
+          "array": "roles",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "alive",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_5"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p5"
+          }
+        }
+      ]
+    },
+    "do_deal_5": {
+      "description": "Deal role to p5",
+      "ops": [
+        {
+          "op": "append",
+          "array": "roles",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "alive",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_6"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p6"
+          }
+        }
+      ]
+    },
+    "do_deal_6": {
+      "description": "Deal role to p6",
+      "ops": [
+        {
+          "op": "append",
+          "array": "roles",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "alive",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_7"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p7"
+          }
+        }
+      ]
+    },
+    "do_deal_7": {
+      "description": "Deal role to p7",
+      "ops": [
+        {
+          "op": "append",
+          "array": "roles",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "alive",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "deal_8"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p8"
+          }
+        }
+      ]
+    },
+    "do_deal_8": {
+      "description": "Deal role to p8",
+      "ops": [
+        {
+          "op": "append",
+          "array": "roles",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "append",
+          "array": "alive",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "night_wolf"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "round",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "const": "p0"
+          }
+        }
+      ]
+    },
+    "do_kill": {
+      "description": "Wolves kill one player",
+      "ops": [
+        {
+          "op": "setEnv",
+          "key": "nightKill",
+          "value": {
+            "get": [
+              {
+                "var": "$target"
+              },
+              "id"
+            ]
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "gt": [
+              {
+                "add": [
+                  {
+                    "sub": [
+                      {
+                        "const": 1
+                      },
+                      {
+                        "var": "$env.witchSaveUsed"
+                      }
+                    ]
+                  },
+                  {
+                    "sub": [
+                      {
+                        "const": 1
+                      },
+                      {
+                        "var": "$env.witchPoisonUsed"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "night_witch"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "const": "p0"
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "gt": [
+              {
+                "call": [
+                  "seer_alive"
+                ]
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "night_seer"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "const": "p0"
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "var": "$env.phase"
+              },
+              {
+                "const": "night_wolf"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "night_end"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_heal": {
+      "description": "Witch saves the night-killed player",
+      "ops": [
+        {
+          "op": "setEnv",
+          "key": "witchSavedTarget",
+          "value": {
+            "var": "$env.nightKill"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "witchSaveUsed",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "gt": [
+              {
+                "call": [
+                  "seer_alive"
+                ]
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "night_seer"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "const": "p0"
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "var": "$env.phase"
+              },
+              {
+                "const": "night_witch"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "night_end"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_poison": {
+      "description": "Witch poisons one player",
+      "ops": [
+        {
+          "op": "setEnv",
+          "key": "poisonTarget",
+          "value": {
+            "get": [
+              {
+                "var": "$target"
+              },
+              "id"
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "witchPoisonUsed",
+          "value": {
+            "const": 1
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "gt": [
+              {
+                "call": [
+                  "seer_alive"
+                ]
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "night_seer"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "const": "p0"
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "var": "$env.phase"
+              },
+              {
+                "const": "night_witch"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "night_end"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_check": {
+      "description": "Seer checks one player's role",
+      "ops": [
+        {
+          "op": "setEnv",
+          "key": "seerResult",
+          "value": {
+            "at": [
+              {
+                "var": "$roles"
+              },
+              {
+                "call": [
+                  "player_index",
+                  {
+                    "get": [
+                      {
+                        "var": "$target"
+                      },
+                      "id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "night_end"
+          }
+        }
+      ]
+    },
+    "do_night_end": {
+      "description": "Settle the night: deaths, hunter, winner",
+      "ops": [
+        {
+          "op": "branch",
+          "if": {
+            "and": [
+              {
+                "eq": [
+                  {
+                    "var": "$env.round"
+                  },
+                  {
+                    "const": 1
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "at": [
+                      {
+                        "var": "$roles"
+                      },
+                      {
+                        "call": [
+                          "player_index",
+                          {
+                            "var": "$env.nightKill"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "const": "seer"
+                  }
+                ]
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "nightKill",
+              "value": {
+                "const": null
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "and": [
+              {
+                "neq": [
+                  {
+                    "var": "$env.nightKill"
+                  },
+                  {
+                    "const": null
+                  }
+                ]
+              },
+              {
+                "neq": [
+                  {
+                    "var": "$env.nightKill"
+                  },
+                  {
+                    "var": "$env.guardTarget"
+                  }
+                ]
+              },
+              {
+                "neq": [
+                  {
+                    "var": "$env.nightKill"
+                  },
+                  {
+                    "var": "$env.witchSavedTarget"
+                  }
+                ]
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "append",
+              "array": "deathsArr",
+              "value": {
+                "var": "$env.nightKill"
+              }
+            },
+            {
+              "op": "setIndex",
+              "array": "alive",
+              "at": {
+                "call": [
+                  "player_index",
+                  {
+                    "var": "$env.nightKill"
+                  }
+                ]
+              },
+              "value": {
+                "const": 0
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "neq": [
+              {
+                "var": "$env.poisonTarget"
+              },
+              {
+                "const": null
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "append",
+              "array": "deathsArr",
+              "value": {
+                "var": "$env.poisonTarget"
+              }
+            },
+            {
+              "op": "setIndex",
+              "array": "alive",
+              "at": {
+                "call": [
+                  "player_index",
+                  {
+                    "var": "$env.poisonTarget"
+                  }
+                ]
+              },
+              "value": {
+                "const": 0
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "gt": [
+              {
+                "count": {
+                  "filter": {
+                    "list": {
+                      "var": "$deathsArr"
+                    },
+                    "as": "$d",
+                    "where": {
+                      "eq": [
+                        {
+                          "at": [
+                            {
+                              "var": "$roles"
+                            },
+                            {
+                              "call": [
+                                "player_index",
+                                {
+                                  "var": "$d"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "const": "hunter"
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "night_hunter"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "const": "p0"
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "neq": [
+              {
+                "var": "$env.phase"
+              },
+              {
+                "const": "night_hunter"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "branch",
+              "if": {
+                "eq": [
+                  {
+                    "call": [
+                      "alive_wolves"
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "winner",
+                  "value": {
+                    "const": "good"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "game_over"
+                  }
+                }
+              ]
+            },
+            {
+              "op": "branch",
+              "if": {
+                "or": [
+                  {
+                    "eq": [
+                      {
+                        "call": [
+                          "alive_villagers"
+                        ]
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  {
+                    "eq": [
+                      {
+                        "call": [
+                          "alive_gods"
+                        ]
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "winner",
+                  "value": {
+                    "const": "wolf"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "game_over"
+                  }
+                }
+              ]
+            },
+            {
+              "op": "branch",
+              "if": {
+                "neq": [
+                  {
+                    "var": "$env.phase"
+                  },
+                  {
+                    "const": "game_over"
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "nightKill",
+                  "value": {
+                    "const": null
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "poisonTarget",
+                  "value": {
+                    "const": null
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "guardTarget",
+                  "value": {
+                    "const": null
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "witchSavedTarget",
+                  "value": {
+                    "const": null
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "speechIdx",
+                  "value": {
+                    "const": 0
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "day_speech"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "turn",
+                  "value": {
+                    "const": "p0"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "do_hunter_shoot": {
+      "description": "Hunter shoots one player (or passes)",
+      "ops": [
+        {
+          "op": "branch",
+          "if": {
+            "neq": [
+              {
+                "get": [
+                  {
+                    "var": "$target"
+                  },
+                  "id"
+                ]
+              },
+              {
+                "const": "pass"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "hunterShoot",
+              "value": {
+                "get": [
+                  {
+                    "var": "$target"
+                  },
+                  "id"
+                ]
+              }
+            },
+            {
+              "op": "append",
+              "array": "deathsArr",
+              "value": {
+                "get": [
+                  {
+                    "var": "$target"
+                  },
+                  "id"
+                ]
+              }
+            },
+            {
+              "op": "setIndex",
+              "array": "alive",
+              "at": {
+                "call": [
+                  "player_index",
+                  {
+                    "get": [
+                      {
+                        "var": "$target"
+                      },
+                      "id"
+                    ]
+                  }
+                ]
+              },
+              "value": {
+                "const": 0
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "call": [
+                  "alive_wolves"
+                ]
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "winner",
+              "value": {
+                "const": "good"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "game_over"
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "or": [
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "alive_villagers"
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "alive_gods"
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "winner",
+              "value": {
+                "const": "wolf"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "game_over"
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "neq": [
+              {
+                "var": "$env.phase"
+              },
+              {
+                "const": "game_over"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "nightKill",
+              "value": {
+                "const": null
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "poisonTarget",
+              "value": {
+                "const": null
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "guardTarget",
+              "value": {
+                "const": null
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "witchSavedTarget",
+              "value": {
+                "const": null
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "speechIdx",
+              "value": {
+                "const": 0
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "day_speech"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "const": "p0"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_speak": {
+      "description": "Record the speech, advance the speaking turn",
+      "ops": [
+        {
+          "op": "append",
+          "array": "speechLog",
+          "value": {
+            "speaker": {
+              "var": "$env.turn"
+            },
+            "intent": {
+              "get": [
+                {
+                  "var": "$intent"
+                },
+                "id"
+              ]
+            },
+            "text": {
+              "var": "$text"
+            },
+            "round": {
+              "var": "$env.round"
+            }
+          }
+        },
+        {
+          "op": "inc",
+          "key": "speechIdx",
+          "by": 1
+        },
+        {
+          "op": "branch",
+          "if": {
+            "gte": [
+              {
+                "var": "$env.speechIdx"
+              },
+              {
+                "call": [
+                  "alive_count"
+                ]
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "day_vote"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "voteIdx",
+              "value": {
+                "const": 0
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "const": "p0"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_vote": {
+      "description": "Record the vote, advance the voting turn",
+      "ops": [
+        {
+          "op": "append",
+          "array": "voteLog",
+          "value": {
+            "voter": {
+              "var": "$env.turn"
+            },
+            "target": {
+              "get": [
+                {
+                  "var": "$target"
+                },
+                "id"
+              ]
+            },
+            "round": {
+              "var": "$env.round"
+            }
+          }
+        },
+        {
+          "op": "inc",
+          "key": "voteIdx",
+          "by": 1
+        },
+        {
+          "op": "branch",
+          "if": {
+            "gte": [
+              {
+                "var": "$env.voteIdx"
+              },
+              {
+                "call": [
+                  "alive_count"
+                ]
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "vote_resolve"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_vote_resolve": {
+      "description": "Eliminate the most-voted player",
+      "ops": [
+        {
+          "op": "branch",
+          "if": {
+            "neq": [
+              {
+                "call": [
+                  "most_voted"
+                ]
+              },
+              {
+                "const": null
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "lynched",
+              "value": {
+                "call": [
+                  "most_voted"
+                ]
+              }
+            },
+            {
+              "op": "append",
+              "array": "deathsArr",
+              "value": {
+                "call": [
+                  "most_voted"
+                ]
+              }
+            },
+            {
+              "op": "setIndex",
+              "array": "alive",
+              "at": {
+                "call": [
+                  "player_index",
+                  {
+                    "call": [
+                      "most_voted"
+                    ]
+                  }
+                ]
+              },
+              "value": {
+                "const": 0
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "and": [
+              {
+                "neq": [
+                  {
+                    "var": "$env.lynched"
+                  },
+                  {
+                    "const": null
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "at": [
+                      {
+                        "var": "$roles"
+                      },
+                      {
+                        "call": [
+                          "player_index",
+                          {
+                            "var": "$env.lynched"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "const": "hunter"
+                  }
+                ]
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "vote_hunter"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "const": "p0"
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "neq": [
+              {
+                "var": "$env.phase"
+              },
+              {
+                "const": "vote_hunter"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "branch",
+              "if": {
+                "eq": [
+                  {
+                    "call": [
+                      "alive_wolves"
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "winner",
+                  "value": {
+                    "const": "good"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "game_over"
+                  }
+                }
+              ]
+            },
+            {
+              "op": "branch",
+              "if": {
+                "or": [
+                  {
+                    "eq": [
+                      {
+                        "call": [
+                          "alive_villagers"
+                        ]
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  {
+                    "eq": [
+                      {
+                        "call": [
+                          "alive_gods"
+                        ]
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "winner",
+                  "value": {
+                    "const": "wolf"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "game_over"
+                  }
+                }
+              ]
+            },
+            {
+              "op": "branch",
+              "if": {
+                "neq": [
+                  {
+                    "var": "$env.phase"
+                  },
+                  {
+                    "const": "game_over"
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "nightKill",
+                  "value": {
+                    "const": null
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "poisonTarget",
+                  "value": {
+                    "const": null
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "guardTarget",
+                  "value": {
+                    "const": null
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "witchSavedTarget",
+                  "value": {
+                    "const": null
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "hunterShoot",
+                  "value": {
+                    "const": null
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "lynched",
+                  "value": {
+                    "const": null
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "speechIdx",
+                  "value": {
+                    "const": 0
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "voteIdx",
+                  "value": {
+                    "const": 0
+                  }
+                },
+                {
+                  "op": "inc",
+                  "key": "round",
+                  "by": 1
+                },
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "night_wolf"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "turn",
+                  "value": {
+                    "const": "p0"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "do_vote_hunter_shoot": {
+      "description": "Hunter shot after being lynched",
+      "ops": [
+        {
+          "op": "branch",
+          "if": {
+            "neq": [
+              {
+                "get": [
+                  {
+                    "var": "$target"
+                  },
+                  "id"
+                ]
+              },
+              {
+                "const": "pass"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "append",
+              "array": "deathsArr",
+              "value": {
+                "get": [
+                  {
+                    "var": "$target"
+                  },
+                  "id"
+                ]
+              }
+            },
+            {
+              "op": "setIndex",
+              "array": "alive",
+              "at": {
+                "call": [
+                  "player_index",
+                  {
+                    "get": [
+                      {
+                        "var": "$target"
+                      },
+                      "id"
+                    ]
+                  }
+                ]
+              },
+              "value": {
+                "const": 0
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "call": [
+                  "alive_wolves"
+                ]
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "winner",
+              "value": {
+                "const": "good"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "game_over"
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "or": [
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "alive_villagers"
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "alive_gods"
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "winner",
+              "value": {
+                "const": "wolf"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "game_over"
+              }
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "neq": [
+              {
+                "var": "$env.phase"
+              },
+              {
+                "const": "game_over"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "nightKill",
+              "value": {
+                "const": null
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "poisonTarget",
+              "value": {
+                "const": null
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "guardTarget",
+              "value": {
+                "const": null
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "witchSavedTarget",
+              "value": {
+                "const": null
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "hunterShoot",
+              "value": {
+                "const": null
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "lynched",
+              "value": {
+                "const": null
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "speechIdx",
+              "value": {
+                "const": 0
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "voteIdx",
+              "value": {
+                "const": 0
+              }
+            },
+            {
+              "op": "inc",
+              "key": "round",
+              "by": 1
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "night_wolf"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "const": "p0"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "phases": [
+    {
+      "id": "deal_0",
+      "actions": [],
+      "description": "Deal role to p0"
+    },
+    {
+      "id": "deal_1",
+      "actions": [],
+      "description": "Deal role to p1"
+    },
+    {
+      "id": "deal_2",
+      "actions": [],
+      "description": "Deal role to p2"
+    },
+    {
+      "id": "deal_3",
+      "actions": [],
+      "description": "Deal role to p3"
+    },
+    {
+      "id": "deal_4",
+      "actions": [],
+      "description": "Deal role to p4"
+    },
+    {
+      "id": "deal_5",
+      "actions": [],
+      "description": "Deal role to p5"
+    },
+    {
+      "id": "deal_6",
+      "actions": [],
+      "description": "Deal role to p6"
+    },
+    {
+      "id": "deal_7",
+      "actions": [],
+      "description": "Deal role to p7"
+    },
+    {
+      "id": "deal_8",
+      "actions": [],
+      "description": "Deal role to p8"
+    },
+    {
+      "id": "night_wolf",
+      "actions": [
+        "kill"
+      ],
+      "description": "狼人杀人"
+    },
+    {
+      "id": "night_witch",
+      "actions": [
+        "heal",
+        "poison"
+      ],
+      "description": "女巫救/毒"
+    },
+    {
+      "id": "night_seer",
+      "actions": [
+        "check"
+      ],
+      "description": "预言家验人"
+    },
+    {
+      "id": "night_end",
+      "actions": [],
+      "description": "夜晚结算"
+    },
+    {
+      "id": "night_hunter",
+      "actions": [
+        "shoot"
+      ],
+      "description": "猎人开枪"
+    },
+    {
+      "id": "day_speech",
+      "actions": [
+        "speak"
+      ],
+      "description": "存活玩家轮流发言"
+    },
+    {
+      "id": "day_vote",
+      "actions": [
+        "vote"
+      ],
+      "description": "存活玩家轮流投票"
+    },
+    {
+      "id": "vote_resolve",
+      "actions": [],
+      "description": "放逐结算"
+    },
+    {
+      "id": "vote_hunter",
+      "actions": [
+        "shoot"
+      ],
+      "description": "猎人被放逐开枪"
+    },
+    {
+      "id": "game_over",
+      "actions": [],
+      "description": "Game over"
+    }
+  ],
+  "visibility": {
+    "default": "public"
+  },
+  "terminal": [
+    {
+      "id": "game_over",
+      "condition": {
+        "neq": [
+          {
+            "get": [
+              "$env",
+              "winner"
+            ]
+          },
+          {
+            "const": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "max_rounds",
+      "condition": {
+        "gte": [
+          {
+            "get": [
+              "$env",
+              "round"
+            ]
+          },
+          {
+            "const": 18
+          }
+        ]
+      }
+    }
+  ],
+  "utility": [
+    {
+      "player": "p0",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p0"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p0",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p0"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p0",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p0"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p0",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p0"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p1",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p1"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p1",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p1"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p1",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p1"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p1",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p1"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p2",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p2"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p2",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p2"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p2",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p2"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p2",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p2"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p3",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p3"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p3",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p3"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p3",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p3"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p3",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p3"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p4",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p4"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p4",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p4"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p4",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p4"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p4",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p4"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p5",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p5"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p5",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p5"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p5",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p5"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p5",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p5"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p6",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p6"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p6",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p6"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p6",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p6"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p6",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p6"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p7",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p7"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p7",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p7"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p7",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p7"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p7",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p7"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p8",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p8"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p8",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "wolf"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p8"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p8",
+      "value": -1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "eq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p8"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "player": "p8",
+      "value": 1,
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "get": [
+                  "$env",
+                  "winner"
+                ]
+              },
+              "good"
+            ]
+          },
+          {
+            "neq": [
+              {
+                "at": [
+                  {
+                    "var": "$roles"
+                  },
+                  {
+                    "call": [
+                      "player_index",
+                      {
+                        "const": "p8"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "const": "wolf"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
