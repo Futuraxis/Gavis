@@ -121,7 +121,10 @@ class _MahjongEncoder(GameEncoder):
         return 6 * len(self._tiles) + 3 + 1 + len(MAHJONG_PHASES) + self._n_players
 
     def encode_obs(self, state: State, player: str) -> np.ndarray:
-        obs = self._adapter.get_observation(state, player)
+        # 直读状态数组，绕开 get_observation（其 legal 部分会触发完整的
+        # 规则求值——训练热路径上每步可省 ~15ms）
+        arrs = state.get("_arrays", {})
+        env = state.get("env", {})
         vec = np.zeros(self.obs_dim, dtype=np.float32)
         n_tiles = len(self._tiles)
 
@@ -132,10 +135,10 @@ class _MahjongEncoder(GameEncoder):
                     vec[slot + idx] = min(vec[slot + idx] + 1.0, cap)
 
         # Hand
-        add_counts(0 * n_tiles, list(obs.get("hand", [])), 4.0)
+        add_counts(0 * n_tiles, arrs.get(f"hand_{player}", []), 4.0)
         vec[0 * n_tiles : 1 * n_tiles] /= 4.0
         # Melds
-        melds = list(obs.get("melds", []))
+        melds = arrs.get(f"melds_{player}", [])
         for meld in melds:
             if isinstance(meld, dict):
                 for t in meld.get("tiles", []):
@@ -151,34 +154,33 @@ class _MahjongEncoder(GameEncoder):
         vec[1 * n_tiles : 2 * n_tiles] /= 4.0
         vec[2 * n_tiles : 2 * n_tiles + 3] /= 4.0
         # Own discards
-        add_counts(3 * n_tiles, list(obs.get("discards", [])), 4.0)
+        add_counts(3 * n_tiles, arrs.get(f"discard_{player}", []), 4.0)
         vec[3 * n_tiles : 4 * n_tiles] /= 4.0
         # Opponents' discards (summed, capped at 8)
         opp = np.zeros(n_tiles, dtype=np.float32)
         for p in self._players:
             if p == player:
                 continue
-            other = self._adapter.get_observation(state, p)
-            for t in list(other.get("discards", [])):
+            for t in arrs.get(f"discard_{p}", []):
                 idx = self._tile_index.get(t)
                 if idx is not None:
                     opp[idx] = min(opp[idx] + 1.0, 8.0)
         vec[4 * n_tiles : 5 * n_tiles] = opp / 8.0
         # Last discard / last drawn one-hots
         for slot, key in ((5 * n_tiles, "last_discard"), (6 * n_tiles - 34, "last_drawn")):
-            tile = obs.get(key)
+            tile = env.get(key)
             idx = self._tile_index.get(tile) if tile else None
             if idx is not None:
                 vec[slot + idx] = 1.0
         # Wall
-        wall = int(obs.get("wall_count", 0) or 0)
+        wall = int(env.get("wall_count", 0) or 0)
         vec[6 * n_tiles] = wall / 136.0
         # Phase one-hot
-        phase = str(obs.get("phase", ""))
+        phase = str(env.get("phase", ""))
         pidx = MAHJONG_PHASES.index(phase) if phase in MAHJONG_PHASES else 0
         vec[6 * n_tiles + 1 + pidx] = 1.0
         # Turn one-hot
-        turn = obs.get("turn")
+        turn = env.get("turn")
         if turn in self._players:
             vec[6 * n_tiles + 1 + len(MAHJONG_PHASES) + self._players.index(turn)] = 1.0
         return vec

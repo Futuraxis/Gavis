@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>狼人杀 · 人机对弈（LLM 玩家）</title>
+<style>
+  :root {
+    --bg: #141824; --panel: #1d2434; --panel2: #232b3f; --line: #2e3852;
+    --text: #e6e9f2; --muted: #8b94ab; --accent: #5b8cff;
+    --good: #4ec9a0; --bad: #ff6b6b; --wolf: #e0564a; --villager: #7ab8ff;
+    --seer: #ffd166; --witch: #b28dff; --hunter: #ff8c5a; --guard: #6dd5ed;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: "PingFang SC", "Microsoft YaHei", sans-serif; min-height: 100vh; }
+  .app { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 8px 4px 16px; }
+  header h1 { font-size: 22px; }
+  header .subtitle { color: var(--muted); font-size: 13px; }
+  .setup { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .setup label { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; }
+  select, input, button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 14px; }
+  button { cursor: pointer; transition: filter .15s; }
+  button:hover { filter: brightness(1.2); }
+  #start-btn { background: var(--accent); border: none; font-weight: 600; }
+  .hidden { display: none !important; }
+
+  .layout { display: grid; grid-template-columns: 240px 1fr; gap: 16px; margin-top: 16px; }
+  .side { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .card h3 { font-size: 14px; color: var(--muted); margin-bottom: 10px; font-weight: 500; }
+  #players-list { display: flex; flex-direction: column; gap: 6px; }
+  .seat { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; background: var(--panel2); font-size: 13px; border: 1px solid transparent; }
+  .seat.me { border-color: var(--accent); }
+  .seat.dead { opacity: .45; }
+  .seat .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .seat .dot.alive { background: var(--good); }
+  .seat .dot.dead { background: var(--bad); }
+  .seat .name { flex: 1; }
+  .seat .role { font-size: 12px; color: var(--muted); }
+  .info-row { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); padding: 4px 0; }
+  .info-row b { color: var(--text); }
+
+  .main-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  #status-bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  #phase { font-size: 15px; font-weight: 600; }
+  #phase .phase-tag { color: var(--accent); }
+  #ai-note { color: var(--muted); font-size: 12px; }
+  #chat { height: 480px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 6px 2px; }
+  .msg { background: var(--panel2); border-radius: 10px; padding: 9px 13px; max-width: 85%; align-self: flex-start; font-size: 14px; line-height: 1.5; }
+  .msg.me { align-self: flex-end; background: #2c3a63; }
+  .msg .meta { display: flex; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+  .msg .intent { font-size: 11px; padding: 1px 7px; border-radius: 8px; background: var(--panel); color: var(--accent); }
+  .msg.system { align-self: center; background: transparent; border: 1px dashed var(--line); color: var(--muted); font-size: 13px; }
+  .msg.system b { color: var(--text); }
+  .msg .death { color: var(--bad); font-weight: 600; }
+
+  #controls { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  #controls h4 { font-size: 13px; color: var(--muted); font-weight: 500; }
+  .speech-row { display: flex; gap: 10px; }
+  #speech-text { flex: 1; }
+  .targets { display: flex; flex-wrap: wrap; gap: 8px; }
+  .targets button { min-width: 58px; }
+  .targets button.pass { border-style: dashed; color: var(--muted); }
+  #my-role { font-weight: 600; }
+  #result-box { text-align: center; padding: 24px; font-size: 18px; }
+  #result-box .wolf { color: var(--wolf); }
+  #result-box .good { color: var(--good); }
+  #restart-btn { margin-top: 12px; background: var(--accent); border: none; font-weight: 600; }
+</style>
+</head>
+<body>
+<main class="app">
+  <header>
+    <h1>🐺 狼人杀</h1>
+    <span class="subtitle">你 vs 本地 LLM 玩家（qwen3:8b）· 9 人局 3狼 1预 1女巫 1猎人</span>
+  </header>
+
+  <section id="setup" class="setup">
+    <label>模型
+      <input id="model" value="qwen3:8b" style="width: 120px">
+    </label>
+    <label>座位
+      <select id="seat">
+        <option value="random" selected>随机</option>
+        <option value="p0">p0</option><option value="p1">p1</option>
+        <option value="p2">p2</option><option value="p3">p3</option>
+        <option value="p4">p4</option><option value="p5">p5</option>
+        <option value="p6">p6</option><option value="p7">p7</option>
+        <option value="p8">p8</option>
+      </select>
+    </label>
+    <button id="start-btn" type="button">开始新局</button>
+    <span id="ai-note" class="hidden">AI 思考中…（每步约 6-10 秒，请稍候）</span>
+  </section>
+
+  <div class="layout">
+    <aside class="side">
+      <div class="card">
+        <h3>玩家</h3>
+        <div id="players-list"></div>
+      </div>
+      <div class="card">
+        <h3>对局信息</h3>
+        <div id="info-box"></div>
+      </div>
+    </aside>
+
+    <section class="main-col">
+      <div id="status-bar" class="card">
+        <span id="phase">—</span>
+        <span id="my-role" class="hidden"></span>
+      </div>
+
+      <div class="card">
+        <h3>讨论区</h3>
+        <div id="chat"></div>
+      </div>
+
+      <div id="controls" class="hidden">
+        <h4 id="controls-title">操作</h4>
+        <div id="controls-body"></div>
+      </div>
+
+      <div id="result-box" class="card hidden"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+const API = '/api';
+let S = null; // session snapshot
+let polling = null;
+
+const $ = (id) => document.getElementById(id);
+const ROLE_COLOR = { '狼人': 'var(--wolf)', '村民': 'var(--villager)', '预言家': 'var(--seer)',
+                     '女巫': 'var(--witch)', '猎人': 'var(--hunter)', '守卫': 'var(--guard)' };
+const INTENT_LABEL = { claim: '声明', accuse: '指控', defend: '辩护', question: '质询', persuade: '说服' };
+const ACTION_LABEL = { speak: '发言', kill: '刀人', check: '验人', poison: '毒人', heal: '救人',
+                       guard: '守人', shoot: '开枪', shoot_lynched: '开枪', vote: '投票' };
+
+async function post(path, body) {
+  const r = await fetch(API + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+function renderPlayers() {
+  const box = $('players-list');
+  box.innerHTML = '';
+  for (const p of S.players) {
+    const seat = document.createElement('div');
+    seat.className = 'seat' + (p.id === S.my_pid ? ' me' : '') + (p.alive ? '' : ' dead');
+    let role = '';
+    if (p.id === S.my_pid) role = `<span class="role">${S.my_role || '?'}</span>`;
+    else if (!p.alive && p.dead_role) role = `<span class="role">${p.dead_role}·死亡</span>`;
+    else if (!p.alive) role = `<span class="role">已死亡</span>`;
+    seat.innerHTML = `<span class="dot ${p.alive ? 'alive' : 'dead'}"></span>
+      <span class="name">${p.id === S.my_pid ? '😊 你' : '🤖 ' + p.id}</span>${role}`;
+    box.appendChild(seat);
+  }
+}
+
+function renderInfo() {
+  const b = $('info-box');
+  b.innerHTML = '';
+  const rows = [
+    ['轮次', '第 ' + S.round + ' 轮'],
+    ['阶段', S.phase_label],
+    ['死亡', S.deaths.length ? S.deaths.join('、') : '无'],
+  ];
+  if (S.my_role === '预言家' && S.seer_result) rows.push(['验人结果', S.seer_result]);
+  if (S.my_role === '女巫') {
+    rows.push(['解药', S.witch_save_used ? '已用' : '未用']);
+    rows.push(['毒药', S.witch_poison_used ? '已用' : '未用']);
+  }
+  if (S.my_role === '守卫' && S.guard_last_target) rows.push(['昨夜守人', S.guard_last_target]);
+  for (const [k, v] of rows) {
+    const row = document.createElement('div');
+    row.className = 'info-row';
+    row.innerHTML = `<span>${k}</span><b>${v}</b>`;
+    b.appendChild(row);
+  }
+}
+
+function appendMsg(html, cls) {
+  const m = document.createElement('div');
+  m.className = 'msg ' + (cls || '');
+  m.innerHTML = html;
+  $('chat').appendChild(m);
+  $('chat').scrollTop = $('chat').scrollHeight;
+}
+
+function renderChat() {
+  const chat = $('chat');
+  chat.innerHTML = '';
+  for (const s of S.speech_log) {
+    const me = s.speaker === S.my_pid;
+    const color = me ? 'var(--accent)' : 'var(--muted)';
+    appendMsg(`<div class="meta"><span style="color:${color}">${me ? '你' : '🤖 ' + s.speaker}</span>
+      <span>第${s.round}轮</span><span class="intent">${INTENT_LABEL[s.intent] || s.intent}</span></div>
+      <div>${escapeHtml(s.text || '（沉默）')}</div>`, me ? 'me' : '');
+  }
+  for (const d of S.deaths) {
+    appendMsg(`<div class="death">☠️ ${d} 死亡</div>`, 'system');
+  }
+  if (S.over) {
+    const w = S.winner;
+    const label = w === 'wolf' ? '狼人阵营胜利' : w === 'good' ? '好人阵营胜利' : '平局';
+    appendMsg(`<div><b>对局结束：${label}</b></div>`, 'system');
+  }
+}
+
+function renderControls() {
+  const c = $('controls');
+  const body = $('controls-body');
+  body.innerHTML = '';
+  if (!S.my_turn || S.over) { c.classList.add('hidden'); return; }
+  c.classList.remove('hidden');
+  const legal = S.legal || [];
+  const actions = [...new Set(legal.map(l => l.id))];
+  const phase = S.phase;
+
+  if (actions.includes('speak')) {
+    $('controls-title').textContent = '💬 轮到你了：发言';
+    body.innerHTML = `<div class="speech-row">
+      <select id="intent" style="width: 120px">
+        ${Object.entries(INTENT_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}
+      </select>
+      <input id="speech-text" placeholder="说点什么…（指认、辩解、带节奏）" maxlength="200">
+      <button id="send-speech" type="button">发言</button></div>`;
+    $('send-speech').onclick = () => {
+      const text = $('speech-text').value.trim();
+      if (!text) return;
+      sendMove('speak', { intent: $('intent').value, text });
+    };
+    $('speech-text').addEventListener('keydown', e => { if (e.key === 'Enter') $('send-speech').click(); });
+  } else {
+    const targetActions = actions.filter(a => a !== 'speak');
+    const label = targetActions.map(a => ACTION_LABEL[a] || a).join(' / ');
+    $('controls-title').textContent = `🎯 轮到你了：${label}`;
+    // 投票/夜晚目标：所有存活玩家（含自己——如女巫自救/验自己）
+    const pool = S.players.filter(p => p.alive).map(p => p.id);
+    body.innerHTML = `<div class="targets">
+      ${pool.map(t => `<button data-target="${t}" type="button">${t}</button>`).join('')}
+      ${actions.some(a => ['shoot', 'shoot_lynched', 'guard'].includes(a) && !legal.some(l => l.id === a && l.target === 'pass'))
+        ? `<button data-target="pass" type="button" class="pass">放弃</button>` : ''}
+      </div>`;
+    body.querySelectorAll('button[data-target]').forEach(btn => {
+      btn.onclick = () => {
+        const t = btn.dataset.target;
+        const act = targetActions.find(a => legal.some(l => l.id === a && l.target === t));
+        if (act) sendMove(act, { target: t });
+      };
+    });
+  }
+}
+
+function sendMove(action, params) {
+  $('ai-note').classList.remove('hidden');
+  post('/move', { gameId: S.game_id, action, ...params }).then(res => {
+    if (!res.ok) { alert(res.error || '操作失败'); return; }
+    applySnapshot(res.session);
+  });
+}
+
+function applySnapshot(s) {
+  S = s;
+  $('phase').innerHTML = s.over ? `🏁 ${s.phase_label}` : `<span class="phase-tag">${s.phase_label}</span>`;
+  $('my-role').classList.toggle('hidden', !s.my_role);
+  if (s.my_role) $('my-role').textContent = `你的身份：${s.my_role}`;
+  renderPlayers();
+  renderInfo();
+  renderChat();
+  renderControls();
+  $('ai-note').classList.toggle('hidden', s.my_turn || s.over);
+  if (s.over) {
+    const box = $('result-box');
+    box.classList.remove('hidden');
+    const label = s.winner === 'wolf' ? '🐺 狼人阵营胜利' : s.winner === 'good' ? '😇 好人阵营胜利' : '🤝 平局';
+    box.innerHTML = `<div class="${s.winner}">${label}</div><button id="restart-btn" type="button">再来一局</button>`;
+    $('restart-btn').onclick = () => location.reload();
+    stopPolling();
+  } else {
+    $('result-box').classList.add('hidden');
+  }
+  if (!s.over && !s.my_turn) startPolling(); else stopPolling();
+}
+
+function startPolling() {
+  if (polling) return;
+  polling = setInterval(async () => {
+    try {
+      const res = await post('/state', { gameId: S.game_id });
+      if (res.session) applySnapshot(res.session);
+    } catch (e) { /* 轮询失败忽略 */ }
+  }, 3000);
+}
+function stopPolling() {
+  if (polling) { clearInterval(polling); polling = null; }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+$('start-btn').onclick = () => {
+  $('start-btn').disabled = true;
+  $('ai-note').classList.remove('hidden');
+  post('/start', {
+    model: $('model').value.trim() || 'qwen3:8b',
+    humanPid: $('seat').value === 'random' ? null : $('seat').value,
+  }).then(res => {
+    if (!res.ok) { alert(res.error || '开局失败'); $('start-btn').disabled = false; return; }
+    applySnapshot(res.session);
+  });
+};
+</script>
+</body>
+</html>

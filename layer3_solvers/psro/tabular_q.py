@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .agent import TabularQAgent, Agent
+from .agent import Agent, TabularQAgent
 
 
 def tabular_q_best_response(
@@ -39,23 +39,25 @@ def tabular_q_best_response(
     np.ndarray, shape (state_dim, action_dim)
         Greedy policy (one-hot) derived from trained Q-table.
     """
-    obs_dim = env.observation_space.n if hasattr(env.observation_space, 'n') else env.observation_space.shape[0]
+    obs_dim = env.observation_space.n if hasattr(env.observation_space, "n") else env.observation_space.shape[0]
     n_actions = env.action_space.n
 
     agent = TabularQAgent(obs_dim, n_actions, epsilon=epsilon, alpha=alpha, gamma=gamma)
-    opponent = Agent(opponent_policy) if opponent_policy is not None else Agent()
+    opponent = (
+        Agent(opponent_policy, action_dim=n_actions) if opponent_policy is not None else Agent(action_dim=n_actions)
+    )
 
     obs, _ = env.reset()
     for step in range(num_steps):
         mask = env.available_actions()
         action = agent.select_action(obs, mask)
         next_obs, reward, done, _, _ = env.step(action)
-        agent.update(obs, action, reward, next_obs, done)
+        agent.update(obs, action, reward, next_obs, done, next_mask=env.available_actions())
 
         # Opponent's turn
         if not done:
             opp_mask = env.available_actions()
-            opp_action = opponent.step(next_obs, Amask=opp_mask)
+            opp_action = opponent.step(next_obs, amask=opp_mask)
             next_obs, reward, done, _, _ = env.step(opp_action)
 
         obs = next_obs

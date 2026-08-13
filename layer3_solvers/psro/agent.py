@@ -17,20 +17,24 @@ class Agent:
     policy : np.ndarray
         Shape ``(state_dim, action_dim)`` — one-hot or prob-distribution
         per state.
+    action_dim : int, optional
+        Action-space size for the random policy; inferred from
+        ``policy.shape[1]`` when a policy is given.
     """
 
-    def __init__(self, policy: np.ndarray | None = None):
+    def __init__(self, policy: np.ndarray | None = None, action_dim: int | None = None):
         self.policy = policy  # (state_dim, action_dim)
+        self.action_dim = action_dim if action_dim is not None else (policy.shape[1] if policy is not None else None)
         self._rng = np.random.RandomState()
 
-    def step(self, obs: int, Amask: np.ndarray | None = None) -> int:
+    def step(self, obs: int, amask: np.ndarray | None = None) -> int:
         """Select an action given the observation index.
 
         Parameters
         ----------
         obs : int
             Encoded state index (0 … state_dim-1).
-        Amask : np.ndarray, optional
+        amask : np.ndarray, optional
             Boolean mask of legal actions.
 
         Returns
@@ -39,17 +43,21 @@ class Agent:
             Action index.
         """
         if self.policy is None:
-            # Random policy
-            if Amask is not None:
-                legal = np.where(Amask)[0]
+            # Random policy (M-14: must not assume a hardcoded 9 actions).
+            if amask is not None:
+                legal = np.where(amask)[0]
                 return int(self._rng.choice(legal)) if len(legal) > 0 else 0
-            return int(self._rng.randint(9))
+            if self.action_dim is None:
+                raise ValueError(
+                    "Agent: an unmasked random policy needs action_dim (pass it to the constructor or supply amask)"
+                )
+            return int(self._rng.randint(self.action_dim))
 
         probs = self.policy[obs].copy()
-        if Amask is not None:
-            probs = probs * Amask.astype(float)
+        if amask is not None:
+            probs = probs * amask.astype(float)
             if probs.sum() == 0:
-                legal = np.where(Amask)[0]
+                legal = np.where(amask)[0]
                 return int(self._rng.choice(legal)) if len(legal) > 0 else 0
             probs /= probs.sum()
         return int(self._rng.choice(len(probs), p=probs))
@@ -90,11 +98,27 @@ class TabularQAgent:
             q_vals[~mask] = -1e9
         return int(np.argmax(q_vals))
 
-    def update(self, obs: int, action: int, reward: float, next_obs: int, done: bool) -> None:
-        """Q-learning update."""
+    def update(
+        self,
+        obs: int,
+        action: int,
+        reward: float,
+        next_obs: int,
+        done: bool,
+        next_mask: np.ndarray | None = None,
+    ) -> None:
+        """Q-learning update.
+
+        ``next_mask`` masks the max over legal actions at ``next_obs``
+        (M-13): without it a randomly-initialized illegal action can
+        become the bootstrap target and poison the Q-table.
+        """
         target = reward
         if not done:
-            target += self.gamma * np.max(self.Q[next_obs])
+            q_next = self.Q[next_obs].copy()
+            if next_mask is not None:
+                q_next[~next_mask] = -1e9
+            target += self.gamma * np.max(q_next)
         self.Q[obs, action] += self.alpha * (target - self.Q[obs, action])
 
     def get_greedy_policy(self) -> np.ndarray:

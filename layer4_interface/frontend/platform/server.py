@@ -18,7 +18,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from layer4_interface.frontend.common.http_utils import read_json_body, send_error_json, send_json
+from layer4_interface.frontend.common.http_utils import BodyTooLargeError, read_json_body, send_error_json, send_json
 
 from .benchmark import SOLVER_OPTIONS, BenchmarkRunner
 from .games import GAMES, PlayError
@@ -47,6 +47,10 @@ def make_handler(
             super().__init__(*args, directory=str(dist_dir), **kwargs)
 
         # ── CORS ──────────────────────────────────────────────────
+        # 决策记录（审计 3.6，2026-08-13）：本服务定位为**本机开发工具**
+        # （默认绑定 127.0.0.1），因此 CORS 保持通配且不引入认证。对外网
+        # /局域网暴露前必须先收紧 CORS 到同源并加鉴权（见
+        # docs/design/security-notes.md）。
 
         def _send_cors_headers(self) -> None:
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -100,6 +104,8 @@ def make_handler(
                     self._handle_benchmark_start()
                 else:
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
+            except BodyTooLargeError as exc:
+                send_error_json(self, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
             except (PlayError, HistoryError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
             except (KeyError, TypeError, ValueError) as exc:

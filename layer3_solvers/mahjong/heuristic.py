@@ -20,8 +20,8 @@ from typing import Optional
 from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter
 from layer3_solvers.base import SolverBase, SolverConfig, SolverMetrics
 
-_SUITS = 'mpsz'
-_HONOR_RANK = {'z1': 0, 'z2': 1, 'z3': 2, 'z4': 3, 'z5': 4, 'z6': 5, 'z7': 6}
+_SUITS = "mpsz"
+_HONOR_RANK = {"z1": 0, "z2": 1, "z3": 2, "z4": 3, "z5": 4, "z6": 5, "z7": 6}
 
 
 class MahjongHeuristicAI(SolverBase):
@@ -33,14 +33,14 @@ class MahjongHeuristicAI(SolverBase):
 
     @property
     def name(self) -> str:
-        return 'mahjong_heuristic'
+        return "mahjong_heuristic"
 
     def select_action(self, state: dict) -> Optional[ActionInstance]:
         legal = self.adapter.get_legal_actions(state)
         if not legal:
             return None
-        phase = state['env'].get('phase', '')
-        if phase == 'claim':
+        phase = state.get("env", {}).get("phase", "")
+        if phase == "claim":
             return self._pick_claim(legal, state)
         return self._pick_action(legal, state)
 
@@ -50,49 +50,49 @@ class MahjongHeuristicAI(SolverBase):
         by_type: dict[str, list[ActionInstance]] = {}
         for a in legal:
             by_type.setdefault(a.template_id, []).append(a)
-        if by_type.get('claim_win'):
-            return by_type['claim_win'][0]
-        if by_type.get('claim_gang'):
-            return by_type['claim_gang'][0]
-        if by_type.get('claim_peng'):
-            return by_type['claim_peng'][0]
-        if by_type.get('claim_chi'):
+        if by_type.get("claim_win"):
+            return by_type["claim_win"][0]
+        if by_type.get("claim_gang"):
+            return by_type["claim_gang"][0]
+        if by_type.get("claim_peng"):
+            return by_type["claim_peng"][0]
+        if by_type.get("claim_chi"):
             # Chi only when it improves the hand (needs the run's tiles).
-            chi = by_type['claim_chi'][0]
-            if self._chi_improves(state, chi.params.get('tiles', [])):
+            chi = by_type["claim_chi"][0]
+            if self._chi_improves(state, chi.params.get("tiles", [])):
                 return chi
-        if by_type.get('claim_pass'):
-            return by_type['claim_pass'][0]
+        if by_type.get("claim_pass"):
+            return by_type["claim_pass"][0]
         return legal[0]
 
     def _pick_action(self, legal: list[ActionInstance], state: dict) -> ActionInstance:
         by_type: dict[str, list[ActionInstance]] = {}
         for a in legal:
             by_type.setdefault(a.template_id, []).append(a)
-        if by_type.get('win_self'):
-            return by_type['win_self'][0]
-        if by_type.get('gang_concealed'):
-            return by_type['gang_concealed'][0]
-        if by_type.get('gang_added'):
-            return by_type['gang_added'][0]
-        if by_type.get('discard'):
-            return self._pick_discard(by_type['discard'], state)
+        if by_type.get("win_self"):
+            return by_type["win_self"][0]
+        if by_type.get("gang_concealed"):
+            return by_type["gang_concealed"][0]
+        if by_type.get("gang_added"):
+            return by_type["gang_added"][0]
+        if by_type.get("discard"):
+            return self._pick_discard(by_type["discard"], state)
         return legal[0]
 
     # ── Discard scoring ────────────────────────────────────────────
 
     def _pick_discard(self, discards: list[ActionInstance], state: dict) -> ActionInstance:
-        hand = state['_arrays'].get(f'hand_{self._my_pid(state)}', [])
+        hand = state.get("_arrays", {}).get(f"hand_{self._my_pid(state)}", [])
         counts: dict[str, int] = {}
         for t in hand:
             counts[t] = counts.get(t, 0) + 1
-        best = min(discards, key=lambda a: self._tile_value(a.params.get('tile'), counts, hand))
+        best = min(discards, key=lambda a: self._tile_value(a.params.get("tile"), counts, hand))
         return best
 
     @staticmethod
     def _tile_value(tile: str, counts: dict[str, int], hand: list[str]) -> int:
         """Lower = better to discard. Pairs/triplets/runs score negative."""
-        if tile is None:
+        if not tile or not isinstance(tile, str):
             return 0
         n = counts.get(tile, 0)
         suit = tile[0]
@@ -102,14 +102,14 @@ class MahjongHeuristicAI(SolverBase):
             score -= 80  # keep triplets / quads
         elif n == 2:
             score -= 40  # keep pairs
-        if suit == 'z':
+        if suit == "z":
             score += 30 if n == 1 else 0  # unpaired honors first out
             return score
         if n == 1:
             score += 10  # singles go before pairs, all else equal
         # run potential: adjacent tiles in hand (same suit, rank±1)
         for delta in (-1, 1):
-            neighbor = f'{suit}{rank + delta}'
+            neighbor = f"{suit}{rank + delta}"
             if counts.get(neighbor, 0) >= 1:
                 score -= 20
             elif counts.get(neighbor, 0) == 0 and 1 <= rank + delta <= 9:
@@ -120,12 +120,12 @@ class MahjongHeuristicAI(SolverBase):
         """Chi when the run is not already covered by existing melds."""
         pid = self._my_pid(state)
         meld_tiles = []
-        for meld in state['_arrays'].get(f'melds_{pid}', []):
-            meld_tiles.extend(meld.get('tiles', []))
+        for meld in state.get("_arrays", {}).get(f"melds_{pid}", []):
+            meld_tiles.extend(meld.get("tiles", []))
         return not all(t in meld_tiles for t in tiles)
 
     def _my_pid(self, state: dict) -> str:
-        return state['env'].get('turn', 'p0')
+        return state.get("env", {}).get("turn", "p0")
 
     # ── SolverBase contract ────────────────────────────────────────
 

@@ -7,8 +7,10 @@ through the ``SolverAdapter`` Protocol from Layer 2.
 from .base import SolverBase, SolverConfig
 from .cfr.solver import CFR, CFRConfig
 from .hybrid.solver import HybridConfig, HybridSolver
+from .llm.ollama_solver import OllamaConfig, OllamaSolver
 from .mcts.solver import MCTS, MCTSConfig
 from .psro.solver import PSROConfig, PSROSolver
+from .werewolf import BayesConfig, BayesSolver
 
 try:
     from .ppo.solver import PPOConfig, PPOSolver
@@ -35,6 +37,8 @@ __all__ = [
     "PSROConfig",
     "HybridSolver",
     "HybridConfig",
+    "OllamaSolver",
+    "OllamaConfig",
 ]
 if PPOSolver is not None:
     __all__.extend(["PPOSolver", "PPOConfig"])

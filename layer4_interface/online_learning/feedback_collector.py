@@ -7,6 +7,7 @@ the actual training loop is future work.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -17,14 +18,15 @@ class OnlineLearningSignal:
 
     This is the input to the online self-learning loop.
     """
+
     game_id: str
     solver_name: str
     controlled_player: str
     state_sequence: list[dict] = field(default_factory=list)
     actions_taken: list[dict] = field(default_factory=list)
     solver_suggestions: list[dict | None] = field(default_factory=list)
-    final_outcome: float = 0.0          # +1 (win), 0 (draw), -1 (loss)
-    user_rating: Optional[int] = None   # optional user satisfaction (1-5)
+    final_outcome: float = 0.0  # +1 (win), 0 (draw), -1 (loss)
+    user_rating: Optional[int] = None  # optional user satisfaction (1-5)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -39,23 +41,28 @@ class OnlineLearner:
     def __init__(self, buffer_size: int = 10000):
         self._buffer: list[OnlineLearningSignal] = []
         self._buffer_size = buffer_size
+        # 共享 buffer 的读写并发保护（审计 3.6）。
+        self._lock = threading.Lock()
 
     def collect(self, signal: OnlineLearningSignal) -> None:
         """Record one game's experience."""
-        self._buffer.append(signal)
-        if len(self._buffer) > self._buffer_size:
-            self._buffer.pop(0)
+        with self._lock:
+            self._buffer.append(signal)
+            if len(self._buffer) > self._buffer_size:
+                self._buffer.pop(0)
 
     def flush(self, solver) -> int:
         """Feed accumulated signals into a solver for online learning.
 
         Returns the number of signals processed.
         """
-        count = len(self._buffer)
-        # Future: implement actual Solver online update here
-        self._buffer.clear()
-        return count
+        with self._lock:
+            count = len(self._buffer)
+            # Future: implement actual Solver online update here
+            self._buffer.clear()
+            return count
 
     @property
     def size(self) -> int:
-        return len(self._buffer)
+        with self._lock:
+            return len(self._buffer)

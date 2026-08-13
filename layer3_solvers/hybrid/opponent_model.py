@@ -75,7 +75,7 @@ class TabularPolicyMember:
         self._gym._state = state  # noqa: SLF001 — point the encoder at the live state
         obs = self._gym._encode_state(state)  # noqa: SLF001 — shared with training
         mask = self._gym.available_actions()
-        idx = self._agent.step(obs, Amask=mask)
+        idx = self._agent.step(obs, amask=mask)
         action = self._gym._int_to_action(idx, actions)  # noqa: SLF001
         if action is None:
             action = self._rng.choice(actions)

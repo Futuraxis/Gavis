@@ -7,23 +7,23 @@ and iteratively add best responses.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
 
 from layer2_engine.interfaces.solver_adapter import (
+    ActionInstance,
     SolverAdapter,
     State,
-    ActionInstance,
 )
+
 from ..base import SolverBase, SolverConfig, SolverMetrics
-from .nash_solver import solve_nash
-from .meta_game import gamescape, exploitability
-from .tabular_q import tabular_q_best_response
-from .gym_adapter import GymAdapter
 from .agent import Agent
+from .gym_adapter import GymAdapter
+from .meta_game import exploitability, gamescape
+from .nash_solver import solve_nash
+from .tabular_q import tabular_q_best_response
 
 
 @dataclass
@@ -33,6 +33,7 @@ class PSROConfig(SolverConfig):
     epsilon: float = 0.1
     alpha: float = 0.1
     evaluation_episodes: int = 10
+    num_workers: int = 0  # 元博弈评估并行线程数（0=自动，1=串行）
 
 
 class PSROSolver(SolverBase):
@@ -44,7 +45,6 @@ class PSROSolver(SolverBase):
 
     def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
         super().__init__(adapter, config or PSROConfig())
-        cfg = self.config
         self._gym = GymAdapter(adapter)
 
         # Get state/action dimensions from the gym adapter
@@ -75,7 +75,7 @@ class PSROSolver(SolverBase):
         obs = self._gym._encode_state(state)
         agent = Agent(self._nash_mixture)
         mask = self._gym.available_actions()
-        action_idx = agent.step(obs, Amask=mask)
+        action_idx = agent.step(obs, amask=mask)
 
         # Convert back to ActionInstance
         legal = self.adapter.get_legal_actions(state)
@@ -93,7 +93,8 @@ class PSROSolver(SolverBase):
         num_steps = getattr(self.config, "num_steps_per_iter", 5000)
         eps = getattr(self.config, "epsilon", 0.1)
         alpha = getattr(self.config, "alpha", 0.1)
-        Ne = getattr(self.config, "evaluation_episodes", 10)
+        n_eval = getattr(self.config, "evaluation_episodes", 10)
+        n_workers = getattr(self.config, "num_workers", 0)
 
         verbose = kwargs.get("verbose", False)
 
@@ -102,8 +103,9 @@ class PSROSolver(SolverBase):
             payoff_matrix = gamescape(
                 self._gym,
                 self._policy_pool,
-                Ne=Ne,
+                Ne=n_eval,
                 previous=self._payoff_matrix,
+                num_workers=n_workers,
             )
             self._payoff_matrix = payoff_matrix
 
@@ -113,7 +115,7 @@ class PSROSolver(SolverBase):
             self._nash_weights = nash_p
 
             # Compute exploitability
-            expl = exploitability(self._gym, self._nash_mixture, self._policy_pool, Ne=Ne)
+            expl = exploitability(self._gym, self._nash_mixture, self._policy_pool, Ne=n_eval, num_workers=n_workers)
 
             # Train new best response
             beta = tabular_q_best_response(
@@ -124,8 +126,9 @@ class PSROSolver(SolverBase):
                 opponent_policy=self._nash_mixture,
             )
 
-            # Check for duplicate policy
-            is_duplicate = any((p == beta).all() for p in self._policy_pool)
+            # Check for duplicate policy (tolerance-aware — exact float
+            # equality is brittle across platforms/BLAS variants).
+            is_duplicate = any(np.allclose(p, beta) for p in self._policy_pool)
             if is_duplicate:
                 if verbose:
                     print(f"  PSRO iter {niter}: strategy exhausted, stopping")
@@ -154,26 +157,28 @@ class PSROSolver(SolverBase):
         )
 
     def save(self, path: str) -> None:
-        """Save PSRO state (policy pool + Nash mixture + member weights)."""
+        """Save PSRO state (policy pool + Nash mixture + member weights).
+
+        Policies are stacked into a plain 3-D array — no ``dtype=object``
+        pickling, so the file can be loaded with ``allow_pickle=False``.
+        """
         weights = self._nash_weights
+        pool = np.stack(self._policy_pool) if self._policy_pool else np.zeros((0, 0))
         np.savez_compressed(
             path,
-            policy_pool=np.array(self._policy_pool, dtype=object),
-            nash_mixture=self._nash_mixture,
+            policy_pool=pool,
+            nash_mixture=self._nash_mixture if self._nash_mixture is not None else np.zeros(0),
             nash_weights=weights if weights is not None else np.zeros(0),
-            payoff_matrix=(
-                self._payoff_matrix
-                if self._payoff_matrix is not None
-                else np.zeros((0, 0))
-           ),
+            payoff_matrix=(self._payoff_matrix if self._payoff_matrix is not None else np.zeros((0, 0))),
             expl_history=np.array(self._expl_history),
         )
 
     def load(self, path: str) -> None:
-        """Load PSRO state."""
-        data = np.load(path, allow_pickle=True)
-        self._policy_pool = list(data["policy_pool"])
-        self._nash_mixture = data["nash_mixture"]
+        """Load PSRO state (no pickle — ``allow_pickle`` stays off)."""
+        data = np.load(path, allow_pickle=False)
+        self._policy_pool = [np.asarray(p) for p in data["policy_pool"]]
+        mixture = data["nash_mixture"]
+        self._nash_mixture = mixture if mixture.size else None
         weights = data["nash_weights"]
         self._nash_weights = weights if weights.size else None
         if "payoff_matrix" in data.files:

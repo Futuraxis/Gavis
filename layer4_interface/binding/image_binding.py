@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from typing import Protocol
@@ -105,6 +106,8 @@ class ImageBinding:
         self.game_id = game_id
         self.source_name = source_name
         self._last_frame_seq = -1
+        # 帧序号自增是读-改-写，ThreadingHTTPServer 下需加锁（审计 3.6）。
+        self._seq_lock = threading.Lock()
 
     def parse(self, source: str) -> Observation:
         return self.parse_image(source)
@@ -148,7 +151,6 @@ class ImageBinding:
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if image is None:
             raise ImageLoadError("Failed to decode image bytes.")
-        path = f"_inline_{kwargs.get('frame_seq', 0)}.png"
         return self.parse_image_inline(image, **kwargs)
 
     def parse_image_inline(self, image: np.ndarray, **kwargs) -> Observation:
@@ -165,10 +167,12 @@ class ImageBinding:
             board.append(board_row)
             confidence.append(conf_row)
         return Observation(
-            gameId=self.game_id, source=self.source_name,
-            frameSeq=self._resolve_frame_seq(kwargs.get('frame_seq')),
-            boardObservation=board, confidence=confidence,
-            observedAt=kwargs.get('observed_at', int(time.time() * 1000)),
+            gameId=self.game_id,
+            source=self.source_name,
+            frameSeq=self._resolve_frame_seq(kwargs.get("frame_seq")),
+            boardObservation=board,
+            confidence=confidence,
+            observedAt=kwargs.get("observed_at", int(time.time() * 1000)),
         )
 
     def split_board(self, image: np.ndarray) -> list[list[np.ndarray]]:
@@ -203,12 +207,11 @@ class ImageBinding:
         return img
 
     def _resolve_frame_seq(self, seq: int | None) -> int:
-        if seq is None:
-            self._last_frame_seq += 1
-            return self._last_frame_seq
-        if seq <= self._last_frame_seq:
-            raise InvalidBoardError(
-                f"frameSeq must strictly increase. Last was {self._last_frame_seq}, got {seq}."
-            )
-        self._last_frame_seq = seq
-        return seq
+        with self._seq_lock:
+            if seq is None:
+                self._last_frame_seq += 1
+                return self._last_frame_seq
+            if seq <= self._last_frame_seq:
+                raise InvalidBoardError(f"frameSeq must strictly increase. Last was {self._last_frame_seq}, got {seq}.")
+            self._last_frame_seq = seq
+            return seq

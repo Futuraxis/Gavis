@@ -7,6 +7,7 @@ the FIFO piece order from transitions.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 from .schemas import Observation
@@ -15,6 +16,7 @@ from .schemas import Observation
 @dataclass
 class StateChange:
     """A change between two consecutive frames."""
+
     added: list[tuple[int, int, str]] = field(default_factory=list)
     removed: list[tuple[int, int]] = field(default_factory=list)
 
@@ -37,6 +39,8 @@ class StateTracker:
         self._last_board: list[list[str | None]] | None = None
         self._last_seq: int = -1
         self._history: list[Observation] = []
+        # ThreadingHTTPServer 下多请求并发访问共享状态（审计 3.6 竞态）。
+        self._lock = threading.Lock()
 
     def update(self, obs: Observation) -> StateChange:
         """Register a new observation and compute the state change.
@@ -44,58 +48,80 @@ class StateTracker:
         Returns a ``StateChange`` describing what changed since the
         previous frame.
         """
-        change = StateChange()
-        current = obs.boardObservation
+        with self._lock:
+            change = StateChange()
+            current = obs.boardObservation
 
-        if self._last_board is not None:
-            for r in range(len(current)):
-                for c in range(len(current[r])):
-                    prev = self._last_board[r][c] if r < len(self._last_board) and c < len(self._last_board[r]) else None
-                    curr = current[r][c]
-                    if prev != curr:
-                        if curr is not None:
-                            change.added.append((r, c, curr))
-                        if prev is not None:
-                            change.removed.append((r, c))
+            if self._last_board is not None:
+                for r in range(len(current)):
+                    for c in range(len(current[r])):
+                        prev = (
+                            self._last_board[r][c]
+                            if r < len(self._last_board) and c < len(self._last_board[r])
+                            else None
+                        )
+                        curr = current[r][c]
+                        if prev != curr:
+                            if curr is not None:
+                                change.added.append((r, c, curr))
+                            if prev is not None:
+                                change.removed.append((r, c))
 
-        self._last_board = [row[:] for row in current]
-        self._last_seq = obs.frameSeq
-        self._history.append(obs)
+            self._last_board = [row[:] for row in current]
+            self._last_seq = obs.frameSeq
+            self._history.append(obs)
 
-        # Keep only last 100 frames
-        if len(self._history) > 100:
-            self._history.pop(0)
+            # Keep only last 100 frames
+            if len(self._history) > 100:
+                self._history.pop(0)
 
-        return change
+            return change
 
     def infer_piece_order(self, controlled_player: str = "player_x") -> dict[str, list[dict]]:
         """Infer FIFO piece order from observed frame history.
 
+        Tracks the piece currently occupying each cell across frames: a
+        cell that is emptied and later re-occupied (Moon Chess FIFO
+        eviction + new placement) starts a fresh entry with the next
+        ``placedSeq`` (C-05 — the old "first appearance ever" heuristic
+        ignored re-placements and never saw the new piece).
+
         Returns a dict like ``{'player_x': [{'cellId': str, 'placedSeq': int}, ...]}``
         usable by ``MoonChessAdapter.load_state()``.
         """
-        piece_order: dict[str, list[dict]] = {controlled_player: []}
-        # Simple heuristic: pieces appear in order of first observation
-        seen: set[str] = set()
-        seq = 0
-        for obs in self._history:
-            board = obs.boardObservation
-            for r in range(len(board)):
-                for c in range(len(board[r])):
-                    cell = board[r][c]
-                    if cell is not None:
+        with self._lock:
+            piece_order: dict[str, list[dict]] = {controlled_player: []}
+            # cell_id → (symbol, seq) of the piece currently sitting there
+            current: dict[str, tuple[str, int]] = {}
+            seq = 0
+            for obs in list(self._history):
+                board = obs.boardObservation
+                for r in range(len(board)):
+                    for c in range(len(board[r])):
+                        cell = board[r][c]
                         cell_id = f"cell_{r}_{c}"
-                        if cell_id not in seen:
-                            seen.add(cell_id)
+                        if cell is None:
+                            # Piece left the cell (moved or FIFO-evicted).
+                            current.pop(cell_id, None)
+                            continue
+                        symbol = str(cell)
+                        entry = current.get(cell_id)
+                        if entry is None or entry[0] != symbol:
+                            # A (new) piece appeared in this cell — record it
+                            # as the next placement in FIFO order.
                             seq += 1
-                            piece_order[controlled_player].append({
-                                "cellId": cell_id,
-                                "placedSeq": seq,
-                            })
-        return piece_order
+                            current[cell_id] = (symbol, seq)
+                            piece_order[controlled_player].append(
+                                {
+                                    "cellId": cell_id,
+                                    "placedSeq": seq,
+                                }
+                            )
+            return piece_order
 
     def reset(self) -> None:
         """Clear all tracked state."""
-        self._last_board = None
-        self._last_seq = -1
-        self._history.clear()
+        with self._lock:
+            self._last_board = None
+            self._last_seq = -1
+            self._history.clear()

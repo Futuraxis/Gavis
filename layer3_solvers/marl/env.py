@@ -157,7 +157,7 @@ def run_episode(
         legal = adapter.get_legal_actions(state)
         if not legal:
             break
-        mask = action_space.legal_mask(state)
+        mask = action_space.legal_mask(state, legal)
         action_idx, info = select_idx(pid, state, mask)
         action = action_space.action_from_index(action_idx, legal)
         if action is None:

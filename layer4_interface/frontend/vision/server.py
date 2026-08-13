@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import json
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,7 +19,7 @@ from layer4_interface.binding.exceptions import VisionModelResponseError
 from layer4_interface.binding.qwen_vision import QwenVisionClient
 from layer4_interface.binding.vision_binding import VisionLLMBinding
 
-from ..common.http_utils import read_json_body, send_error_json, send_json
+from ..common.http_utils import BodyTooLargeError, read_json_body, send_error_json, send_json
 
 ROOT_DIR = Path(__file__).resolve().parent
 
@@ -29,7 +28,7 @@ class VisionHandler(SimpleHTTPRequestHandler):
     server_version = "GavisVision/0.1"
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(ROOT_DIR / 'static'), **kwargs)
+        super().__init__(*args, directory=str(ROOT_DIR / "static"), **kwargs)
 
     # ── CORS ────────────────────────────────────────────────────────
 
@@ -67,10 +66,13 @@ class VisionHandler(SimpleHTTPRequestHandler):
                 source_name="qwen_vision",
             )
             observation = binding.parse_bytes(
-                image_bytes, mime_type=mime_type, frame_seq=frame_seq,
+                image_bytes,
+                mime_type=mime_type,
+                frame_seq=frame_seq,
             )
-            send_json(self, HTTPStatus.OK,
-                      {"ok": True, "observation": observation.model_dump()})
+            send_json(self, HTTPStatus.OK, {"ok": True, "observation": observation.model_dump()})
+        except BodyTooLargeError as exc:
+            send_error_json(self, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
         except KeyError as exc:
             send_error_json(self, HTTPStatus.BAD_REQUEST, f"Missing field: {exc.args[0]}")
         except (ValueError, VisionModelResponseError) as exc:

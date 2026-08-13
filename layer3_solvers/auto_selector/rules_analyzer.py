@@ -5,12 +5,13 @@ Used by the auto-selector to recommend a solver.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
 class GameProfile:
     """Profile of a game extracted from its rules.json."""
+
     name: str = "unknown"
     board_size: int = 0
     has_chance_nodes: bool = False
@@ -27,15 +28,15 @@ def analyze_game(rules: dict) -> GameProfile:
     Full implementation is future work.
     """
     profile = GameProfile()
-    constants = rules.get('constants', {})
-    profile.board_size = constants.get('board_size', 0)
-    profile.has_chance_nodes = len(rules.get('chance', [])) > 0
+    constants = rules.get("constants", {})
+    profile.board_size = constants.get("board_size", 0)
+    profile.has_chance_nodes = len(rules.get("chance", [])) > 0
     profile.has_hidden_info = False  # not yet detectable
 
     # Estimate state space
     if profile.board_size > 0:
-        cells = profile.board_size ** 2
-        profile.state_space_estimate = 3 ** cells
+        cells = profile.board_size**2
+        profile.state_space_estimate = 3**cells
         profile.action_space_estimate = cells
 
     # Suggest solver
@@ -47,16 +48,18 @@ def analyze_game(rules: dict) -> GameProfile:
 def suggest_solver(profile: GameProfile) -> str:
     """Suggest a solver based on game profile.
 
-    Rules of thumb:
-      - State space ≤ 10⁶ → PSRO (tabular is feasible)
+    Rules of thumb (checked in priority order — M-09: chance must be
+    checked BEFORE the small-state PSRO branch, otherwise a small game
+    with stochastic nodes always lands on PSRO and never reaches MCTS):
       - Has chance nodes → MCTS (natural chance handling)
-      - State space > 10⁶ → PPO (neural net generalization)
-      - Small board + need equilibrium → CFR
+      - State space ≤ 2·10⁴ → PSRO (tabular is feasible)
+      - State space ≤ 10⁷ → CFR
+      - State space > 10⁷ → PPO (neural net generalization)
     """
-    if profile.state_space_estimate <= 20000:
-        return "psro"
     if profile.has_chance_nodes:
         return "mcts"
+    if profile.state_space_estimate <= 20000:
+        return "psro"
     if profile.state_space_estimate <= 10_000_000:
         return "cfr"
     return "ppo"

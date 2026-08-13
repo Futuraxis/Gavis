@@ -86,6 +86,8 @@ class ActionSpace:
         self._prototypes = prototypes
         self._parser = parser
         self._legal_getter = legal_getter or (lambda state: [])
+        # canonical_key → index 缓存（键与状态无关，训练热路径上避免重复正则解析）
+        self._index_cache: dict[str, int | None] = {}
 
     # ── Meta ─────────────────────────────────────────────────────────
 
@@ -102,12 +104,23 @@ class ActionSpace:
 
     def index_of(self, action: ActionInstance) -> int | None:
         """Index of ``action`` in this space, or None if unmapped."""
-        return self._parser(action)
+        key = action.canonical_key
+        cached = self._index_cache.get(key, ...)
+        if cached is not ...:
+            return cached
+        idx = self._parser(action)
+        self._index_cache[key] = idx
+        return idx
 
-    def legal_mask(self, state: State) -> np.ndarray:
-        """Float32 mask over the space; duplicate actions set one bit."""
+    def legal_mask(self, state: State, legal: list[ActionInstance] | None = None) -> np.ndarray:
+        """Float32 mask over the space; duplicate actions set one bit.
+
+        ``legal`` may be the caller's already-computed legal action list
+        (run_episode computes it anyway) — avoids a second engine pass.
+        """
         mask = np.zeros(self.dim, dtype=np.float32)
-        for action in self._legal_getter(state):
+        actions = legal if legal is not None else self._legal_getter(state)
+        for action in actions:
             idx = self.index_of(action)
             if idx is not None:
                 mask[idx] = 1.0

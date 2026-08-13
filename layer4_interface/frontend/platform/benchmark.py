@@ -52,6 +52,9 @@ SOLVER_LABELS: dict[str, str] = {
     "mahjong": "启发式",
 }
 
+#: 保留在内存中的 job 数上限（审计 3.6 资源泄漏：_jobs 此前无界增长）。
+MAX_JOBS = 500
+
 
 class RandomSolver(SolverBase):
     """Uniform random policy — the baseline for benchmark comparisons."""
@@ -91,6 +94,7 @@ def create_solver(game_id: str, name: str, engine: SolverAdapter, seed: int, bud
         return RandomSolver(engine, seed)
     if name == "mahjong":
         from layer3_solvers.mahjong.heuristic import MahjongHeuristicAI
+
         return MahjongHeuristicAI(engine, SolverConfig(seed=seed))
     raise ValueError(f"未知求解器: {name}")
 
@@ -149,8 +153,22 @@ class BenchmarkRunner:
         )
         with self._lock:
             self._jobs[job.job_id] = job
+            self._prune_locked()
         threading.Thread(target=self._run, args=(job, budget), daemon=True).start()
         return job
+
+    def _prune_locked(self) -> None:
+        """Drop finished jobs when the registry exceeds ``MAX_JOBS``.
+
+        Called with ``self._lock`` held — daemon threads never clean up
+        their own ``BenchmarkJob`` entries, so without a bound the dict
+        grows without limit.
+        """
+        if len(self._jobs) <= MAX_JOBS:
+            return
+        finished = [jid for jid, j in self._jobs.items() if j.status in ("done", "error")]
+        for jid in finished:
+            self._jobs.pop(jid, None)
 
     def status(self, job_id: str) -> Optional[BenchmarkJob]:
         with self._lock:
@@ -183,13 +201,20 @@ class BenchmarkRunner:
     def _execute(self, job: BenchmarkJob, budget: Optional[int]) -> dict:
         spec = GAMES[job.game_id]
         search_budget = budget if budget is not None else BENCHMARK_BUDGETS[job.game_id]
-        # One engine + solver pair per job: the thread owns them, so reuse
-        # across iterations is safe, and CFR's table is warmed exactly once.
+        # One engine + solver pair PER SOLVER (M-10): a shared engine with
+        # identical seeds makes e.g. CFR-vs-CFR build the same strategy
+        # table and play identical moves, so the benchmark measures
+        # nothing.  Distinct seeds keep the two players independent.
         seed = self._seed + int(job.job_id, 16) % 1_000_000
-        engine = spec.create_engine(seed)
-        solver_a = create_solver(job.game_id, job.solver_a, engine, seed, search_budget)
-        solver_b = create_solver(job.game_id, job.solver_b, engine, seed, search_budget)
-        for solver, name in ((solver_a, job.solver_a), (solver_b, job.solver_b)):
+        seed_a, seed_b = seed, seed + 1_000_003
+        engine_a = spec.create_engine(seed_a)
+        engine_b = spec.create_engine(seed_b)
+        solver_a = create_solver(job.game_id, job.solver_a, engine_a, seed_a, search_budget)
+        solver_b = create_solver(job.game_id, job.solver_b, engine_b, seed_b, search_budget)
+        for solver, name, engine in (
+            (solver_a, job.solver_a, engine_a),
+            (solver_b, job.solver_b, engine_b),
+        ):
             if name == "cfr":
                 solver.solve(engine.create_initial_state(), verbose=False)
 
@@ -200,7 +225,9 @@ class BenchmarkRunner:
         for i in range(job.iterations):
             try:
                 a_first = i % 2 == 0  # swap seats every iteration
-                winner_tag, moves, seconds = self._play_one(engine, solver_a, solver_b, spec, a_first, seed + i)
+                winner_tag, moves, seconds = self._play_one(
+                    engine_a, engine_b, solver_a, solver_b, spec, a_first, seed + i
+                )
                 if winner_tag == "a":
                     a_wins += 1
                 elif winner_tag == "b":
@@ -233,9 +260,19 @@ class BenchmarkRunner:
 
     @staticmethod
     def _play_one(
-        engine: SolverAdapter, solver_a: SolverBase, solver_b: SolverBase, spec, a_first: bool, rng_seed: int
+        engine_a: SolverAdapter,
+        engine_b: SolverAdapter,
+        solver_a: SolverBase,
+        solver_b: SolverBase,
+        spec,
+        a_first: bool,
+        rng_seed: int,
     ) -> tuple[Optional[str], int, float]:
         """Play one full match; returns (winner_tag, moves, seconds).
+
+        The state is driven by the engine belonging to the currently
+        acting solver (both engines load the same rules, so the state
+        dict is interchangeable between them).
 
         Note: mahjong benchmarks run 2-player seats only (the runner
         swaps exactly two seats; 4-player mahjong is not benchmarked).
@@ -244,6 +281,7 @@ class BenchmarkRunner:
         seat_a = seats[0] if a_first else seats[1]
         seat_b = spec.seat_options[1] if a_first else spec.seat_options[0]
         rng = random.Random(rng_seed)
+        engine = engine_a
         state = engine.create_initial_state()
         moves = 0
         t0 = time.time()
@@ -256,6 +294,7 @@ class BenchmarkRunner:
                 break
             current = engine.get_current_player(state)
             solver = solver_a if current == seat_a else solver_b
+            engine = engine_a if current == seat_a else engine_b
             action = solver.select_action(state)
             if action is None:  # search found nothing — random fallback
                 legal = engine.get_legal_actions(state)
