@@ -12,7 +12,7 @@ import pytest
 JS_PATH = Path("layer4_interface/frontend/play_moon_chess/static/js/dom_observation.js")
 
 
-def run_node_case(case_name: str) -> dict:
+def run_node_case(case_name: str) -> dict[str, object]:
     """Run one DOM observation JavaScript test case under Node."""
     node = shutil.which("node")
     if node is None:

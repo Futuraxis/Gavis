@@ -10,7 +10,7 @@ from layer4_interface.binding import DomBinding, Observation
 from layer4_interface.binding.exceptions import InvalidBoardError
 
 
-def _payload(frame_seq: int = 0) -> dict:
+def _payload(frame_seq: int = 0) -> dict[str, object]:
     return {
         "gameId": "moon_dom",
         "source": "dom",

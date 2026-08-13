@@ -5,14 +5,16 @@ Two parallel pipelines:
 - ``VisionLLMBinding``: Large Vision Model API (accurate, needs external API)
 """
 
+from __future__ import annotations
+
 from .base_binding import BaseBinding
 from .dom_binding import DomBinding
 from .exceptions import (
     AmbiguousObservationError,
     BindingError,
     ImageLoadError,
-    InvalidBoardError,
     InvalidActionMaskError,
+    InvalidBoardError,
     InvalidConfidenceError,
     InvalidFrameSequenceError,
     MissingHistoryError,
