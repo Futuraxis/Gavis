@@ -52,6 +52,9 @@ SOLVER_LABELS: dict[str, str] = {
     "mahjong": "启发式",
 }
 
+#: 保留在内存中的 job 数上限（审计 3.6 资源泄漏：_jobs 此前无界增长）。
+MAX_JOBS = 500
+
 
 class RandomSolver(SolverBase):
     """Uniform random policy — the baseline for benchmark comparisons."""
@@ -150,8 +153,22 @@ class BenchmarkRunner:
         )
         with self._lock:
             self._jobs[job.job_id] = job
+            self._prune_locked()
         threading.Thread(target=self._run, args=(job, budget), daemon=True).start()
         return job
+
+    def _prune_locked(self) -> None:
+        """Drop finished jobs when the registry exceeds ``MAX_JOBS``.
+
+        Called with ``self._lock`` held — daemon threads never clean up
+        their own ``BenchmarkJob`` entries, so without a bound the dict
+        grows without limit.
+        """
+        if len(self._jobs) <= MAX_JOBS:
+            return
+        finished = [jid for jid, j in self._jobs.items() if j.status in ("done", "error")]
+        for jid in finished:
+            self._jobs.pop(jid, None)
 
     def status(self, job_id: str) -> Optional[BenchmarkJob]:
         with self._lock:

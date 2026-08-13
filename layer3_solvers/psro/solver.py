@@ -33,6 +33,7 @@ class PSROConfig(SolverConfig):
     epsilon: float = 0.1
     alpha: float = 0.1
     evaluation_episodes: int = 10
+    num_workers: int = 0  # 元博弈评估并行线程数（0=自动，1=串行）
 
 
 class PSROSolver(SolverBase):
@@ -93,6 +94,7 @@ class PSROSolver(SolverBase):
         eps = getattr(self.config, "epsilon", 0.1)
         alpha = getattr(self.config, "alpha", 0.1)
         n_eval = getattr(self.config, "evaluation_episodes", 10)
+        n_workers = getattr(self.config, "num_workers", 0)
 
         verbose = kwargs.get("verbose", False)
 
@@ -103,6 +105,7 @@ class PSROSolver(SolverBase):
                 self._policy_pool,
                 Ne=n_eval,
                 previous=self._payoff_matrix,
+                num_workers=n_workers,
             )
             self._payoff_matrix = payoff_matrix
 
@@ -112,7 +115,7 @@ class PSROSolver(SolverBase):
             self._nash_weights = nash_p
 
             # Compute exploitability
-            expl = exploitability(self._gym, self._nash_mixture, self._policy_pool, Ne=n_eval)
+            expl = exploitability(self._gym, self._nash_mixture, self._policy_pool, Ne=n_eval, num_workers=n_workers)
 
             # Train new best response
             beta = tabular_q_best_response(

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from .base_binding import BaseBinding
+import threading
+
 from .schemas import Observation
 
 
@@ -23,18 +24,22 @@ class MockBinding:
             observedAt=0,
         )
         self._frame_seq = 0
+        # 帧序号自增是读-改-写，并发下需加锁（审计 3.6）。
+        self._seq_lock = threading.Lock()
 
     def parse(self, source: str) -> Observation:
         return self._observation
 
     def parse_image(self, image_path: str, **kwargs) -> Observation:
-        self._frame_seq += 1
+        with self._seq_lock:
+            self._frame_seq += 1
+            seq = self._frame_seq
         # Return a copy so mutating the caller's copy doesn't affect internal state
         obs = self._observation
         return Observation(
             gameId=obs.gameId,
             source=obs.source,
-            frameSeq=self._frame_seq,
+            frameSeq=seq,
             boardObservation=[row[:] for row in obs.boardObservation],
             confidence=[row[:] for row in obs.confidence],
             observedAt=obs.observedAt,

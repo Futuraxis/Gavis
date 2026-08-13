@@ -71,6 +71,7 @@ docs/                 架构设计 + 六篇合并分析文档
 |------|------|
 | `docs/design/architecture.md` | 当前四层架构设计 (v0.2) |
 | `docs/merge/01~06.md` | 六篇合并分析与方案文档 |
+| `docs/design/security-notes.md` | 安全与性能决策记录（审计 3.6 修复项与暂缓项） |
 | `docs/design/gamerule/v4.1.md` | 规则语言设计 (v5.0: `docs/design/gamerule/v5.0.md`, v5.1: `docs/design/gamerule/v5.1.md`) |
 | `docs/user/play_moon_chess.md` | 月亮棋人机对弈使用说明 |
 | `docs/user/play_texas_holdem.md` | 德州扑克人机对弈使用说明 |

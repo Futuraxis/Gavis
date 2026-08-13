@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Optional
+
+#: match_id 白名单：仅字母数字、下划线、连字符（审计 3.6 路径遍历修复——
+#: 不含路径分隔符/`..`，杜绝 `../../` 逃逸出 data 目录）。
+_MATCH_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 #: Metadata fields embedded under ``meta`` for cheap list queries.
 _META_FIELDS = (
@@ -46,6 +51,7 @@ class MatchHistory:
         match_id = match.get("match_id")
         if not match_id:
             raise HistoryError("match record is missing match_id")
+        _check_match_id(match_id)
         match = dict(match)
         match["meta"] = {
             "match_id": match.get("match_id"),
@@ -102,6 +108,7 @@ class MatchHistory:
 
     def get(self, match_id: str) -> dict:
         """Full match record including the move log."""
+        _check_match_id(match_id)
         path = self.data_dir / f"{match_id}.json"
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -116,8 +123,15 @@ class MatchHistory:
 
     def delete(self, match_id: str) -> None:
         """Remove a stored match record."""
+        _check_match_id(match_id)
         path = self.data_dir / f"{match_id}.json"
         try:
             path.unlink()
         except FileNotFoundError:
             raise HistoryError(f"match not found: {match_id}") from None
+
+
+def _check_match_id(match_id: str) -> None:
+    """Validate match_id against the path-traversal-safe whitelist."""
+    if not isinstance(match_id, str) or not _MATCH_ID_RE.fullmatch(match_id):
+        raise HistoryError(f"invalid match_id: {match_id!r}")

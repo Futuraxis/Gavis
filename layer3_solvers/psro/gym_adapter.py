@@ -110,6 +110,15 @@ class GymAdapter:
                 mask[idx] = True
         return mask
 
+    def clone(self) -> "GymAdapter":
+        """A copy with its own ``_state`` for parallel match-up evaluation.
+
+        Clones share the wrapped adapter (engine) — its methods only
+        mutate the passed-in state, so concurrent episodes over separate
+        states are safe (audit 3.6: PSRO 评估并行化).
+        """
+        return GymAdapter(self._adapter, state_dim=int(self.observation_space.n))
+
     def get_current_player(self) -> str | None:
         """Delegated current-player query (who acts at the current state).
 
