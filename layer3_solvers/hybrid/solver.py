@@ -231,6 +231,11 @@ class HybridSolver(SolverBase):
         node = root
         path: list[MCTSNode] = [root]
         guard = max(32, self.config.mcts_rollout_depth * 4)
+        # M-11: refresh the root's untried actions per sampled world —
+        # different hidden worlds can have different legal action sets, so
+        # a one-shot snapshot from the public state would both miss legal
+        # actions and try illegal ones.
+        root.untried_actions = [a for a in self.adapter.get_legal_actions(sim) if a.canonical_key not in root.children]
 
         for _ in range(guard):
             nt = self.adapter.get_node_type(sim)
@@ -330,7 +335,14 @@ class HybridSolver(SolverBase):
         # opponent fold vs a call); re-derive it from the advanced state.
         self._fill_child(child, sim, self.adapter)
         if child.node_type == "player" and sim["env"].get("turn") != root_player:
-            return None  # opponent still to act — degenerate edge, skip
+            # Degenerate edge (opponent still to act, e.g. a multi-action
+            # turn): roll the expansion back so the action is not lost
+            # (M-12).  Re-insert at the FRONT — untried_actions pops from
+            # the end, so other actions get tried before it is retried.
+            node.children.pop(action.canonical_key, None)
+            node.child_actions.pop(action.canonical_key, None)
+            node.untried_actions.insert(0, action)
+            return None
         return child, sim
 
     def _expand_omcts_chance(self, node: MCTSNode, state: State, root_player: str) -> None:
@@ -347,9 +359,17 @@ class HybridSolver(SolverBase):
     def _select_chance_child(self, node: MCTSNode) -> Optional[ChanceOutcome]:
         """Probability-weighted descent into an expanded chance node."""
         outcomes = list(node.child_outcomes.values())
+        return self._sample_outcome(outcomes)
+
+    def _sample_outcome(self, outcomes: list[ChanceOutcome]) -> Optional[ChanceOutcome]:
+        """Probability-weighted sample, normalized — tolerates probability
+        vectors that do not sum to exactly 1 (no tail bias)."""
         if not outcomes:
             return None
-        r = self.rng.random()
+        total = sum(o.probability for o in outcomes)
+        if total <= 0:
+            return self.rng.choice(outcomes)
+        r = self.rng.random() * total
         cumsum = 0.0
         for o in outcomes:
             cumsum += o.probability
@@ -388,7 +408,14 @@ class HybridSolver(SolverBase):
             if nt == "terminal":
                 break
             if nt == "chance":
-                _, sim = self.adapter.sample_chance(sim)
+                # C-06: ``sample_chance`` is not part of the SolverAdapter
+                # Protocol — go through ``get_chance_outcomes`` and sample
+                # locally so any compliant adapter works here.
+                outcomes = self.adapter.get_chance_outcomes(sim)
+                chosen = self._sample_outcome(outcomes)
+                if chosen is None:
+                    break
+                sim = self.adapter.apply_chance(sim, chosen)
                 continue
             actions = self.adapter.get_legal_actions(sim)
             if not actions:

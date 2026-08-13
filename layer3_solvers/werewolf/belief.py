@@ -24,17 +24,19 @@ from __future__ import annotations
 
 import math
 import random
+import re
 from dataclasses import dataclass, field
+from typing import Callable
 
 # ── 启发式似然参数：P(信号 | 角色) 的乘性权重 ───────────────────────
 # 数值 > 1 表示该信号在该角色下更常见。调参即调策略。
 LIKELIHOOD = {
-    "vote_target": {"wolf": 1.5, "good": 1.0},      # 被投票者更像狼
-    "voter": {"wolf": 1.15, "good": 1.0},            # 投狼票的投票者略像狼
-    "accuse_target": {"wolf": 1.6, "good": 1.0},     # 被指控者更像狼
-    "accuser": {"wolf": 1.1, "good": 1.0},           # 指控者略像狼
-    "claim_seer": {"wolf": 0.35, "good": 1.0},       # 声称预言家：好人更可信
-    "claimed_wolf": {"wolf": 2.0, "good": 1.0},      # 被指为狼
+    "vote_target": {"wolf": 1.5, "good": 1.0},  # 被投票者更像狼
+    "voter": {"wolf": 1.15, "good": 1.0},  # 投狼票的投票者略像狼
+    "accuse_target": {"wolf": 1.6, "good": 1.0},  # 被指控者更像狼
+    "accuser": {"wolf": 1.1, "good": 1.0},  # 指控者略像狼
+    "claim_seer": {"wolf": 0.35, "good": 1.0},  # 声称预言家：好人更可信
+    "claimed_wolf": {"wolf": 2.0, "good": 1.0},  # 被指为狼
 }
 
 ROLE_KEY = "role"  # 观察里的角色字段（'my_role'）
@@ -45,9 +47,11 @@ class BeliefTracker:
     """Per-player posterior role distributions + joint sampling."""
 
     players: list[str]
-    role_pool: list[str]              # 完整角色池（含自己）
+    role_pool: list[str]  # 完整角色池（含自己）
     my_role: str
-    signal_fn=None                    # 可选：LLM 打分器（预留）
+    # 可选：LLM 打分器（预留）。必须带类型注解——dataclass 把无注解的
+    # 赋值当类属性而非字段，会导致构造时 TypeError（C-03）。
+    signal_fn: Callable | None = None
     rng: random.Random = field(default_factory=random.Random)
 
     def __post_init__(self) -> None:
@@ -193,8 +197,10 @@ class BeliefTracker:
     def sample_assignment(self, exclude: set[str] | None = None) -> dict[str, str]:
         """从联合后验采样一个完整角色分配（角色计数一致，无放回）。
 
-        顺序采样：按狼概率降序确定狼（信息最强者先定），其余按权重从
-        剩余池抽取——保证与 role_pool 计数一致。
+        随机顺序 + 条件逐次采样：每步从剩余玩家中随机抽一人，按其在
+        剩余角色池上的边际后验权重抽角色——各玩家被抽的顺序与狼的
+        分配概率无关（M-07：旧实现的缩放因子依赖变化的池大小，采样
+        顺序会系统性影响狼的分配概率）。
         """
         exclude = exclude or set()
         pool = list(self._pool)
@@ -204,18 +210,9 @@ class BeliefTracker:
                 assign[p] = r
                 if r in pool:
                     pool.remove(r)
-        remaining = [p for p in self.players
-                     if p not in assign and p not in exclude and p != self._self_id()]
-        # 先定狼：按狼概率降序
-        ordered = sorted(remaining, key=lambda p: -self.wolf_prob(p))
-        for p in ordered:
-            if "wolf" in pool:
-                # 以 wolf_prob 为权重决定是否给狼（否则留给后续角色）
-                if self.rng.random() < self.wolf_prob(p) * (len(pool) / max(1, len(remaining))):
-                    assign[p] = "wolf"
-                    pool.remove("wolf")
-                    continue
-            # 其余角色按后验权重无放回
+        remaining = [p for p in self.players if p not in assign and p not in exclude and p != self._self_id()]
+        self.rng.shuffle(remaining)
+        for p in remaining:
             weights = [self._post.get(p, {}).get(r, 0.0) for r in pool]
             total = sum(weights)
             if total <= 0:
@@ -227,8 +224,12 @@ class BeliefTracker:
 
 
 def _find_target(text: str, players: list[str]) -> str | None:
-    """从发言文本中提取被指认的玩家（p0..pN-1）。"""
+    """从发言文本中提取被指认的玩家 id（精确词元匹配）。
+
+    按字母数字分词后整词比较，避免 "p1" 误匹配 "p10"（子串匹配 bug）。
+    """
+    tokens = [t.casefold() for t in re.findall(r"[A-Za-z0-9_]+", text)]
     for pid in players:
-        if pid in text:
+        if pid.casefold() in tokens:
             return pid
     return None

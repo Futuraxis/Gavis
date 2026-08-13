@@ -92,7 +92,9 @@ class MAACSolver(SolverBase):
     # ── SolverBase ──────────────────────────────────────────────────
 
     def select_action(self, state: State) -> ActionInstance | None:
-        """Sample the current player's actor (masked), greedy at eval."""
+        """Greedy masked-argmax of the current player's actor (C-08: eval
+        must be deterministic — sampling here would understate the trained
+        policy's true strength)."""
         player = self.adapter.get_current_player(state)
         if player is None or player not in self._player_idx:
             return None
@@ -105,8 +107,7 @@ class MAACSolver(SolverBase):
                 torch.as_tensor(self._encoder.encode_obs(state, player), device=self.device).unsqueeze(0)
             )
             masked = logits.masked_fill(torch.as_tensor(mask, device=self.device).unsqueeze(0) == 0, -1e9)
-            dist = torch.distributions.Categorical(logits=masked)
-            idx = int(dist.sample().item())
+            idx = int(masked.argmax(dim=1).item())
         return self._action_space.action_from_index(idx, legal)
 
     def train(self, episodes: int = 100, **kwargs) -> SolverMetrics:
@@ -241,6 +242,10 @@ class MAACSolver(SolverBase):
         self._optimizer.step()
 
         # ── Actor (entropy-regularized policy gradient) ───────────
+        # SAC-style: re-sample ``a ~ π(·|s)`` for the actor loss instead
+        # of scoring the replay buffer's stale action (C-07).  Using the
+        # replayed action is not a valid policy-gradient form and the
+        # actor cannot move toward high-Q regions.
         actor_losses = []
         for i, p in enumerate(self._players):
             sel = batch.player_idx == i
@@ -249,8 +254,12 @@ class MAACSolver(SolverBase):
             logits = self._actors[p](batch.obs[sel])
             masked = logits.masked_fill(batch.masks[sel] == 0, -1e9)
             dist = torch.distributions.Categorical(logits=masked)
-            log_prob = dist.log_prob(batch.actions[sel])
-            q_online = self._critics[p](obs_slots[sel], actions[sel], acting[sel])[:, i]
+            a_new = dist.sample()
+            log_prob = dist.log_prob(a_new)
+            # Joint action tensor with the fresh action in the acting slot.
+            new_joint = actions[sel].clone()
+            new_joint[:, i] = a_new
+            q_online = self._critics[p](obs_slots[sel], new_joint, acting[sel])[:, i]
             actor_losses.append(-(q_online - cfg.entropy_temperature * log_prob).mean())
         if actor_losses:
             actor_loss = torch.stack(actor_losses).mean()

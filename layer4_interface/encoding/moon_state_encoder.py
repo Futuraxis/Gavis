@@ -58,13 +58,25 @@ class MoonStateEncoder:
         return np.asarray(features, dtype=np.float32)
 
     def get_action_mask(self, state: dict) -> np.ndarray:
-        legal_actions = set(self.adapter.get_legal_actions(state))
+        legal_actions = self.adapter.get_legal_actions(state)
         mask = np.zeros(self.ACTION_DIM, dtype=np.float32)
         if self.adapter.is_terminal(state):
             return mask
+        # Collect legal CELL IDS only — never hash the action objects
+        # themselves (C-02: ActionInstance is an unhashable dataclass, so
+        # ``set(actions)`` raised TypeError; comparing cell ids against
+        # the action objects also silently produced an all-zero mask).
+        legal_cells: set[str] = set()
+        for a in legal_actions:
+            if isinstance(a, str):
+                legal_cells.add(a)
+                continue
+            cell = a.params.get("cell", {}) if isinstance(getattr(a, "params", None), dict) else None
+            if isinstance(cell, dict) and cell.get("id"):
+                legal_cells.add(str(cell["id"]))
         for index in range(self.ACTION_DIM):
             cell_id = action_index_to_cell_id(index)
-            if cell_id in legal_actions:
+            if cell_id in legal_cells:
                 mask[index] = 1.0
         return mask
 

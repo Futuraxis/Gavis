@@ -1,7 +1,7 @@
 """HAPPOSolver — Heterogeneous-Agent PPO (sequential updates).
 
 Each agent owns an actor (on its own observation) and a critic (on the
-joint state).  After every episode the agents are updated **in random
+joint state).  After every episode the agents are updated **in a fixed
 order**, one at a time, with the standard clipped PPO surrogate — the
 HAPPO sequential-update scheme that guarantees strict monotonic
 improvement even with heterogeneous policies.  GAE is computed per
@@ -191,10 +191,14 @@ class HAPPOSolver(SolverBase):
             return float(self._critics[player](global_state).item())
 
     def _update_all_agents(self) -> None:
-        """Sequential per-agent PPO updates in random order (HAPPO core)."""
+        """Sequential per-agent PPO updates in a fixed order (HAPPO core).
+
+        The HAPPO monotonic-improvement guarantee requires each round of
+        sequential updates to run in one consistent order; shuffling the
+        order every episode (M-06) breaks the guarantee.
+        """
         cfg = self.config
         order = list(self._players)
-        self._rng.shuffle(order)
         for agent in order:
             aidx = self._player_idx[agent]
             if len(self._traj.obs.get(aidx, [])) == 0:

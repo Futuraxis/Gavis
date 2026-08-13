@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Optional
 
 from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter, State
 
@@ -32,16 +31,15 @@ GOD_ROLES = ("seer", "witch", "guard", "hunter")
 @dataclass
 class BayesConfig(SolverConfig):
     guard_priority: tuple = GOD_ROLES  # 守卫优先保护的神
-    poison_min_wolf: float = 0.45      # 毒药最低狼概率阈值
-    shoot_min_wolf: float = 0.5        # 开枪最低狼概率阈值（低于则 pass）
-    speech_llm: bool = False           # True 时发言委托 OllamaSolver（预留）
+    poison_min_wolf: float = 0.45  # 毒药最低狼概率阈值
+    shoot_min_wolf: float = 0.5  # 开枪最低狼概率阈值（低于则 pass）
+    speech_llm: bool = False  # True 时发言委托 OllamaSolver（预留）
 
 
 class BayesSolver(SolverBase):
     """Bayesian Werewolf player for one ``player_id``."""
 
-    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None,
-                 player_id: str | None = None):
+    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None, player_id: str | None = None):
         super().__init__(adapter, config or BayesConfig())
         self.player_id = player_id or self._default_player(adapter)
         self._tracker: BeliefTracker | None = None
@@ -86,6 +84,15 @@ class BayesSolver(SolverBase):
             action = self._speech_action(legal, obs)
         return action if action is not None else self._fallback(legal)
 
+    def reset(self) -> None:
+        """重置信念状态——solver 跨对局复用时必须调用（M-08）。
+
+        否则上一局的发言/投票/死亡证据会泄漏到下一局的后验里。
+        """
+        self._tracker = None
+        self._seen_speech = 0
+        self._seen_votes = 0
+
     def train(self, episodes: int = 100, **kwargs) -> SolverMetrics:
         """贝叶斯求解器无需训练。"""
         return SolverMetrics(episodes=0, win_rate=0.0, avg_return=0.0)
@@ -104,10 +111,14 @@ class BayesSolver(SolverBase):
         """只折叠新增的信号（观察是全量历史）。"""
         speech = list(obs.get("speech_log") or [])
         votes = list(obs.get("vote_log") or [])
+        if self._tracker is not None and (len(speech) < self._seen_speech or len(votes) < self._seen_votes):
+            # 观察历史比上次更短 → 新对局开始，重建信念防止跨局泄漏。
+            self.reset()
+            self._ensure_tracker(obs)
         if len(speech) > self._seen_speech or len(votes) > self._seen_votes:
             snapshot = dict(obs)
-            snapshot["speech_log"] = speech[self._seen_speech:]
-            snapshot["vote_log"] = votes[self._seen_votes:]
+            snapshot["speech_log"] = speech[self._seen_speech :]
+            snapshot["vote_log"] = votes[self._seen_votes :]
             self._seen_speech = len(speech)
             self._seen_votes = len(votes)
             self._tracker.update_from_observation(snapshot)
@@ -120,8 +131,11 @@ class BayesSolver(SolverBase):
 
     def _target_action(self, legal: list[ActionInstance], rank_fn, template_id: str):
         """从 legal 中选 template_id 动作，target 按 rank_fn 排序取最优。"""
-        cands = [(a, a.params.get("target", {}).get("id")) for a in legal
-                 if a.template_id == template_id and a.params.get("target")]
+        cands = [
+            (a, a.params.get("target", {}).get("id"))
+            for a in legal
+            if a.template_id == template_id and a.params.get("target")
+        ]
         cands = [(a, t) for a, t in cands if t and t != self.player_id]
         if not cands:
             return None
@@ -152,13 +166,18 @@ class BayesSolver(SolverBase):
 
     def _guard_action(self, legal: list[ActionInstance]):
         """守神优先：后验神概率最高者。"""
-        cands = [(a, a.params.get("target", {}).get("id")) for a in legal
-                 if a.template_id == "guard" and a.params.get("target")]
+        cands = [
+            (a, a.params.get("target", {}).get("id"))
+            for a in legal
+            if a.template_id == "guard" and a.params.get("target")
+        ]
         cands = [(a, t) for a, t in cands if t and t != self.player_id]
         if not cands:
             return None
+
         def god_prob(t: str) -> float:
             return sum(self._tracker.prob(t, r) for r in self.config.guard_priority)
+
         return max(cands, key=lambda at: god_prob(at[1]))[0]
 
     def _hunter_action(self, legal: list[ActionInstance]):
@@ -188,21 +207,20 @@ class BayesSolver(SolverBase):
             # 狼：伪装村民，指控最不可疑者（好人）
             victim = min(alive_others, key=lambda t: self._tracker.wolf_prob(t))
             return self._with_speech(
-                speak, f"我是普通村民。我怀疑{victim}，他的发言和投票都在带节奏，投票他。",
-                intent="accuse")
+                speak, f"我是普通村民。我怀疑{victim}，他的发言和投票都在带节奏，投票他。", intent="accuse"
+            )
         if my_role == "seer":
             result = obs.get("seer_result")
             if result and result in self._alive_others(obs):
                 return self._with_speech(
-                    speak, f"我是预言家，昨晚验了{result}，{result}是狼！大家投{result}。",
-                    intent="accuse")
+                    speak, f"我是预言家，昨晚验了{result}，{result}是狼！大家投{result}。", intent="accuse"
+                )
             return self._with_speech(speak, "我是预言家，先观望一轮，有好消息再报。", intent="claim")
         # 好人：指控后验最可疑者
         sus = max(alive_others, key=lambda t: self._tracker.wolf_prob(t))
         if self._tracker.wolf_prob(sus) < 0.4:
             return self._with_speech(speak, "我先听一轮，暂时没有明确怀疑对象。", intent="question")
-        return self._with_speech(
-            speak, f"我怀疑{sus}是狼，投{sus}。", intent="accuse")
+        return self._with_speech(speak, f"我怀疑{sus}是狼，投{sus}。", intent="accuse")
 
     @staticmethod
     def _with_speech(action: ActionInstance, text: str, intent: str = "claim"):

@@ -33,10 +33,19 @@ def estimate_reward(env, num_episodes: int, p1: Agent, p2: Agent, max_steps: int
         steps = 0
 
         while not done and steps < max_steps:
-            # Player one acts on even turns; player two acts on odd turns.
-            actor = p1 if steps % 2 == 0 else p2
+            # Route by the environment's own current-player query — not by
+            # turn parity (C-10): chance nodes, skipped turns and
+            # multi-action turns all break a ``steps % 2`` assumption.
+            # Generic Gym-like envs without such a query keep the parity
+            # fallback (correct for strictly alternating two-player games).
+            current = getattr(env, "get_current_player", lambda: None)()
+            players = getattr(env, "players", None)
+            if current is not None and players:
+                actor = p1 if current == players[0] else p2
+            else:
+                actor = p1 if steps % 2 == 0 else p2
             mask = env.available_actions()
-            action = actor.step(obs, Amask=mask)
+            action = actor.step(obs, amask=mask)
 
             obs, reward, terminated, truncated, _ = env.step(action)
             total_reward += reward

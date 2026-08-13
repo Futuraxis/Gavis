@@ -18,7 +18,7 @@ class CountingAgent:
     def __init__(self) -> None:
         self.calls = 0
 
-    def step(self, obs: int, Amask: np.ndarray | None = None) -> int:  # noqa: N803
+    def step(self, obs: int, amask: np.ndarray | None = None) -> int:
         self.calls += 1
         return 0
 

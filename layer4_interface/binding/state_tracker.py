@@ -15,6 +15,7 @@ from .schemas import Observation
 @dataclass
 class StateChange:
     """A change between two consecutive frames."""
+
     added: list[tuple[int, int, str]] = field(default_factory=list)
     removed: list[tuple[int, int]] = field(default_factory=list)
 
@@ -50,7 +51,9 @@ class StateTracker:
         if self._last_board is not None:
             for r in range(len(current)):
                 for c in range(len(current[r])):
-                    prev = self._last_board[r][c] if r < len(self._last_board) and c < len(self._last_board[r]) else None
+                    prev = (
+                        self._last_board[r][c] if r < len(self._last_board) and c < len(self._last_board[r]) else None
+                    )
                     curr = current[r][c]
                     if prev != curr:
                         if curr is not None:
@@ -71,27 +74,42 @@ class StateTracker:
     def infer_piece_order(self, controlled_player: str = "player_x") -> dict[str, list[dict]]:
         """Infer FIFO piece order from observed frame history.
 
+        Tracks the piece currently occupying each cell across frames: a
+        cell that is emptied and later re-occupied (Moon Chess FIFO
+        eviction + new placement) starts a fresh entry with the next
+        ``placedSeq`` (C-05 — the old "first appearance ever" heuristic
+        ignored re-placements and never saw the new piece).
+
         Returns a dict like ``{'player_x': [{'cellId': str, 'placedSeq': int}, ...]}``
         usable by ``MoonChessAdapter.load_state()``.
         """
         piece_order: dict[str, list[dict]] = {controlled_player: []}
-        # Simple heuristic: pieces appear in order of first observation
-        seen: set[str] = set()
+        # cell_id → (symbol, seq) of the piece currently sitting there
+        current: dict[str, tuple[str, int]] = {}
         seq = 0
         for obs in self._history:
             board = obs.boardObservation
             for r in range(len(board)):
                 for c in range(len(board[r])):
                     cell = board[r][c]
-                    if cell is not None:
-                        cell_id = f"cell_{r}_{c}"
-                        if cell_id not in seen:
-                            seen.add(cell_id)
-                            seq += 1
-                            piece_order[controlled_player].append({
+                    cell_id = f"cell_{r}_{c}"
+                    if cell is None:
+                        # Piece left the cell (moved or FIFO-evicted).
+                        current.pop(cell_id, None)
+                        continue
+                    symbol = str(cell)
+                    entry = current.get(cell_id)
+                    if entry is None or entry[0] != symbol:
+                        # A (new) piece appeared in this cell — record it
+                        # as the next placement in FIFO order.
+                        seq += 1
+                        current[cell_id] = (symbol, seq)
+                        piece_order[controlled_player].append(
+                            {
                                 "cellId": cell_id,
                                 "placedSeq": seq,
-                            })
+                            }
+                        )
         return piece_order
 
     def reset(self) -> None:

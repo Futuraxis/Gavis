@@ -7,7 +7,7 @@ Protocol instead of a hard-coded environment.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -16,11 +16,11 @@ import torch
 from torch import nn
 
 from layer2_engine.interfaces.solver_adapter import (
+    ActionInstance,
     SolverAdapter,
     State,
-    ActionInstance,
 )
-from layer2_engine.games.moon_chess import MoonChessAdapter
+
 from ..base import SolverBase, SolverConfig, SolverMetrics
 from .networks import ActorCriticNetwork
 from .rollout_buffer import RolloutBuffer
@@ -37,8 +37,8 @@ class PPOConfig(SolverConfig):
     max_grad_norm: float = 0.5
     update_epochs: int = 4
     minibatch_size: int = 32
-    state_dim: int = 38       # default for MoonChessAdapter
-    action_dim: int = 9       # default for 3×3 grid
+    state_dim: int = 38  # default for MoonChessAdapter
+    action_dim: int = 9  # default for 3×3 grid
 
 
 class PPOSolver(SolverBase):
@@ -52,14 +52,15 @@ class PPOSolver(SolverBase):
     def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
         super().__init__(adapter, config or PPOConfig())
         cfg = self.config
-        self._state_dim = getattr(cfg, 'state_dim', 38)
-        self._action_dim = getattr(cfg, 'action_dim', 9)
+        self._state_dim = getattr(cfg, "state_dim", 38)
+        self._action_dim = getattr(cfg, "action_dim", 9)
 
         self.device = self._resolve_device(cfg.device)
         self.network = ActorCriticNetwork(self._state_dim, self._action_dim).to(self.device)
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=cfg.learning_rate)
         self.buffer = RolloutBuffer()
         self.rng = random.Random(cfg.seed)
+        self._mcts_opponent = None  # lazy (created on first 'mcts' opponent move)
 
     @property
     def name(self) -> str:
@@ -92,9 +93,9 @@ class PPOSolver(SolverBase):
         opponent : str, optional
             'random' (default), 'self' (self-play), or 'mcts'
         """
-        opponent_type = kwargs.get('opponent', 'random')
-        verbose = kwargs.get('verbose', False)
-        controlled_player = kwargs.get('controlled_player', 'p_black')
+        opponent_type = kwargs.get("opponent", "random")
+        verbose = kwargs.get("verbose", False)
+        controlled_player = kwargs.get("controlled_player", "p_black")
 
         wins = 0
         total_reward = 0.0
@@ -107,7 +108,7 @@ class PPOSolver(SolverBase):
 
             while not self.adapter.is_terminal(state):
                 nt = self.adapter.get_node_type(state)
-                if nt == 'player':
+                if nt == "player":
                     cp = self.adapter.get_current_player(state)
                     if cp == controlled_player:
                         action = self._select_action_train(state)
@@ -139,7 +140,7 @@ class PPOSolver(SolverBase):
                         if opp_action is None:
                             break
                         state = self.adapter.apply_action(state, opp_action)
-                elif nt == 'chance':
+                elif nt == "chance":
                     outcomes = self.adapter.get_chance_outcomes(state)
                     if outcomes:
                         o = self.rng.choice(outcomes)
@@ -150,7 +151,7 @@ class PPOSolver(SolverBase):
 
             # Episode end
             if self.adapter.is_terminal(state):
-                winner = state['env'].get('winner')
+                winner = state["env"].get("winner")
                 if winner == controlled_player:
                     wins += 1
             total_reward += ep_reward
@@ -160,32 +161,37 @@ class PPOSolver(SolverBase):
                 metrics = self._update()
                 if verbose and (ep + 1) % max(1, episodes // 10) == 0:
                     win_pct = wins / (ep + 1) * 100
-                    print(f'  PPO ep {ep+1:4d}/{episodes}  '
-                          f'win={win_pct:5.1f}%  '
-                          f'pl={metrics["policy_loss"]:.4f}  '
-                          f'vl={metrics["value_loss"]:.4f}  '
-                          f'ent={metrics["entropy"]:.4f}')
+                    print(
+                        f"  PPO ep {ep + 1:4d}/{episodes}  "
+                        f"win={win_pct:5.1f}%  "
+                        f"pl={metrics['policy_loss']:.4f}  "
+                        f"vl={metrics['value_loss']:.4f}  "
+                        f"ent={metrics['entropy']:.4f}"
+                    )
 
         return SolverMetrics(
             episodes=episodes,
             win_rate=wins / max(1, episodes),
             avg_return=total_reward / max(1, episodes),
-            extra={'steps': total_steps},
+            extra={"steps": total_steps},
         )
 
     def save(self, path: str) -> None:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({
-            'model_state_dict': self.network.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'config': asdict(self.config),
-        }, target)
+        torch.save(
+            {
+                "model_state_dict": self.network.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "config": asdict(self.config),
+            },
+            target,
+        )
 
     def load(self, path: str) -> None:
         checkpoint = torch.load(path, map_location=self.device)
-        self.network.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.network.load_state_dict(checkpoint["model_state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
     # ── Internal: training step ───────────────────────────────────
 
@@ -260,37 +266,42 @@ class PPOSolver(SolverBase):
 
     def _get_features(self, state: State) -> np.ndarray:
         """Extract feature vector.  Prefers adapter.get_feature_vector()."""
-        if hasattr(self.adapter, 'get_feature_vector'):
+        if hasattr(self.adapter, "get_feature_vector"):
             # MoonChessAdapter exposes this directly
-            cp = self.adapter.get_current_player(state) or 'p_black'
+            cp = self.adapter.get_current_player(state) or "p_black"
             return self.adapter.get_feature_vector(state, cp)
-        # Fallback: use get_observation
-        obs = self.adapter.get_observation(state, 'p_black')
-        board = obs.get('board', [])
+        # Fallback: encode board cells as empty/self/opponent from the
+        # current player's perspective (previously every occupied cell
+        # was encoded identically, erasing whose piece it is).
+        cp = self.adapter.get_current_player(state) or "p_black"
+        obs = self.adapter.get_observation(state, cp)
+        board = obs.get("board", [])
         features = []
         for row in board:
             for cell in row:
                 if cell is None:
                     features.extend([1, 0, 0])
-                else:
+                elif cell == cp:
                     features.extend([0, 1, 0])
+                else:
+                    features.extend([0, 0, 1])
         # Pad or reshape to state_dim
         arr = np.asarray(features, dtype=np.float32)
         if len(arr) < self._state_dim:
             arr = np.pad(arr, (0, self._state_dim - len(arr)))
-        return arr[:self._state_dim]
+        return arr[: self._state_dim]
 
     def _get_mask(self, state: State) -> np.ndarray:
         """Get action mask.  Prefers adapter.get_action_mask()."""
-        if hasattr(self.adapter, 'get_action_mask'):
+        if hasattr(self.adapter, "get_action_mask"):
             return self.adapter.get_action_mask(state)
         mask = np.zeros(self._action_dim, dtype=np.float32)
         legal = self.adapter.get_legal_actions(state)
         for a in legal:
-            cell = a.params.get('cell', {})
-            cell_id = cell.get('id', '') if isinstance(cell, dict) else str(cell)
+            cell = a.params.get("cell", {})
+            cell_id = cell.get("id", "") if isinstance(cell, dict) else str(cell)
             try:
-                _, r, c = cell_id.split('_')
+                _, r, c = cell_id.split("_")
                 idx = int(r) * 3 + int(c)
                 if 0 <= idx < self._action_dim:
                     mask[idx] = 1.0
@@ -302,10 +313,10 @@ class PPOSolver(SolverBase):
         """Convert action index (0-8) to ActionInstance."""
         legal = self.adapter.get_legal_actions(state)
         for a in legal:
-            cell = a.params.get('cell', {})
-            cell_id = cell.get('id', '') if isinstance(cell, dict) else str(cell)
+            cell = a.params.get("cell", {})
+            cell_id = cell.get("id", "") if isinstance(cell, dict) else str(cell)
             try:
-                _, r, c = cell_id.split('_')
+                _, r, c = cell_id.split("_")
                 aidx = int(r) * 3 + int(c)
                 if aidx == idx:
                     return a
@@ -315,10 +326,10 @@ class PPOSolver(SolverBase):
 
     def _action_to_index(self, action: ActionInstance) -> int:
         """Convert ActionInstance back to index."""
-        cell = action.params.get('cell', {})
-        cell_id = cell.get('id', '') if isinstance(cell, dict) else str(cell)
+        cell = action.params.get("cell", {})
+        cell_id = cell.get("id", "") if isinstance(cell, dict) else str(cell)
         try:
-            _, r, c = cell_id.split('_')
+            _, r, c = cell_id.split("_")
             return int(r) * 3 + int(c)
         except (ValueError, IndexError):
             return 0
@@ -329,15 +340,40 @@ class PPOSolver(SolverBase):
         return self.adapter.get_utility(state, player)
 
     def _opponent_action(self, state: State, opponent_type: str, controlled_player: str) -> Optional[ActionInstance]:
-        """Return an opponent action."""
+        """Return an opponent action.
+
+        - 'random': uniform random.
+        - 'self': the agent's own training policy (sampled, not greedy —
+          greedy self-play never explores and collapses to a single line).
+        - 'mcts': a small MCTS search (previously silently fell back to
+          random).
+        Unknown types fall back to random.
+        """
         legal = self.adapter.get_legal_actions(state)
         if not legal:
             return None
-        if opponent_type == 'random':
+        if opponent_type == "random":
             return self.rng.choice(legal)
-        elif opponent_type == 'self':
-            return self.select_action(state)
+        if opponent_type == "self":
+            # Training-mode sampling; overwrites _last_log_prob/_last_value,
+            # which is safe — the controlled player's buffer entry is
+            # recorded immediately after its own move, before any opponent
+            # move can run.
+            return self._select_action_train(state)
+        if opponent_type == "mcts":
+            return self._mcts_opponent_action(state)
         return self.rng.choice(legal)
+
+    def _mcts_opponent_action(self, state: State) -> Optional[ActionInstance]:
+        """Lazily-created small MCTS opponent (budget 500)."""
+        if self._mcts_opponent is None:
+            from ..mcts.solver import MCTS, MCTSConfig
+
+            self._mcts_opponent = MCTS(
+                self.adapter,
+                MCTSConfig(seed=getattr(self.config, "seed", None), budget=500),
+            )
+        return self._mcts_opponent.select_action(state)
 
     @staticmethod
     def _resolve_device(device: str | torch.device | None) -> torch.device:

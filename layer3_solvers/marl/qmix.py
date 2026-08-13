@@ -51,6 +51,7 @@ class QMixConfig(SolverConfig):
     train_interval: int = 4  # gradient steps per episode
     start_learning: int = 500  # min replay transitions before updating
     hidden_dim: int = 128
+    max_grad_norm: float = 1.0
 
 
 class QMixSolver(SolverBase):
@@ -215,11 +216,17 @@ class QMixSolver(SolverBase):
         q_chosen = q.gather(-1, act_idx).squeeze(-1)  # (B, N)
         q_tot = self._mixer(batch.global_state, q_chosen, acting)
 
-        # Target: double-Q bootstrap with the acting agent's own network
+        # Target: double-Q bootstrap with the acting agent's own network.
+        # Illegal actions at s' are masked out before argmax/max so a
+        # randomly-initialized Q on an illegal action can never be picked
+        # as the bootstrap target (C-09).
         with torch.no_grad():
+            invalid_next = batch.next_masks == 0  # (B, AD)
             q_target_next = torch.stack([self._q_targets[p](batch.next_obs) for p in self._players], dim=1)
+            q_target_next = q_target_next.masked_fill(invalid_next.unsqueeze(1), -1e9)
             if cfg.double_q:
                 q_online_next = torch.stack([self._q_nets[p](batch.next_obs) for p in self._players], dim=1)
+                q_online_next = q_online_next.masked_fill(invalid_next.unsqueeze(1), -1e9)
                 argmax_next = q_online_next.argmax(dim=-1)  # (B, N)
                 q_next = q_target_next.gather(-1, argmax_next.unsqueeze(-1)).squeeze(-1)
             else:
@@ -230,7 +237,7 @@ class QMixSolver(SolverBase):
         loss = nn.functional.mse_loss(q_tot, target)
         self._optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad_norm_([*self._q_nets.parameters(), *self._mixer.parameters()], 1.0)
+        nn.utils.clip_grad_norm_([*self._q_nets.parameters(), *self._mixer.parameters()], cfg.max_grad_norm)
         self._optimizer.step()
 
         if self._steps % cfg.target_update_interval == 0:
