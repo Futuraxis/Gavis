@@ -99,17 +99,11 @@ class TestMoonChessGameplay:
         ]
         for player, cell_id in placements:
             actions = adapter.get_legal_actions(state)
-            action = next(
-                a for a in actions
-                if a.params.get("cell", {}).get("id", "") == cell_id
-            )
+            action = next(a for a in actions if a.params.get("cell", {}).get("id", "") == cell_id)
             state = adapter.apply_action(state, action)
 
         board = state["_arrays"]["board"]
-        black_po = [
-            e["cell_id"] for e in state["_arrays"]["pieceOrder"]
-            if e["player_id"] == "p_black"
-        ]
+        black_po = [e["cell_id"] for e in state["_arrays"]["pieceOrder"] if e["player_id"] == "p_black"]
         assert board[1] is None, "evicted cell_0_1 (idx 1) must be cleared"
         assert board[3] == "p_black", "cell_1_0 (idx 3) must not be collateral"
         assert board[7] == "p_black", "new piece at cell_2_1 (idx 7)"
@@ -176,10 +170,18 @@ class TestMoonChessAdapterProtocol:
 
     def test_all_protocol_methods_exist(self, adapter: MoonChessAdapter):
         methods = [
-            "create_initial_state", "get_node_type", "get_current_player",
-            "get_legal_actions", "apply_action", "get_chance_outcomes",
-            "apply_chance", "is_terminal", "get_utility",
-            "get_observation", "get_info_set_key", "load_state",
+            "create_initial_state",
+            "get_node_type",
+            "get_current_player",
+            "get_legal_actions",
+            "apply_action",
+            "get_chance_outcomes",
+            "apply_chance",
+            "is_terminal",
+            "get_utility",
+            "get_observation",
+            "get_info_set_key",
+            "load_state",
             "project_observation",
         ]
         for m in methods:
@@ -202,14 +204,16 @@ class TestMoonChessAdapterProtocol:
                 else:
                     _board.append("p_white")
 
-        state = adapter.load_state({
-            "_arrays": {"board": _board},
-            "env": {
-                "phase": "playing",
-                "turn": "p_black",
-                "winner": None,
-            },
-        })
+        state = adapter.load_state(
+            {
+                "_arrays": {"board": _board},
+                "env": {
+                    "phase": "playing",
+                    "turn": "p_black",
+                    "winner": None,
+                },
+            }
+        )
         assert state["_arrays"]["board"][1] == "p_black"
         assert state["_arrays"]["board"][6] == "p_white"
         assert adapter.get_current_player(state) == "p_black"

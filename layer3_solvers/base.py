@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 from layer2_engine.interfaces.solver_adapter import (
+    ActionInstance,
     SolverAdapter,
     State,
-    ActionInstance,
 )
 
 
@@ -23,14 +23,16 @@ class SolverConfig:
 
     Individual solvers may extend this with their own parameters.
     """
+
     seed: Optional[int] = None
-    device: str = "cpu"           # "cpu" | "cuda" — used by neural solvers
+    device: str = "cpu"  # "cpu" | "cuda" — used by neural solvers
     verbose: bool = False
 
 
 @dataclass
 class SolverMetrics:
     """Training/benchmark metrics returned by ``train()``."""
+
     episodes: int = 0
     win_rate: float = 0.0
     avg_return: float = 0.0

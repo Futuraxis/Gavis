@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import statistics
 from pathlib import Path
 
 SOLVERS = ("qmix", "happo", "maac")
@@ -94,10 +93,8 @@ def main() -> None:
     lines.append("# MARL 单循环赛分析报告")
     lines.append("")
     lines.append(f"- 数据目录: `{data_dir}`  模型目录: `{model_dir}`")
-    lines.append(f"- 参赛求解器: QMix / HAPPO / MAAC（每对主客场两轮）")
+    lines.append("- 参赛求解器: QMix / HAPPO / MAAC（每对主客场两轮）")
     lines.append("")
-
-    console: list[str] = []
 
     # ── 训练指标 ──────────────────────────────────────────────────
     lines.append("## 1. 训练指标")
@@ -169,7 +166,9 @@ def main() -> None:
     ranked = sorted(SOLVERS, key=lambda s: -overall[s]["wins"] / max(1, overall[s]["n"]))
     for s in ranked:
         o = overall[s]
-        lines.append(f"| {SOLVER_LABEL[s]} | {o['wins']} | {o['losses']} | {o['draws']} | {fmt_pct(o['wins'] / max(1, o['n']))} |")
+        lines.append(
+            f"| {SOLVER_LABEL[s]} | {o['wins']} | {o['losses']} | {o['draws']} | {fmt_pct(o['wins'] / max(1, o['n']))} |"
+        )
     lines.append("")
 
     report = "\n".join(lines)

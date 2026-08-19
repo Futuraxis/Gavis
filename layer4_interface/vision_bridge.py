@@ -7,6 +7,7 @@ Solver integration is handled at the application/demo layer.
 from __future__ import annotations
 
 from layer2_engine.interfaces.solver_adapter import SolverAdapter, State
+
 from .binding.schemas import Observation
 
 
@@ -35,22 +36,22 @@ def observation_to_state(
                 _board.append(None)
 
     state: State = {
-        '_arrays': {
-            'board': _board,
+        "_arrays": {
+            "board": _board,
         },
-        'env': {
-            'turn': 'p_black',
-            'round': 0,
-            'phase': 'playing',
-            'winner': None,
-            'lastPlacedCell': None,
-            'lastActor': None,
+        "env": {
+            "turn": "p_black",
+            "round": 0,
+            "phase": "playing",
+            "winner": None,
+            "lastPlacedCell": None,
+            "lastActor": None,
         },
-        '_players': [{'id': 'p_black'}, {'id': 'p_white'}],
-        '_constants': {'board_size': bs},
-        '_schema': {},
-        '_pending_events': [],
-        '_pending_effects': [],
+        "_players": [{"id": "p_black"}, {"id": "p_white"}],
+        "_constants": {"board_size": bs},
+        "_schema": {},
+        "_pending_events": [],
+        "_pending_effects": [],
     }
 
     return engine.load_state(state)

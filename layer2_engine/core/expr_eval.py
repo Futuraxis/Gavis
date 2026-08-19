@@ -19,9 +19,9 @@ import re
 from typing import Any, Callable
 
 # Precompiled regexes (hot path: called millions of times per MCTS move).
-_ARITH_PREFIX_RE = re.compile(r'\$([a-zA-Z_][a-zA-Z0-9_.]*)')
-_ARITH_BARE_RE = re.compile(r'\b([a-zA-Z_][a-zA-Z0-9_.]*)\b')
-_TEMPLATE_RE = re.compile(r'\{([^}]+)\}')
+_ARITH_PREFIX_RE = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_.]*)")
+_ARITH_BARE_RE = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_.]*)\b")
+_TEMPLATE_RE = re.compile(r"\{([^}]+)\}")
 
 # Alias bodies may not recurse; this caps any (accidentally) deep chain.
 _MAX_CALL_DEPTH = 32
@@ -52,8 +52,8 @@ class ExprEvaluator:
         self._cyclic = set()
         for name, defn in defs.items():
             if isinstance(defn, dict):
-                params = defn.get('params')
-                body = defn.get('expr')
+                params = defn.get("params")
+                body = defn.get("expr")
                 if not isinstance(params, list) or not isinstance(body, dict):
                     # v5.0-style declaration stub (metadata only) — skip it;
                     # a call to it later fails with "Unknown function".
@@ -74,7 +74,7 @@ class ExprEvaluator:
             defn = self._functions.get(name)
             if isinstance(defn, dict):
                 visiting.add(name)
-                for callee in _collect_call_names(defn.get('expr', {})):
+                for callee in _collect_call_names(defn.get("expr", {})):
                     _visit(callee)
                 visiting.remove(name)
             done.add(name)
@@ -93,11 +93,9 @@ class ExprEvaluator:
         defn = self._functions[fn_name]
         if fn_name in self._cyclic:
             raise RecursionError(f"Alias recursion cycle involving {fn_name!r}")
-        params = defn['params']
+        params = defn["params"]
         if len(args) != len(params):
-            raise ValueError(
-                f"Alias {fn_name!r}: expected {len(params)} args, got {len(args)}"
-            )
+            raise ValueError(f"Alias {fn_name!r}: expected {len(params)} args, got {len(args)}")
         self._call_depth += 1
         try:
             if self._call_depth > _MAX_CALL_DEPTH:
@@ -105,8 +103,8 @@ class ExprEvaluator:
             sub = dict(ctx)
             for pname, pval in zip(params, args):
                 sub[pname] = pval
-                sub[f'${pname}'] = pval
-            return self.eval(defn['expr'], sub)
+                sub[f"${pname}"] = pval
+            return self.eval(defn["expr"], sub)
         finally:
             self._call_depth -= 1
 
@@ -122,25 +120,25 @@ class ExprEvaluator:
             return lambda ctx: spec
 
         # ── Literals ────────────────────────────────────────────────────
-        if 'const' in spec:
-            value = spec['const']
+        if "const" in spec:
+            value = spec["const"]
             return lambda ctx: value
 
-        if 'var' in spec:
-            return self._compile_path(spec['var'])
+        if "var" in spec:
+            return self._compile_path(spec["var"])
 
-        if 'get' in spec:
-            path = spec['get']
+        if "get" in spec:
+            path = spec["get"]
             return self._compile_path(path)
 
         # ── String ops ──────────────────────────────────────────────────
-        if 'template' in spec:
-            tmpl = spec['template']
+        if "template" in spec:
+            tmpl = spec["template"]
             parts: list = []
             last = 0
             for m in _TEMPLATE_RE.finditer(tmpl):
                 if m.start() > last:
-                    parts.append(tmpl[last:m.start()])
+                    parts.append(tmpl[last : m.start()])
                 parts.append(self._compile_path(m.group(1).strip()))
                 last = m.end()
             if last < len(tmpl):
@@ -151,15 +149,15 @@ class ExprEvaluator:
                 for p in parts:
                     if callable(p):
                         value = p(ctx)
-                        out.append(str(value) if value is not None else '')
+                        out.append(str(value) if value is not None else "")
                     else:
                         out.append(p)
-                return ''.join(out)
+                return "".join(out)
 
             return _template
 
-        if 'concat' in spec:
-            children = [self.compile(item) for item in spec['concat']]
+        if "concat" in spec:
+            children = [self.compile(item) for item in spec["concat"]]
 
             def _concat(ctx: dict, children: list = children) -> Any:
                 items = [fn(ctx) for fn in children]
@@ -168,38 +166,39 @@ class ExprEvaluator:
             return _concat
 
         # ── Arithmetic shorthand ────────────────────────────────────────
-        if 'expr' in spec:
+        if "expr" in spec:
+
             def _arith(ctx: dict, spec: dict = spec) -> Any:
-                return self._eval_arithmetic(spec['expr'], ctx)
+                return self._eval_arithmetic(spec["expr"], ctx)
 
             return _arith
 
         # ── Conditionals ────────────────────────────────────────────────
-        if 'if' in spec:
-            if_body = spec['if']
-            if isinstance(if_body, dict) and 'cond' in if_body:
-                cond_fn = self.compile(if_body['cond'])
-                then_fn = self.compile(if_body.get('then', True))
-                else_fn = self.compile(if_body.get('else', None))
+        if "if" in spec:
+            if_body = spec["if"]
+            if isinstance(if_body, dict) and "cond" in if_body:
+                cond_fn = self.compile(if_body["cond"])
+                then_fn = self.compile(if_body.get("then", True))
+                else_fn = self.compile(if_body.get("else", None))
             else:
                 cond_fn = self.compile(if_body)
-                then_fn = self.compile(spec.get('then', True))
-                else_fn = self.compile(spec.get('else', None))
+                then_fn = self.compile(spec.get("then", True))
+                else_fn = self.compile(spec.get("else", None))
 
             def _if(ctx: dict, cond_fn=cond_fn, then_fn=then_fn, else_fn=else_fn) -> Any:
                 return then_fn(ctx) if cond_fn(ctx) else else_fn(ctx)
 
             return _if
 
-        if 'switch' in spec:
+        if "switch" in spec:
             cases = []
             default_fn = None
-            for case in spec['switch']:
-                if 'case' in case:
-                    cases.append((case['case'], self.compile(case['then'])))
+            for case in spec["switch"]:
+                if "case" in case:
+                    cases.append((case["case"], self.compile(case["then"])))
                 else:
-                    default_fn = self.compile(case.get('then'))
-            input_fn = self.compile(spec.get('input', {'var': '$input'}))
+                    default_fn = self.compile(case.get("then"))
+            input_fn = self.compile(spec.get("input", {"var": "$input"}))
 
             def _switch(
                 ctx: dict,
@@ -216,21 +215,21 @@ class ExprEvaluator:
             return _switch
 
         # ── Arithmetic nodes (pure math ops over evaluated operands) ────
-        if 'add' in spec or 'sub' in spec or 'mul' in spec or 'div' in spec:
-            op = next(k for k in ('add', 'sub', 'mul', 'div') if k in spec)
+        if "add" in spec or "sub" in spec or "mul" in spec or "div" in spec:
+            op = next(k for k in ("add", "sub", "mul", "div") if k in spec)
             left_fn = self.compile(spec[op][0])
             right_fn = self.compile(spec[op][1])
 
             def _arith_node(ctx: dict, left_fn=left_fn, right_fn=right_fn, op=op) -> Any:
                 a, b = left_fn(ctx), right_fn(ctx)
                 try:
-                    if op == 'add':
+                    if op == "add":
                         return a + b
-                    if op == 'sub':
+                    if op == "sub":
                         return a - b
-                    if op == 'mul':
+                    if op == "mul":
                         return a * b
-                    if op == 'div':
+                    if op == "div":
                         return int(a) // int(b)
                 except (TypeError, ValueError, ZeroDivisionError):
                     return None
@@ -239,17 +238,17 @@ class ExprEvaluator:
             return _arith_node
 
         # ── Logical / comparison ops ────────────────────────────────────
-        if 'eq' in spec or 'neq' in spec or 'gt' in spec or 'gte' in spec or 'lt' in spec or 'lte' in spec:
-            op = next(k for k in ('eq', 'neq', 'gt', 'gte', 'lt', 'lte') if k in spec)
+        if "eq" in spec or "neq" in spec or "gt" in spec or "gte" in spec or "lt" in spec or "lte" in spec:
+            op = next(k for k in ("eq", "neq", "gt", "gte", "lt", "lte") if k in spec)
             left_fn = self.compile(spec[op][0])
             right_fn = self.compile(spec[op][1])
             cmp_map = {
-                'eq': lambda a, b: a == b,
-                'neq': lambda a, b: a != b,
-                'gt': lambda a, b: a > b,
-                'gte': lambda a, b: a >= b,
-                'lt': lambda a, b: a < b,
-                'lte': lambda a, b: a <= b,
+                "eq": lambda a, b: a == b,
+                "neq": lambda a, b: a != b,
+                "gt": lambda a, b: a > b,
+                "gte": lambda a, b: a >= b,
+                "lt": lambda a, b: a < b,
+                "lte": lambda a, b: a <= b,
             }
             cmp_fn = cmp_map[op]
 
@@ -258,24 +257,24 @@ class ExprEvaluator:
 
             return _cmp
 
-        if 'and' in spec:
-            children = [self.compile(sub) for sub in spec['and']]
+        if "and" in spec:
+            children = [self.compile(sub) for sub in spec["and"]]
 
             def _and(ctx: dict, children: list = children) -> bool:
                 return all(fn(ctx) for fn in children)
 
             return _and
 
-        if 'or' in spec:
-            children = [self.compile(sub) for sub in spec['or']]
+        if "or" in spec:
+            children = [self.compile(sub) for sub in spec["or"]]
 
             def _or(ctx: dict, children: list = children) -> bool:
                 return any(fn(ctx) for fn in children)
 
             return _or
 
-        if 'not' in spec:
-            inner_fn = self.compile(spec['not'])
+        if "not" in spec:
+            inner_fn = self.compile(spec["not"])
 
             def _not(ctx: dict, inner_fn=inner_fn) -> bool:
                 return not inner_fn(ctx)
@@ -283,14 +282,13 @@ class ExprEvaluator:
             return _not
 
         # ── Collection ops (compiled closures) ──────────────────────────
-        if 'filter' in spec:
-            fspec = spec['filter']
-            list_fn = self.compile(fspec['list'])
-            as_var = fspec.get('as', '$node')
-            where_fn = self.compile(fspec['where'])
+        if "filter" in spec:
+            fspec = spec["filter"]
+            list_fn = self.compile(fspec["list"])
+            as_var = fspec.get("as", "$node")
+            where_fn = self.compile(fspec["where"])
 
-            def _filter(ctx: dict, list_fn=list_fn, where_fn=where_fn,
-                        as_var=as_var) -> list:
+            def _filter(ctx: dict, list_fn=list_fn, where_fn=where_fn, as_var=as_var) -> list:
                 items = list_fn(ctx)
                 if not isinstance(items, list):
                     return []
@@ -302,14 +300,13 @@ class ExprEvaluator:
 
             return _filter
 
-        if 'any' in spec:
-            aspec = spec['any']
-            list_fn = self.compile(aspec['list'])
-            as_var = aspec.get('as', '$node')
-            where_fn = self.compile(aspec['where'])
+        if "any" in spec:
+            aspec = spec["any"]
+            list_fn = self.compile(aspec["list"])
+            as_var = aspec.get("as", "$node")
+            where_fn = self.compile(aspec["where"])
 
-            def _any(ctx: dict, list_fn=list_fn, where_fn=where_fn,
-                     as_var=as_var) -> bool:
+            def _any(ctx: dict, list_fn=list_fn, where_fn=where_fn, as_var=as_var) -> bool:
                 items = list_fn(ctx)
                 if not isinstance(items, list):
                     return False
@@ -320,14 +317,13 @@ class ExprEvaluator:
 
             return _any
 
-        if 'all' in spec:
-            aspec = spec['all']
-            list_fn = self.compile(aspec['list'])
-            as_var = aspec.get('as', '$node')
-            where_fn = self.compile(aspec['where'])
+        if "all" in spec:
+            aspec = spec["all"]
+            list_fn = self.compile(aspec["list"])
+            as_var = aspec.get("as", "$node")
+            where_fn = self.compile(aspec["where"])
 
-            def _all(ctx: dict, list_fn=list_fn, where_fn=where_fn,
-                     as_var=as_var) -> bool:
+            def _all(ctx: dict, list_fn=list_fn, where_fn=where_fn, as_var=as_var) -> bool:
                 items = list_fn(ctx)
                 if not isinstance(items, list):
                     return True
@@ -338,14 +334,13 @@ class ExprEvaluator:
 
             return _all
 
-        if 'map' in spec:
-            mspec = spec['map']
-            list_fn = self.compile(mspec['list'])
-            as_var = mspec.get('as', '$node')
-            map_fn = self.compile(mspec['expr'])
+        if "map" in spec:
+            mspec = spec["map"]
+            list_fn = self.compile(mspec["list"])
+            as_var = mspec.get("as", "$node")
+            map_fn = self.compile(mspec["expr"])
 
-            def _map(ctx: dict, list_fn=list_fn, map_fn=map_fn,
-                     as_var=as_var) -> list:
+            def _map(ctx: dict, list_fn=list_fn, map_fn=map_fn, as_var=as_var) -> list:
                 items = list_fn(ctx)
                 if not isinstance(items, list):
                     return []
@@ -353,8 +348,8 @@ class ExprEvaluator:
 
             return _map
 
-        if 'count' in spec:
-            inner_fn = self.compile(spec['count'])
+        if "count" in spec:
+            inner_fn = self.compile(spec["count"])
 
             def _count(ctx: dict, inner_fn=inner_fn) -> int:
                 value = inner_fn(ctx)
@@ -362,8 +357,8 @@ class ExprEvaluator:
 
             return _count
 
-        if 'distinct' in spec:
-            inner_fn = self.compile(spec['distinct'])
+        if "distinct" in spec:
+            inner_fn = self.compile(spec["distinct"])
 
             def _distinct(ctx: dict, inner_fn=inner_fn) -> list:
                 value = inner_fn(ctx)
@@ -384,9 +379,9 @@ class ExprEvaluator:
 
             return _distinct
 
-        if 'contains' in spec:
-            cont_fn = self.compile(spec['contains'][0])
-            item_fn = self.compile(spec['contains'][1])
+        if "contains" in spec:
+            cont_fn = self.compile(spec["contains"][0])
+            item_fn = self.compile(spec["contains"][1])
 
             def _contains(ctx: dict, cont_fn=cont_fn, item_fn=item_fn) -> bool:
                 container = cont_fn(ctx)
@@ -396,7 +391,7 @@ class ExprEvaluator:
 
             return _contains
 
-        for _op in ('sum', 'max', 'min'):
+        for _op in ("sum", "max", "min"):
             if _op in spec:
                 inner_fn = self.compile(spec[_op])
                 op = _op
@@ -404,29 +399,28 @@ class ExprEvaluator:
                 def _agg(ctx: dict, inner_fn=inner_fn, op=op) -> Any:
                     value = inner_fn(ctx)
                     if not isinstance(value, list):
-                        return 0 if op == 'sum' else None
-                    if op == 'sum':
+                        return 0 if op == "sum" else None
+                    if op == "sum":
                         return sum(value)
                     if not value:
                         return None
                     try:
-                        return max(value) if op == 'max' else min(value)
+                        return max(value) if op == "max" else min(value)
                     except TypeError:
                         return None
 
                 return _agg
 
-        if 'at' in spec:
-            cont_fn = self.compile(spec['at'][0])
-            idx_fn = self.compile(spec['at'][1])
+        if "at" in spec:
+            cont_fn = self.compile(spec["at"][0])
+            idx_fn = self.compile(spec["at"][1])
 
             def _at(ctx: dict, cont_fn=cont_fn, idx_fn=idx_fn) -> Any:
                 container = cont_fn(ctx)
                 idx = idx_fn(ctx)
                 if isinstance(container, dict):
                     return container.get(idx)
-                if isinstance(container, (list, str)) and isinstance(idx, (int, float)) \
-                        and not isinstance(idx, bool):
+                if isinstance(container, (list, str)) and isinstance(idx, (int, float)) and not isinstance(idx, bool):
                     i = int(idx)
                     # Negative indices are out of bounds: win-check windows
                     # rely on ``at`` returning None past the array edges.
@@ -436,14 +430,13 @@ class ExprEvaluator:
 
             return _at
 
-        if 'range' in spec:
-            rspec = spec['range']
-            from_fn = self.compile(rspec.get('from', {'const': 0}))
-            to_fn = self.compile(rspec['to'])
-            step_fn = self.compile(rspec.get('step', {'const': 1}))
+        if "range" in spec:
+            rspec = spec["range"]
+            from_fn = self.compile(rspec.get("from", {"const": 0}))
+            to_fn = self.compile(rspec["to"])
+            step_fn = self.compile(rspec.get("step", {"const": 1}))
 
-            def _range(ctx: dict, from_fn=from_fn, to_fn=to_fn,
-                       step_fn=step_fn) -> list:
+            def _range(ctx: dict, from_fn=from_fn, to_fn=to_fn, step_fn=step_fn) -> list:
                 try:
                     a, b, s = int(from_fn(ctx)), int(to_fn(ctx)), int(step_fn(ctx))
                 except (TypeError, ValueError):
@@ -454,14 +447,13 @@ class ExprEvaluator:
 
             return _range
 
-        if 'sort' in spec:
-            sspec = spec['sort']
-            list_fn = self.compile(sspec['list'])
-            by_fn = self.compile(sspec['by']) if 'by' in sspec else None
-            reverse = bool(sspec.get('reverse', False))
+        if "sort" in spec:
+            sspec = spec["sort"]
+            list_fn = self.compile(sspec["list"])
+            by_fn = self.compile(sspec["by"]) if "by" in sspec else None
+            reverse = bool(sspec.get("reverse", False))
 
-            def _sort(ctx: dict, list_fn=list_fn, by_fn=by_fn,
-                      reverse=reverse) -> list:
+            def _sort(ctx: dict, list_fn=list_fn, by_fn=by_fn, reverse=reverse) -> list:
                 items = list_fn(ctx)
                 if not isinstance(items, list):
                     return []
@@ -470,17 +462,16 @@ class ExprEvaluator:
                         return sorted(items, reverse=reverse)
                     except TypeError:
                         return list(items)
-                keyed = [(by_fn({**ctx, '$node': item, '$item': item}), item)
-                         for item in items]
+                keyed = [(by_fn({**ctx, "$node": item, "$item": item}), item) for item in items]
                 keyed.sort(key=lambda kv: kv[0], reverse=reverse)
                 return [item for _, item in keyed]
 
             return _sort
 
-        if 'group' in spec:
-            gspec = spec['group']
-            list_fn = self.compile(gspec['list'])
-            by_fn = self.compile(gspec['by']) if 'by' in gspec else None
+        if "group" in spec:
+            gspec = spec["group"]
+            list_fn = self.compile(gspec["list"])
+            by_fn = self.compile(gspec["by"]) if "by" in gspec else None
 
             def _group(ctx: dict, list_fn=list_fn, by_fn=by_fn) -> list:
                 items = list_fn(ctx)
@@ -489,35 +480,33 @@ class ExprEvaluator:
                 buckets: dict = {}
                 order: list = []
                 for item in items:
-                    key = item if by_fn is None \
-                        else by_fn({**ctx, '$node': item, '$item': item})
+                    key = item if by_fn is None else by_fn({**ctx, "$node": item, "$item": item})
                     if key not in buckets:
-                        buckets[key] = {'key': key, 'count': 0, 'items': []}
+                        buckets[key] = {"key": key, "count": 0, "items": []}
                         order.append(key)
-                    buckets[key]['count'] += 1
-                    buckets[key]['items'].append(item)
+                    buckets[key]["count"] += 1
+                    buckets[key]["items"].append(item)
                 return [buckets[k] for k in order]
 
             return _group
 
-        if 'choose' in spec:
-            return self._compile_choose(spec['choose'])
+        if "choose" in spec:
+            return self._compile_choose(spec["choose"])
 
-        if 'call' in spec:
-            fn_name = spec['call'][0]
+        if "call" in spec:
+            fn_name = spec["call"][0]
             defn = self._functions.get(fn_name)
-            if isinstance(defn, dict) and 'expr' in defn and fn_name not in self._cyclic:
-                params = defn['params']
-                arg_fns = [self.compile(arg) for arg in spec['call'][1:]]
-                body_fn = self.compile(defn['expr'])
+            if isinstance(defn, dict) and "expr" in defn and fn_name not in self._cyclic:
+                params = defn["params"]
+                arg_fns = [self.compile(arg) for arg in spec["call"][1:]]
+                body_fn = self.compile(defn["expr"])
 
-                def _alias(ctx: dict, arg_fns=arg_fns, body_fn=body_fn,
-                           params=params) -> Any:
+                def _alias(ctx: dict, arg_fns=arg_fns, body_fn=body_fn, params=params) -> Any:
                     sub = dict(ctx)
                     for pname, argfn in zip(params, arg_fns):
                         value = argfn(ctx)
                         sub[pname] = value
-                        sub[f'${pname}'] = value
+                        sub[f"${pname}"] = value
                     return body_fn(sub)
 
                 return _alias
@@ -544,17 +533,24 @@ class ExprEvaluator:
         best (max/min) ``then`` value over satisfying combinations is
         returned; without ``then``, existence (bool) is returned.
         """
-        items_fn = self.compile(cspec['items'])
-        k_fn = self.compile(cspec['k'])
-        as_var = cspec.get('as', '$c')
-        prefix_fn = self.compile(cspec['prefix']) if 'prefix' in cspec else None
-        where_fn = self.compile(cspec['where']) if 'where' in cspec else None
-        then_fn = self.compile(cspec['then']) if 'then' in cspec else None
-        maximize = cspec.get('agg', 'max') != 'min'
+        items_fn = self.compile(cspec["items"])
+        k_fn = self.compile(cspec["k"])
+        as_var = cspec.get("as", "$c")
+        prefix_fn = self.compile(cspec["prefix"]) if "prefix" in cspec else None
+        where_fn = self.compile(cspec["where"]) if "where" in cspec else None
+        then_fn = self.compile(cspec["then"]) if "then" in cspec else None
+        maximize = cspec.get("agg", "max") != "min"
 
-        def _choose(ctx: dict, items_fn=items_fn, k_fn=k_fn, prefix_fn=prefix_fn,
-                    where_fn=where_fn, then_fn=then_fn, as_var=as_var,
-                    maximize=maximize) -> Any:
+        def _choose(
+            ctx: dict,
+            items_fn=items_fn,
+            k_fn=k_fn,
+            prefix_fn=prefix_fn,
+            where_fn=where_fn,
+            then_fn=then_fn,
+            as_var=as_var,
+            maximize=maximize,
+        ) -> Any:
             items = items_fn(ctx)
             if not isinstance(items, list):
                 return None if then_fn is not None else False
@@ -586,7 +582,7 @@ class ExprEvaluator:
             def _rec(i: int):
                 nonlocal best, found
                 if len(combo) == k:
-                    sub = {**ctx, as_var: list(combo), '$node': list(combo)}
+                    sub = {**ctx, as_var: list(combo), "$node": list(combo)}
                     if where_fn is not None and not where_fn(sub):
                         return
                     found = True
@@ -600,8 +596,7 @@ class ExprEvaluator:
                 # Branch 1: include uniq[i].  Prefix gates *deeper* search
                 # only — a full-length combination is judged by ``where``.
                 combo.append(uniq[i])
-                if len(combo) == k or prefix_fn is None \
-                        or prefix_fn({**ctx, as_var: list(combo)}):
+                if len(combo) == k or prefix_fn is None or prefix_fn({**ctx, as_var: list(combo)}):
                     _rec(i + 1)
                 combo.pop()
                 # Branch 2: skip uniq[i].
@@ -629,7 +624,7 @@ class ExprEvaluator:
                 for p in rest:
                     if isinstance(obj, dict):
                         obj = obj.get(p)
-                    elif isinstance(obj, (list, tuple)) and p.lstrip('-').isdigit():
+                    elif isinstance(obj, (list, tuple)) and p.lstrip("-").isdigit():
                         idx = int(p)
                         obj = obj[idx] if -len(obj) <= idx < len(obj) else None
                     else:
@@ -637,7 +632,7 @@ class ExprEvaluator:
                 return obj
 
             return _get
-        parts = path.lstrip('$').lstrip('.').split('.')
+        parts = path.lstrip("$").lstrip(".").split(".")
 
         def _path(ctx: dict, parts: list = parts) -> Any:
             obj = ctx
@@ -645,11 +640,11 @@ class ExprEvaluator:
                 if isinstance(obj, dict):
                     if p in obj:
                         obj = obj[p]
-                    elif f'${p}' in obj:
-                        obj = obj[f'${p}']
+                    elif f"${p}" in obj:
+                        obj = obj[f"${p}"]
                     else:
                         return None
-                elif isinstance(obj, (list, tuple)) and p.lstrip('-').isdigit():
+                elif isinstance(obj, (list, tuple)) and p.lstrip("-").isdigit():
                     idx = int(p)
                     obj = obj[idx] if -len(obj) <= idx < len(obj) else None
                 else:
@@ -670,117 +665,115 @@ class ExprEvaluator:
 
         # ── Literals ────────────────────────────────────────────────────
 
-        if 'const' in expr:
-            return expr['const']
+        if "const" in expr:
+            return expr["const"]
 
-        if 'var' in expr:
-            return self._resolve_path(ctx, expr['var'])
+        if "var" in expr:
+            return self._resolve_path(ctx, expr["var"])
 
-        if 'get' in expr:
-            return self._resolve_path(ctx, expr['get'])
+        if "get" in expr:
+            return self._resolve_path(ctx, expr["get"])
 
         # ── String ops ──────────────────────────────────────────────────
 
-        if 'template' in expr:
-            template = expr['template']
+        if "template" in expr:
+            template = expr["template"]
             parts = []
             last_end = 0
             for m in _TEMPLATE_RE.finditer(template):
-                parts.append(template[last_end:m.start()])
+                parts.append(template[last_end : m.start()])
                 val = self._resolve_path(ctx, m.group(1).strip())
-                parts.append(str(val) if val is not None else '')
+                parts.append(str(val) if val is not None else "")
                 last_end = m.end()
             parts.append(template[last_end:])
-            return ''.join(parts)
+            return "".join(parts)
 
-        if 'concat' in expr:
-            items = [self.eval(item, ctx) for item in expr['concat']]
+        if "concat" in expr:
+            items = [self.eval(item, ctx) for item in expr["concat"]]
             return _concat_values(items)
 
         # ── Arithmetic shorthand ────────────────────────────────────────
 
-        if 'expr' in expr:
-            return self._eval_arithmetic(expr['expr'], ctx)
+        if "expr" in expr:
+            return self._eval_arithmetic(expr["expr"], ctx)
 
         # ── Conditionals ────────────────────────────────────────────────
 
-        if 'if' in expr:
-            if_body = expr['if']
-            if isinstance(if_body, dict) and 'cond' in if_body:
-                cond = self.eval(if_body['cond'], ctx)
-                then_val = if_body.get('then', True)
-                else_val = if_body.get('else', None)
+        if "if" in expr:
+            if_body = expr["if"]
+            if isinstance(if_body, dict) and "cond" in if_body:
+                cond = self.eval(if_body["cond"], ctx)
+                then_val = if_body.get("then", True)
+                else_val = if_body.get("else", None)
             else:
                 cond = self.eval(if_body, ctx)
-                then_val = expr.get('then', True)
-                else_val = expr.get('else', None)
-            return self.eval(then_val, ctx) if cond else (
-                self.eval(else_val, ctx) if else_val is not None else None
-            )
+                then_val = expr.get("then", True)
+                else_val = expr.get("else", None)
+            return self.eval(then_val, ctx) if cond else (self.eval(else_val, ctx) if else_val is not None else None)
 
-        if 'switch' in expr:
-            input_val = self.eval(expr.get('input', {'var': '$input'}), ctx)
-            for case in expr['switch']:
-                if case.get('case') == input_val:
-                    return self.eval(case['then'], ctx)
+        if "switch" in expr:
+            input_val = self.eval(expr.get("input", {"var": "$input"}), ctx)
+            for case in expr["switch"]:
+                if case.get("case") == input_val:
+                    return self.eval(case["then"], ctx)
             # else/default branch
-            for case in expr['switch']:
-                if 'default' in case or ('case' not in case and 'then' in case):
-                    return self.eval(case['then'], ctx)
+            for case in expr["switch"]:
+                if "default" in case or ("case" not in case and "then" in case):
+                    return self.eval(case["then"], ctx)
             return None
 
         # ── Arithmetic nodes (pure math ops over evaluated operands) ────
 
-        if 'add' in expr:
-            return self.eval(expr['add'][0], ctx) + self.eval(expr['add'][1], ctx)
+        if "add" in expr:
+            return self.eval(expr["add"][0], ctx) + self.eval(expr["add"][1], ctx)
 
-        if 'sub' in expr:
-            return self.eval(expr['sub'][0], ctx) - self.eval(expr['sub'][1], ctx)
+        if "sub" in expr:
+            return self.eval(expr["sub"][0], ctx) - self.eval(expr["sub"][1], ctx)
 
-        if 'mul' in expr:
-            return self.eval(expr['mul'][0], ctx) * self.eval(expr['mul'][1], ctx)
+        if "mul" in expr:
+            return self.eval(expr["mul"][0], ctx) * self.eval(expr["mul"][1], ctx)
 
-        if 'div' in expr:
+        if "div" in expr:
             try:
-                return int(self.eval(expr['div'][0], ctx)) // int(self.eval(expr['div'][1], ctx))
+                return int(self.eval(expr["div"][0], ctx)) // int(self.eval(expr["div"][1], ctx))
             except (TypeError, ValueError, ZeroDivisionError):
                 return None
 
         # ── Logical ops ─────────────────────────────────────────────────
 
-        if 'eq' in expr:
-            return self.eval(expr['eq'][0], ctx) == self.eval(expr['eq'][1], ctx)
+        if "eq" in expr:
+            return self.eval(expr["eq"][0], ctx) == self.eval(expr["eq"][1], ctx)
 
-        if 'neq' in expr:
-            return self.eval(expr['neq'][0], ctx) != self.eval(expr['neq'][1], ctx)
+        if "neq" in expr:
+            return self.eval(expr["neq"][0], ctx) != self.eval(expr["neq"][1], ctx)
 
-        if 'gt' in expr:
-            return self.eval(expr['gt'][0], ctx) > self.eval(expr['gt'][1], ctx)
+        if "gt" in expr:
+            return self.eval(expr["gt"][0], ctx) > self.eval(expr["gt"][1], ctx)
 
-        if 'gte' in expr:
-            return self.eval(expr['gte'][0], ctx) >= self.eval(expr['gte'][1], ctx)
+        if "gte" in expr:
+            return self.eval(expr["gte"][0], ctx) >= self.eval(expr["gte"][1], ctx)
 
-        if 'lt' in expr:
-            return self.eval(expr['lt'][0], ctx) < self.eval(expr['lt'][1], ctx)
+        if "lt" in expr:
+            return self.eval(expr["lt"][0], ctx) < self.eval(expr["lt"][1], ctx)
 
-        if 'lte' in expr:
-            return self.eval(expr['lte'][0], ctx) <= self.eval(expr['lte'][1], ctx)
+        if "lte" in expr:
+            return self.eval(expr["lte"][0], ctx) <= self.eval(expr["lte"][1], ctx)
 
-        if 'and' in expr:
-            return all(self.eval(sub, ctx) for sub in expr['and'])
+        if "and" in expr:
+            return all(self.eval(sub, ctx) for sub in expr["and"])
 
-        if 'or' in expr:
-            return any(self.eval(sub, ctx) for sub in expr['or'])
+        if "or" in expr:
+            return any(self.eval(sub, ctx) for sub in expr["or"])
 
-        if 'not' in expr:
-            return not self.eval(expr['not'], ctx)
+        if "not" in expr:
+            return not self.eval(expr["not"], ctx)
 
         # ── Collection ops ──────────────────────────────────────────────
 
-        if 'filter' in expr:
-            items = self.eval(expr['filter']['list'], ctx)
-            as_var = expr['filter'].get('as', '$node')
-            where = expr['filter']['where']
+        if "filter" in expr:
+            items = self.eval(expr["filter"]["list"], ctx)
+            as_var = expr["filter"].get("as", "$node")
+            where = expr["filter"]["where"]
             if not isinstance(items, list):
                 return []
             results = []
@@ -790,10 +783,10 @@ class ExprEvaluator:
                     results.append(item)
             return results
 
-        if 'any' in expr:
-            items = self.eval(expr['any']['list'], ctx)
-            as_var = expr['any'].get('as', '$node')
-            where = expr['any']['where']
+        if "any" in expr:
+            items = self.eval(expr["any"]["list"], ctx)
+            as_var = expr["any"].get("as", "$node")
+            where = expr["any"]["where"]
             if not isinstance(items, list):
                 return False
             for item in items:
@@ -802,10 +795,10 @@ class ExprEvaluator:
                     return True
             return False
 
-        if 'all' in expr:
-            items = self.eval(expr['all']['list'], ctx)
-            as_var = expr['all'].get('as', '$node')
-            where = expr['all']['where']
+        if "all" in expr:
+            items = self.eval(expr["all"]["list"], ctx)
+            as_var = expr["all"].get("as", "$node")
+            where = expr["all"]["where"]
             if not isinstance(items, list):
                 return True
             for item in items:
@@ -814,10 +807,10 @@ class ExprEvaluator:
                     return False
             return True
 
-        if 'map' in expr:
-            items = self.eval(expr['map']['list'], ctx)
-            as_var = expr['map'].get('as', '$node')
-            map_expr = expr['map']['expr']
+        if "map" in expr:
+            items = self.eval(expr["map"]["list"], ctx)
+            as_var = expr["map"].get("as", "$node")
+            map_expr = expr["map"]["expr"]
             if not isinstance(items, list):
                 return []
             results = []
@@ -828,8 +821,8 @@ class ExprEvaluator:
 
         # ── v5.1 collection primitives (pure math ops) ──────────────────
 
-        if 'distinct' in expr:
-            value = self.eval(expr['distinct'], ctx)
+        if "distinct" in expr:
+            value = self.eval(expr["distinct"], ctx)
             if not isinstance(value, list):
                 return []
             out = []
@@ -838,18 +831,18 @@ class ExprEvaluator:
                     out.append(item)
             return out
 
-        if 'contains' in expr:
-            container = self.eval(expr['contains'][0], ctx)
+        if "contains" in expr:
+            container = self.eval(expr["contains"][0], ctx)
             if not isinstance(container, list):
                 return False
-            return self.eval(expr['contains'][1], ctx) in container
+            return self.eval(expr["contains"][1], ctx) in container
 
-        if 'sum' in expr:
-            value = self.eval(expr['sum'], ctx)
+        if "sum" in expr:
+            value = self.eval(expr["sum"], ctx)
             return sum(value) if isinstance(value, list) else 0
 
-        if 'max' in expr:
-            value = self.eval(expr['max'], ctx)
+        if "max" in expr:
+            value = self.eval(expr["max"], ctx)
             if not isinstance(value, list) or not value:
                 return None
             try:
@@ -857,8 +850,8 @@ class ExprEvaluator:
             except TypeError:
                 return None
 
-        if 'min' in expr:
-            value = self.eval(expr['min'], ctx)
+        if "min" in expr:
+            value = self.eval(expr["min"], ctx)
             if not isinstance(value, list) or not value:
                 return None
             try:
@@ -866,89 +859,87 @@ class ExprEvaluator:
             except TypeError:
                 return None
 
-        if 'at' in expr:
-            container = self.eval(expr['at'][0], ctx)
-            idx = self.eval(expr['at'][1], ctx)
+        if "at" in expr:
+            container = self.eval(expr["at"][0], ctx)
+            idx = self.eval(expr["at"][1], ctx)
             if isinstance(container, dict):
                 return container.get(idx)
-            if isinstance(container, (list, str)) and isinstance(idx, (int, float)) \
-                    and not isinstance(idx, bool):
+            if isinstance(container, (list, str)) and isinstance(idx, (int, float)) and not isinstance(idx, bool):
                 i = int(idx)
                 # Negative indices are out of bounds (see compiled ``at``).
                 if 0 <= i < len(container):
                     return container[i]
             return None
 
-        if 'range' in expr:
-            rspec = expr['range']
+        if "range" in expr:
+            rspec = expr["range"]
             try:
-                a = int(self.eval(rspec.get('from', {'const': 0}), ctx))
-                b = int(self.eval(rspec['to'], ctx))
-                s = int(self.eval(rspec.get('step', {'const': 1}), ctx))
+                a = int(self.eval(rspec.get("from", {"const": 0}), ctx))
+                b = int(self.eval(rspec["to"], ctx))
+                s = int(self.eval(rspec.get("step", {"const": 1}), ctx))
             except (TypeError, ValueError):
                 return []
             if s == 0:
                 return []
             return list(range(a, b, s))
 
-        if 'sort' in expr:
-            sspec = expr['sort']
-            items = self.eval(sspec['list'], ctx)
+        if "sort" in expr:
+            sspec = expr["sort"]
+            items = self.eval(sspec["list"], ctx)
             if not isinstance(items, list):
                 return []
-            reverse = bool(sspec.get('reverse', False))
-            by = sspec.get('by')
+            reverse = bool(sspec.get("reverse", False))
+            by = sspec.get("by")
             if by is None:
                 try:
                     return sorted(items, reverse=reverse)
                 except TypeError:
                     return list(items)
-            keyed = [(self.eval(by, {**ctx, '$node': item, '$item': item}), item)
-                     for item in items]
+            keyed = [(self.eval(by, {**ctx, "$node": item, "$item": item}), item) for item in items]
             keyed.sort(key=lambda kv: kv[0], reverse=reverse)
             return [item for _, item in keyed]
 
-        if 'group' in expr:
-            gspec = expr['group']
-            items = self.eval(gspec['list'], ctx)
+        if "group" in expr:
+            gspec = expr["group"]
+            items = self.eval(gspec["list"], ctx)
             if not isinstance(items, list):
                 return []
-            by = gspec.get('by')
+            by = gspec.get("by")
             buckets: dict = {}
             order: list = []
             for item in items:
-                key = item if by is None else self.eval(by, {**ctx, '$node': item, '$item': item})
+                key = item if by is None else self.eval(by, {**ctx, "$node": item, "$item": item})
                 if key not in buckets:
-                    buckets[key] = {'key': key, 'count': 0, 'items': []}
+                    buckets[key] = {"key": key, "count": 0, "items": []}
                     order.append(key)
-                buckets[key]['count'] += 1
-                buckets[key]['items'].append(item)
+                buckets[key]["count"] += 1
+                buckets[key]["items"].append(item)
             return [buckets[k] for k in order]
 
-        if 'choose' in expr:
-            return self._eval_choose(expr['choose'], ctx)
+        if "choose" in expr:
+            return self._eval_choose(expr["choose"], ctx)
 
         # ── Query / Aggregate ───────────────────────────────────────────
 
-        if 'query' in expr:
-            qfn = ctx.get('_query_fn')
+        if "query" in expr:
+            qfn = ctx.get("_query_fn")
             if qfn is not None:
                 return qfn(expr, ctx)
             return []
 
-        if 'count' in expr:
-            arg = expr['count']
+        if "count" in expr:
+            arg = expr["count"]
             items = self.eval(arg, ctx)
             return len(items) if isinstance(items, (list, dict)) else 0
 
         # ── Function call ───────────────────────────────────────────────
 
-        if 'call' in expr:
-            fn_name = expr['call'][0]
+        if "call" in expr:
+            fn_name = expr["call"][0]
             fn = self._functions.get(fn_name)
             if fn is None:
                 raise ValueError(f"Unknown function: {fn_name}")
-            args_list = [self.eval(arg, ctx) for arg in expr['call'][1:]]
+            args_list = [self.eval(arg, ctx) for arg in expr["call"][1:]]
             if not isinstance(fn, dict):
                 return fn(*args_list)
             return self._alias_call(fn_name, args_list, ctx)
@@ -957,9 +948,9 @@ class ExprEvaluator:
 
     def _eval_choose(self, cspec: dict, ctx: dict) -> Any:
         """Interpreter for ``choose`` (see :meth:`_compile_choose`)."""
-        items = self.eval(cspec['items'], ctx)
+        items = self.eval(cspec["items"], ctx)
         if not isinstance(items, list):
-            return None if 'then' in cspec else False
+            return None if "then" in cspec else False
         try:
             items = sorted(items)
         except TypeError:
@@ -969,16 +960,16 @@ class ExprEvaluator:
             if item not in uniq:
                 uniq.append(item)
         try:
-            k = int(self.eval(cspec['k'], ctx))
+            k = int(self.eval(cspec["k"], ctx))
         except (TypeError, ValueError):
-            return None if 'then' in cspec else False
+            return None if "then" in cspec else False
         k = max(0, min(k, len(uniq)))
 
-        as_var = cspec.get('as', '$c')
-        prefix = cspec.get('prefix')
-        where = cspec.get('where')
-        then = cspec.get('then')
-        maximize = cspec.get('agg', 'max') != 'min'
+        as_var = cspec.get("as", "$c")
+        prefix = cspec.get("prefix")
+        where = cspec.get("where")
+        then = cspec.get("then")
+        maximize = cspec.get("agg", "max") != "min"
         best: Any = None
         found = False
         combo: list = []
@@ -986,7 +977,7 @@ class ExprEvaluator:
         def _rec(i: int):
             nonlocal best, found
             if len(combo) == k:
-                sub = {**ctx, as_var: list(combo), '$node': list(combo)}
+                sub = {**ctx, as_var: list(combo), "$node": list(combo)}
                 if where is not None and not self.eval(where, sub):
                     return
                 found = True
@@ -998,8 +989,7 @@ class ExprEvaluator:
             if i >= len(uniq):
                 return
             combo.append(uniq[i])
-            if len(combo) == k or prefix is None \
-                    or self.eval(prefix, {**ctx, as_var: list(combo)}):
+            if len(combo) == k or prefix is None or self.eval(prefix, {**ctx, as_var: list(combo)}):
                 _rec(i + 1)
             combo.pop()
             _rec(i + 1)
@@ -1019,11 +1009,11 @@ class ExprEvaluator:
             else:
                 start = ctx.get(raw)
                 if start is None:
-                    clean = raw.lstrip('$').lstrip('.')
-                    p_parts = clean.split('.')
+                    clean = raw.lstrip("$").lstrip(".")
+                    p_parts = clean.split(".")
                     start = ctx.get(p_parts[0])
                     if start is None:
-                        start = ctx.get(f'${p_parts[0]}')
+                        start = ctx.get(f"${p_parts[0]}")
                     if start is not None:
                         for p_part in p_parts[1:]:
                             if isinstance(start, dict):
@@ -1035,11 +1025,11 @@ class ExprEvaluator:
                 return None
             parts = path[1:] if isinstance(path[1:], list) else [path[1]]
         else:
-            clean = path.lstrip('$').lstrip('.')
-            parts = clean.split('.')
+            clean = path.lstrip("$").lstrip(".")
+            parts = clean.split(".")
             start = ctx.get(parts[0])
             if start is None:
-                start = ctx.get(f'${parts[0]}')
+                start = ctx.get(f"${parts[0]}")
             if start is None:
                 return None
             parts = parts[1:]
@@ -1048,7 +1038,7 @@ class ExprEvaluator:
         for part in parts:
             if isinstance(obj, dict):
                 obj = obj.get(part)
-            elif isinstance(obj, (list, tuple)) and isinstance(part, str) and part.lstrip('-').isdigit():
+            elif isinstance(obj, (list, tuple)) and isinstance(part, str) and part.lstrip("-").isdigit():
                 obj = obj[int(part)]
             else:
                 return None
@@ -1060,18 +1050,19 @@ class ExprEvaluator:
         Only supports: +, -, *, /, %, parentheses, variable substitution.
         No function calls, no builtins access.
         """
+
         # Step 1: Replace $prefixed.variables (e.g. $cell.x → resolved value)
         def _replace_prefixed(m):
             name = m.group(1)
-            val = self._resolve_path(ctx, f'${name}')
-            return str(val) if isinstance(val, (int, float)) else '0'
+            val = self._resolve_path(ctx, f"${name}")
+            return str(val) if isinstance(val, (int, float)) else "0"
 
         s = _ARITH_PREFIX_RE.sub(_replace_prefixed, raw)
 
         # Step 2: Replace bare variable names (board_size, win_length, etc.)
         def _replace_bare(m):
             name = m.group(1)
-            if name.replace('.', '', 1).lstrip('-').isdigit():
+            if name.replace(".", "", 1).lstrip("-").isdigit():
                 return name
             val = self._resolve_path(ctx, name)
             if isinstance(val, (int, float)):
@@ -1079,16 +1070,16 @@ class ExprEvaluator:
             val = ctx.get(name)
             if isinstance(val, (int, float)):
                 return str(val)
-            return '0'
+            return "0"
 
         s = _ARITH_BARE_RE.sub(_replace_bare, s)
 
         # Step 3: Evaluate safely
         try:
-            return int(eval(s, {'__builtins__': {}}, {}))
+            return int(eval(s, {"__builtins__": {}}, {}))
         except Exception:
             try:
-                return float(eval(s, {'__builtins__': {}}, {}))
+                return float(eval(s, {"__builtins__": {}}, {}))
             except Exception:
                 return None
 
@@ -1105,7 +1096,7 @@ def _concat_values(items: list) -> Any:
         for item in live:
             out.extend(item)
         return out
-    return ''.join(str(item) for item in live)
+    return "".join(str(item) for item in live)
 
 
 def _collect_call_names(expr: Any, out: set[str] | None = None) -> set[str]:
@@ -1113,8 +1104,8 @@ def _collect_call_names(expr: Any, out: set[str] | None = None) -> set[str]:
     if out is None:
         out = set()
     if isinstance(expr, dict):
-        if 'call' in expr and isinstance(expr['call'], list) and expr['call']:
-            out.add(expr['call'][0])
+        if "call" in expr and isinstance(expr["call"], list) and expr["call"]:
+            out.add(expr["call"][0])
         for value in expr.values():
             _collect_call_names(value, out)
     elif isinstance(expr, list):

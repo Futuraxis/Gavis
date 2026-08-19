@@ -10,9 +10,9 @@ import pytest
 
 from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
 from layer2_engine.games.texas_holdem.texas_env_adapter import TexasHoldemAdapter
-from layer3_solvers import CFR, CFRConfig, MCTS, MCTSConfig
+from layer3_solvers import CFR, MCTS, CFRConfig, MCTSConfig
+from layer4_interface.binding import MockBinding
 from layer4_interface.vision_bridge import observation_to_state
-from layer4_interface.binding import Observation, MockBinding
 
 
 class TestBindingEngineSolverIntegration:
@@ -64,7 +64,7 @@ class TestTexasEngineSolverIntegration:
         return TexasHoldemAdapter(seed=42)
 
     def _resolve(self, adapter: TexasHoldemAdapter, state: dict) -> dict:
-        while adapter.get_node_type(state) == 'chance':
+        while adapter.get_node_type(state) == "chance":
             _, state = adapter.sample_chance(state)
         return state
 
@@ -74,15 +74,15 @@ class TestTexasEngineSolverIntegration:
         state = self._resolve(adapter, adapter.create_initial_state())
         guard = 0
         while not adapter.is_terminal(state) and guard < 60:
-            if adapter.get_node_type(state) == 'player':
+            if adapter.get_node_type(state) == "player":
                 action = solver.select_action(state)
                 assert action is not None
                 state = adapter.apply_action(state, action)
             state = adapter.resolve_chance(state)
             guard += 1
         assert adapter.is_terminal(state)
-        u_sb = adapter.get_utility(state, 'p_sb')
-        u_bb = adapter.get_utility(state, 'p_bb')
+        u_sb = adapter.get_utility(state, "p_sb")
+        u_bb = adapter.get_utility(state, "p_bb")
         assert u_sb + u_bb == 0.0
 
     def test_cfr_info_sets_on_poker(self, adapter: TexasHoldemAdapter):

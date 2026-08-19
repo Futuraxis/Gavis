@@ -61,6 +61,7 @@ def test_estimate_reward_uses_both_players() -> None:
     assert player_one.calls == 1
     assert reward == 1.0
 
+
 class PerspectiveAdapter:
     """Minimal two-player adapter used to check the reward perspective."""
 
@@ -118,6 +119,7 @@ def test_gym_adapter_keeps_row_player_reward_perspective() -> None:
     assert second_done is True
     assert adapter.utility_players == ["row", "row"]
 
+
 class CountingMatchEnvironment(TwoTurnEnvironment):
     """Environment that counts how many evaluation episodes are run."""
 
@@ -156,6 +158,8 @@ def test_gamescape_reuses_previous_payoffs() -> None:
     assert env.reset_calls == 6
     assert expanded_matrix.shape == (3, 3)
     assert np.array_equal(expanded_matrix[:2, :2], first_matrix)
+
+
 def test_psro_save_load_preserves_payoff_matrix(tmp_path: Path) -> None:
     """A saved solver should restore its cached payoff matrix."""
     adapter = PerspectiveAdapter()

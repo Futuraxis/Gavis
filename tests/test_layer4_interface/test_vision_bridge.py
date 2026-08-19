@@ -17,8 +17,8 @@ def adapter() -> MoonChessAdapter:
 class TestObservationToState:
     def test_empty_board(self, adapter: MoonChessAdapter):
         obs = Observation(
-            boardObservation=[[None]*3 for _ in range(3)],
-            confidence=[[0.0]*3 for _ in range(3)],
+            boardObservation=[[None] * 3 for _ in range(3)],
+            confidence=[[0.0] * 3 for _ in range(3)],
         )
         state = observation_to_state(obs, adapter)
         board = state["_arrays"]["board"]
@@ -38,6 +38,7 @@ class TestObservationToState:
     def test_various_symbols(self, adapter: MoonChessAdapter):
         """Various unicode symbols for X and O should all map correctly."""
         from itertools import product
+
         symbols_x = ["X", "x", "●"]
         symbols_o = ["O", "o", "○"]
         for sx, so in product(symbols_x, symbols_o):
@@ -51,8 +52,8 @@ class TestObservationToState:
 
     def test_load_state_preserves_env(self, adapter: MoonChessAdapter):
         obs = Observation(
-            boardObservation=[[None]*3 for _ in range(3)],
-            confidence=[[0.0]*3 for _ in range(3)],
+            boardObservation=[[None] * 3 for _ in range(3)],
+            confidence=[[0.0] * 3 for _ in range(3)],
         )
         state = observation_to_state(obs, adapter)
         assert state["env"]["phase"] == "playing"

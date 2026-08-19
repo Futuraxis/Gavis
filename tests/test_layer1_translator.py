@@ -8,7 +8,10 @@ from pathlib import Path
 import pytest
 
 from layer1_translator import (
+    EngineValidator,
+    RuleParser,
     SchemaValidator,
+    TemplateTranslator,
     TranslateRequest,
     TranslateResponse,
     TranslatorProtocol,
@@ -124,6 +127,13 @@ class TestValidationResult:
         assert len(result.warnings) == 1
         result2 = ValidationResult(valid=True)
         assert len(result2.warnings) == 0
+
+    def test_extend_merges_status_and_messages(self) -> None:
+        result = ValidationResult(valid=True, warnings=["w1"])
+        result.extend(ValidationResult(valid=False, errors=["e1"], warnings=["w2"]))
+        assert not result.valid
+        assert result.errors == ["e1"]
+        assert result.warnings == ["w1", "w2"]
 
 
 # ── TranslateRequest ───────────────────────────────────────────────
@@ -618,15 +628,15 @@ class TestSchemaValidatorRealRules:
         assert "effectors" in moon_chess_rules
         assert "effects" not in moon_chess_rules
 
-    def test_gomoku_fails_v41_validation(self, gomoku_rules: dict) -> None:
+    def test_gomoku_passes_v5_validation(self, gomoku_rules: dict) -> None:
         result = SchemaValidator.validate(gomoku_rules)
-        assert not result.valid
-        assert any("effects" in e for e in result.errors)
+        assert result.valid
+        assert result.errors == []
 
-    def test_moon_chess_fails_v41_validation(self, moon_chess_rules: dict) -> None:
+    def test_moon_chess_passes_v5_validation(self, moon_chess_rules: dict) -> None:
         result = SchemaValidator.validate(moon_chess_rules)
-        assert not result.valid
-        assert any("effects" in e for e in result.errors)
+        assert result.valid
+        assert result.errors == []
 
     def test_gomoku_structure_unchanged(self, gomoku_rules: dict) -> None:
         snapshot = json.dumps(gomoku_rules, sort_keys=True)
@@ -649,9 +659,7 @@ class TestSchemaValidatorEdgeCases:
         "field",
         ["constants", "actions", "effects", "phases", "terminal", "utility"],
     )
-    def test_missing_each_top_level_field_individually(
-        self, valid_rules: dict, field: str
-    ) -> None:
+    def test_missing_each_top_level_field_individually(self, valid_rules: dict, field: str) -> None:
         rules = {k: v for k, v in valid_rules.items() if k != field}
         result = SchemaValidator.validate(rules)
         assert not result.valid
@@ -676,7 +684,7 @@ class TestSchemaValidatorEdgeCases:
         result = SchemaValidator.validate(rules)
         assert result.valid
 
-    def test_none_actions_raises_type_error(self) -> None:
+    def test_none_actions_returns_validation_error(self) -> None:
         rules = {
             "constants": {},
             "actions": None,
@@ -685,8 +693,9 @@ class TestSchemaValidatorEdgeCases:
             "terminal": [],
             "utility": [],
         }
-        with pytest.raises(TypeError):
-            SchemaValidator.validate(rules)
+        result = SchemaValidator.validate(rules)
+        assert not result.valid
+        assert any("actions" in error for error in result.errors)
 
     def test_deeply_nested_effects(self, valid_rules: dict) -> None:
         rules = dict(valid_rules)
@@ -786,3 +795,161 @@ class TestEndToEndWorkflow:
         assert resp.validation.valid
         assert resp.confidence == 0.85
         assert resp.rules_json == valid_rules
+
+
+# -- EngineValidator -------------------------------------------------
+
+
+class TestEngineValidator:
+    def test_moon_chess_smoke_validation(self, moon_chess_rules: dict) -> None:
+        result = EngineValidator().validate(moon_chess_rules)
+        assert result.valid
+        assert result.errors == []
+
+    def test_invalid_rules_stop_before_engine(self) -> None:
+        result = EngineValidator().validate({})
+        assert not result.valid
+        assert any("缺少必需顶层字段" in error for error in result.errors)
+
+
+# -- TemplateTranslator ---------------------------------------------
+
+
+class TestRuleParser:
+    def test_resolve_all_supported_games(self) -> None:
+        parser = RuleParser()
+
+        assert parser.resolve_game_id(rule_text="", game_name="moon_chess") == "moon_chess"
+        assert parser.resolve_game_id(rule_text="9x9 五子棋", game_name=None) == "stochastic_gomoku"
+        assert parser.resolve_game_id(rule_text="德州扑克", game_name=None) == "texas_holdem"
+        assert parser.resolve_game_id(rule_text="广东麻将", game_name=None) == "mahjong"
+        assert parser.resolve_game_id(rule_text="狼人杀 9人局", game_name=None) == "werewolf"
+
+    def test_parse_grid_parameters(self) -> None:
+        parsed = RuleParser().parse(rule_text="9x9 五子棋，五连获胜，消失概率 25%")
+
+        assert parsed is not None
+        assert parsed.game_id == "stochastic_gomoku"
+        assert parsed.parameters == {
+            "board_size": 9,
+            "win_length": 5,
+            "vanish_probability": 0.25,
+        }
+
+    def test_parse_werewolf_parameters(self) -> None:
+        parsed = RuleParser().parse(rule_text="狼人杀 9人局，3狼，1预言家，有女巫和猎人，无守卫")
+
+        assert parsed is not None
+        assert parsed.game_id == "werewolf"
+        assert parsed.parameters["players"] == 9
+        assert parsed.parameters["wolves"] == 3
+        assert parsed.parameters["seers"] == 1
+        assert parsed.parameters["with_witch"] is True
+        assert parsed.parameters["with_hunter"] is True
+        assert parsed.parameters["with_guard"] is False
+
+
+class TestTemplateTranslator:
+    def test_translate_known_game_name(self) -> None:
+        translator = TemplateTranslator(run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="规则文本", game_name="moon_chess"))
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["meta"]["gameId"] == "moon_chess"
+        assert response.confidence == 0.95
+
+    def test_translate_from_chinese_hint(self) -> None:
+        translator = TemplateTranslator(run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="9x9 五子棋，五子连珠获胜，50% 消失"))
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["constants"]["board_size"] == 9
+        assert response.rules_json["constants"]["win_length"] == 5
+        assert response.rules_json["constants"]["vanish_probability"] == 0.5
+
+    @pytest.mark.parametrize(
+        ("rule_text", "expected_game_id"),
+        [
+            ("月亮棋，每方3枚棋子，三连成线获胜", "moon_chess"),
+            ("随机五子棋，9x9，50% 消失", "stochastic_gomoku"),
+            ("德州扑克，盲注 1/2，筹码 100", "texas_holdem"),
+            ("广东麻将，2人", "mahjong"),
+            ("狼人杀 9人局，3狼1预言家1女巫1猎人", "werewolf"),
+        ],
+    )
+    def test_translate_all_supported_templates(self, rule_text: str, expected_game_id: str) -> None:
+        translator = TemplateTranslator(run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text=rule_text))
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.confidence == 0.95
+        meta = response.rules_json["meta"]
+        assert meta.get("gameId") == expected_game_id or meta.get("name") == expected_game_id
+
+    @pytest.mark.parametrize(
+        "rule_text",
+        [
+            "moon_chess 月亮棋",
+            "stochastic_gomoku 五子棋",
+            "werewolf 狼人杀",
+            "texas_holdem 德州扑克",
+            "mahjong 麻将",
+        ],
+    )
+    def test_layer1_to_engine_supported_templates(self, rule_text: str) -> None:
+        response = TemplateTranslator(run_engine_validation=True).translate(TranslateRequest(rule_text=rule_text))
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.confidence == 0.95
+
+    def test_moon_chess_parameter_syncs_grid_cols(self) -> None:
+        translator = TemplateTranslator(run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="4x4 月亮棋，每方4枚棋子，四连获胜"))
+
+        assert response.rules_json["constants"]["board_size"] == 4
+        assert response.rules_json["constants"]["max_pieces"] == 4
+        assert response.rules_json["constants"]["win_length"] == 4
+        assert response.rules_json["derivedViews"]["cell"]["from"]["cols"] == {"var": "$constants.board_size"}
+
+    def test_mahjong_parameters_update_player_shape(self) -> None:
+        translator = TemplateTranslator(run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="血战麻将 4人局"))
+
+        assert response.rules_json["constants"]["variant"] == "blood"
+        assert response.rules_json["constants"]["player_count"] == 4
+        assert response.rules_json["constants"]["deal_target"] == 53
+        assert response.rules_json["players"] == ["p0", "p1", "p2", "p3"]
+
+    def test_werewolf_unsupported_composition_warns_and_keeps_template(self) -> None:
+        translator = TemplateTranslator(run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="狼人杀 6人局，2狼1预言家"))
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["constants"]["player_ids"] == [f"p{i}" for i in range(9)]
+        assert any("固定" in warning for warning in response.validation.warnings)
+
+    def test_texas_holdem_parameters_update_constants(self) -> None:
+        translator = TemplateTranslator(run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="德州扑克，盲注 2/4，筹码 80"))
+
+        assert response.rules_json["constants"]["small_blind"] == 2
+        assert response.rules_json["constants"]["big_blind"] == 4
+        assert response.rules_json["constants"]["stack_size"] == 80
+        assert max(response.rules_json["constants"]["raise_grid"]) == 80
+
+    def test_translate_unknown_game_fails_cleanly(self) -> None:
+        translator = TemplateTranslator(run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="一个未知游戏"))
+
+        assert response.validation is not None
+        assert not response.validation.valid
+        assert response.rules_json == {}
+        assert response.confidence == 0.0
+
+    def test_template_translator_protocol(self) -> None:
+        assert isinstance(TemplateTranslator(run_engine_validation=False), TranslatorProtocol)

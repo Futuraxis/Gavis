@@ -26,7 +26,6 @@ from pathlib import Path
 from layer2_engine.games.mahjong.mahjong_adapter import MahjongAdapter
 from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
 from layer2_engine.games.texas_holdem.texas_env_adapter import TexasHoldemAdapter
-
 from layer3_solvers import HAPPOConfig, HAPPOSolver, MAACConfig, MAACSolver, QMixConfig, QMixSolver
 
 GAMES = ("moon_chess", "texas_holdem", "mahjong_2p")
@@ -86,9 +85,9 @@ def main() -> None:
     solvers = SOLVERS if args.solver == "all" else [args.solver]
     out_root = Path(args.out_dir)
 
-    print(f'\n{"█" * 60}')
+    print(f"\n{'█' * 60}")
     print(f"  Gavis MARL 训练  games={games}  solvers={solvers}  device={device}")
-    print(f'{"█" * 60}')
+    print(f"{'█' * 60}")
 
     for game in games:
         episodes = args.episodes or DEFAULT_EPISODES[game]
@@ -102,7 +101,7 @@ def main() -> None:
             cls, cfg_cls = SOLVER_CLASSES[name]
             cfg = cfg_cls(seed=args.seed, device=device)
             solver = cls(adapter, cfg)
-            print(f'\n── 训练 {name} @ {game}  ({episodes} 局)  ──')
+            print(f"\n── 训练 {name} @ {game}  ({episodes} 局)  ──")
             t0 = time.time()
             metrics = solver.train(episodes=episodes, verbose=args.verbose)
             elapsed = time.time() - t0
@@ -115,8 +114,10 @@ def main() -> None:
                 "config": asdict(cfg),
             }
             solver.save(str(game_dir / f"{name}.pt"))
-            print(f"  完成: win_rate={metrics.win_rate:.3f}  avg_return={metrics.avg_return:.3f}"
-                  f"  {elapsed:.1f}s  → {game_dir / (name + '.pt')}")
+            print(
+                f"  完成: win_rate={metrics.win_rate:.3f}  avg_return={metrics.avg_return:.3f}"
+                f"  {elapsed:.1f}s  → {game_dir / (name + '.pt')}"
+            )
 
         # 合并写入：并行训练多个求解器时各自的 metrics.json 不会互相覆盖
         prev_path = game_dir / "metrics.json"
@@ -130,7 +131,7 @@ def main() -> None:
             json.dump({"seed": args.seed, "device": device}, f, ensure_ascii=False, indent=2)
         print(f"  指标 → {game_dir / 'metrics.json'}")
 
-    print(f'\n{"█" * 60}\n  训练完成 → {out_root}\n{"█" * 60}')
+    print(f"\n{'█' * 60}\n  训练完成 → {out_root}\n{'█' * 60}")
 
 
 if __name__ == "__main__":

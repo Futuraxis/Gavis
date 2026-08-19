@@ -14,13 +14,14 @@ import pytest
 
 from layer2_engine.core.engine import GameEngine
 from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
-from layer3_solvers import MCTS, CFR, PSROSolver, SolverBase
-from layer3_solvers.mcts import MCTSConfig
+from layer3_solvers import CFR, MCTS, PSROSolver
 from layer3_solvers.cfr import CFRConfig
+from layer3_solvers.mcts import MCTSConfig
 from layer3_solvers.psro import PSROConfig
 
 try:
-    from layer3_solvers.ppo import PPOSolver, PPOConfig
+    from layer3_solvers.ppo import PPOConfig, PPOSolver
+
     _HAS_TORCH = True
 except (ImportError, TypeError):
     PPOSolver = None
@@ -150,16 +151,15 @@ class TestMCTS:
         """
         solver = MCTS(moon_adapter, MCTSConfig(seed=42, budget=1500))
         state = moon_adapter.create_initial_state()
-        for cell in ('cell_0_0', 'cell_1_2', 'cell_0_1'):
+        for cell in ("cell_0_0", "cell_1_2", "cell_0_1"):
             action = next(
-                a for a in moon_adapter.get_legal_actions(state)
-                if a.params.get('cell', {}).get('id', '') == cell
+                a for a in moon_adapter.get_legal_actions(state) if a.params.get("cell", {}).get("id", "") == cell
             )
             state = moon_adapter.apply_action(state, action)
         # Now black 0,1 on top row; white (AI) must play cell_0_2.
-        assert moon_adapter.get_current_player(state) == 'p_white'
+        assert moon_adapter.get_current_player(state) == "p_white"
         action = solver.select_action(state)
-        assert action.params.get('cell', {}).get('id', '') == 'cell_0_2'
+        assert action.params.get("cell", {}).get("id", "") == "cell_0_2"
 
 
 # ── CFR ───────────────────────────────────────────────────────────
@@ -237,19 +237,23 @@ class TestPSRO:
 
 class TestNashSolver:
     def test_solve_2x2(self):
-        from layer3_solvers.psro.nash_solver import solve_nash
         import numpy as np
-        R = np.array([[0.0, -1.0], [1.0, 0.0]])
-        nash = solve_nash(R)
+
+        from layer3_solvers.psro.nash_solver import solve_nash
+
+        reward_matrix = np.array([[0.0, -1.0], [1.0, 0.0]])
+        nash = solve_nash(reward_matrix)
         assert nash.shape == (2,)
         assert abs(nash.sum() - 1.0) < 0.01
         assert all(nash >= 0)
 
     def test_solve_3x3_uniform(self):
-        from layer3_solvers.psro.nash_solver import solve_nash
         import numpy as np
-        R = np.array([[0, -1, 1], [1, 0, -1], [-1, 1, 0]])
-        nash = solve_nash(R)
+
+        from layer3_solvers.psro.nash_solver import solve_nash
+
+        reward_matrix = np.array([[0, -1, 1], [1, 0, -1], [-1, 1, 0]])
+        nash = solve_nash(reward_matrix)
         assert nash.shape == (3,)
         assert all(nash > 0.1)
 

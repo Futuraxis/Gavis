@@ -15,16 +15,16 @@ from layer2_engine.games.moon_chess import MoonChessAdapter
 from layer3_solvers.base import SolverConfig
 from layer3_solvers.mcts import MCTS
 
-PlayerColor = Literal['p_black', 'p_white']
-Difficulty = Literal['easy', 'normal', 'hard']
+PlayerColor = Literal["p_black", "p_white"]
+Difficulty = Literal["easy", "normal", "hard"]
 
 # MCTS budgets per difficulty tier.  Measured on a 3×3 board with the
 # line-scan heuristic rollout: ~0.6 ms per iteration → ~0.15 s / ~0.5 s /
 # ~1.3 s per move.  Even 'easy' blocks immediate threats correctly.
 DIFFICULTY_BUDGETS: dict[Difficulty, int] = {
-    'easy': 200,
-    'normal': 800,
-    'hard': 2000,
+    "easy": 200,
+    "normal": 800,
+    "hard": 2000,
 }
 
 
@@ -54,16 +54,16 @@ class GameSession:
 
     @property
     def ai_color(self) -> PlayerColor:
-        return 'p_white' if self.player_color == 'p_black' else 'p_black'
+        return "p_white" if self.player_color == "p_black" else "p_black"
 
     @property
     def board(self) -> list:
         """9-element board array (None / 'p_black' / 'p_white')."""
-        return self.state['_arrays']['board']
+        return self.state["_arrays"]["board"]
 
     @property
     def winner(self) -> Optional[str]:
-        return self.state['env'].get('winner')
+        return self.state["env"].get("winner")
 
     @property
     def over(self) -> bool:
@@ -89,12 +89,12 @@ class GameSession:
     def human_move(self, cell_index: int) -> None:
         """Apply the human's move; raises PlayError on illegal moves."""
         if self.over:
-            raise PlayError(f'game {self.game_id} is over')
+            raise PlayError(f"game {self.game_id} is over")
         if self.current_player != self.player_color:
-            raise PlayError('not your turn')
+            raise PlayError("not your turn")
         action = self._find_action(cell_index)
         if action is None:
-            raise PlayError(f'cell {cell_index} is not a legal move')
+            raise PlayError(f"cell {cell_index} is not a legal move")
         self.state = self.engine.apply_action(self.state, action)
 
     def _find_action(self, cell_index: int) -> Optional[object]:
@@ -105,9 +105,9 @@ class GameSession:
 
     @staticmethod
     def _cell_index(action: object) -> int:
-        cell = action.params.get('cell', {})
-        cell_id = cell.get('id', '') if isinstance(cell, dict) else str(cell)
-        _, r, c = cell_id.split('_')
+        cell = action.params.get("cell", {})
+        cell_id = cell.get("id", "") if isinstance(cell, dict) else str(cell)
+        _, r, c = cell_id.split("_")
         return int(r) * 3 + int(c)
 
     # ── Serialization ───────────────────────────────────────────────
@@ -119,22 +119,22 @@ class GameSession:
         in FIFO eviction order); cells without a piece are absent.
         """
         age_map: dict[str, int] = {}
-        for entry in self.state['_arrays'].get('pieceOrder', []):
-            cid = entry.get('cell_id', '')
+        for entry in self.state["_arrays"].get("pieceOrder", []):
+            cid = entry.get("cell_id", "")
             if cid:
-                _, r, c = cid.split('_')
+                _, r, c = cid.split("_")
                 age_map[int(r) * 3 + int(c)] = len(age_map) + 1
         return {
-            'game_id': self.game_id,
-            'player_color': self.player_color,
-            'difficulty': self.difficulty,
-            'board': self.board,
-            'round_age': age_map,
-            'turn': self.current_player,
-            'winner': self.winner,
-            'over': self.over,
-            'last_ai_move': self.last_ai_move,
-            'round': self.state['env'].get('round', 0),
+            "game_id": self.game_id,
+            "player_color": self.player_color,
+            "difficulty": self.difficulty,
+            "board": self.board,
+            "round_age": age_map,
+            "turn": self.current_player,
+            "winner": self.winner,
+            "over": self.over,
+            "last_ai_move": self.last_ai_move,
+            "round": self.state["env"].get("round", 0),
         }
 
 
@@ -147,12 +147,12 @@ class PlayManager:
 
     def start(self, player_color: PlayerColor | str, difficulty: Difficulty) -> GameSession:
         """Create a new session; the AI opens first when the human is white."""
-        if player_color == 'random':
-            player_color = ('p_black' if uuid.uuid4().int % 2 == 0 else 'p_white')
-        if player_color not in ('p_black', 'p_white'):
-            raise PlayError(f'unknown player color: {player_color}')
+        if player_color == "random":
+            player_color = "p_black" if uuid.uuid4().int % 2 == 0 else "p_white"
+        if player_color not in ("p_black", "p_white"):
+            raise PlayError(f"unknown player color: {player_color}")
         if difficulty not in DIFFICULTY_BUDGETS:
-            raise PlayError(f'unknown difficulty: {difficulty}')
+            raise PlayError(f"unknown difficulty: {difficulty}")
 
         game_id = uuid.uuid4().hex[:8]
         engine = MoonChessAdapter(seed=self._seed)
@@ -162,11 +162,11 @@ class PlayManager:
         session = GameSession(
             game_id=game_id,
             player_color=player_color,  # type: ignore[arg-type]
-            difficulty=difficulty,      # type: ignore[arg-type]
+            difficulty=difficulty,  # type: ignore[arg-type]
             engine=engine,
             solver=solver,
         )
-        if session.player_color == 'p_white':
+        if session.player_color == "p_white":
             session.ai_move()
         self._sessions[game_id] = session
         return session
@@ -174,7 +174,7 @@ class PlayManager:
     def get(self, game_id: str) -> GameSession:
         session = self._sessions.get(game_id)
         if session is None:
-            raise PlayError(f'unknown game: {game_id}')
+            raise PlayError(f"unknown game: {game_id}")
         return session
 
     def remove(self, game_id: str) -> None:

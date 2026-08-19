@@ -162,8 +162,14 @@ class TestTexasHoldem:
 
 class TestGameSpecRegistry:
     def test_all_games_present(self):
-        assert set(GAMES) == {"moon_chess", "stochastic_gomoku", "texas_holdem",
-                          "mahjong_guangdong", "mahjong_hongzhong", "mahjong_blood"}
+        assert set(GAMES) == {
+            "moon_chess",
+            "stochastic_gomoku",
+            "texas_holdem",
+            "mahjong_guangdong",
+            "mahjong_hongzhong",
+            "mahjong_blood",
+        }
 
     def test_seat_options_consistent(self):
         assert GAMES["moon_chess"].seat_options == ("p_black", "p_white")
@@ -171,6 +177,7 @@ class TestGameSpecRegistry:
 
 
 # ── Mahjong ───────────────────────────────────────────────────────────
+
 
 class TestMahjong:
     def test_start_2p(self, manager: PlayManager):
@@ -192,7 +199,7 @@ class TestMahjong:
     def test_discard_and_claim_flow(self, manager: PlayManager):
         session = manager.start("mahjong_guangdong", "p0", "easy", player_count=2)
         legal = session.snapshot()["legal"]
-        tile = next(l["tile"] for l in legal if l["type"] == "discard")
+        tile = next(action["tile"] for action in legal if action["type"] == "discard")
         manager.move(session.game_id, {"type": "discard", "tile": tile})
         snap = session.snapshot()
         assert tile in snap["discards"]["p0"]

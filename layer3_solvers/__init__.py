@@ -39,6 +39,8 @@ __all__ = [
     "HybridConfig",
     "OllamaSolver",
     "OllamaConfig",
+    "BayesSolver",
+    "BayesConfig",
 ]
 if PPOSolver is not None:
     __all__.extend(["PPOSolver", "PPOConfig"])

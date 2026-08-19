@@ -7,10 +7,10 @@ Engine (Layer 2) and Solvers (Layer 3).
 from .binding import (
     BaseBinding,
     ImageBinding,
-    VisionLLMBinding,
     MockBinding,
     Observation,
     StateTracker,
+    VisionLLMBinding,
 )
 from .vision_bridge import observation_to_state
 

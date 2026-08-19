@@ -23,11 +23,11 @@ class LanguageObservation:
     """
 
     role: str
-    phase: str                       # 'speech' | 'vote' | 'reveal' | ...
+    phase: str  # 'speech' | 'vote' | 'reveal' | ...
     public_context: dict[str, Any] = field(default_factory=dict)
     private_info: dict[str, Any] = field(default_factory=dict)
     history: list[dict[str, Any]] = field(default_factory=list)
-    legal_targets: list[str] = field(default_factory=list)   # votable players
+    legal_targets: list[str] = field(default_factory=list)  # votable players
 
 
 class LanguagePolicy(Protocol):

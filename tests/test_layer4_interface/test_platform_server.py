@@ -20,6 +20,8 @@ from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.server import make_handler
 from layer4_interface.frontend.platform.session import PlayManager
 
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 
 @pytest.fixture
 def base_url(tmp_path: pytest.TempPathFactory) -> Generator[str, None, None]:
@@ -44,12 +46,12 @@ def _post(url: str, payload: dict) -> dict:
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req) as resp:
+    with _NO_PROXY_OPENER.open(req) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
 def _get(url: str) -> dict:
-    with urllib.request.urlopen(url) as resp:
+    with _NO_PROXY_OPENER.open(url) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -58,8 +60,14 @@ class TestGames:
         data = _get(base_url + "/api/games")
         assert data["ok"] is True
         by_id = {g["game_id"]: g for g in data["games"]}
-        assert set(by_id) == {"moon_chess", "stochastic_gomoku", "texas_holdem",
-                          "mahjong_guangdong", "mahjong_hongzhong", "mahjong_blood"}
+        assert set(by_id) == {
+            "moon_chess",
+            "stochastic_gomoku",
+            "texas_holdem",
+            "mahjong_guangdong",
+            "mahjong_hongzhong",
+            "mahjong_blood",
+        }
         assert by_id["moon_chess"]["board_size"] == 3
         assert by_id["stochastic_gomoku"]["board_size"] == 9
         assert by_id["texas_holdem"]["kind"] == "poker"
@@ -162,7 +170,7 @@ class TestMatch:
             headers={"Content-Type": "application/json"},
         )
         with pytest.raises(urllib.error.HTTPError) as exc:
-            urllib.request.urlopen(req)
+            _NO_PROXY_OPENER.open(req)
         assert exc.value.code == 400
 
 

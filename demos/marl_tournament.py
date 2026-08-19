@@ -28,7 +28,6 @@ from pathlib import Path
 from layer2_engine.games.mahjong.mahjong_adapter import MahjongAdapter
 from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
 from layer2_engine.games.texas_holdem.texas_env_adapter import TexasHoldemAdapter
-
 from layer3_solvers import HAPPOConfig, HAPPOSolver, MAACConfig, MAACSolver, QMixConfig, QMixSolver
 
 GAMES = ("moon_chess", "texas_holdem", "mahjong_2p")
@@ -132,7 +131,6 @@ def run_match(game: str, a: str, b: str, a_first: bool, n_games: int, base_seed:
     solver_a.load(str(model_dir / game / f"{a}.pt"))
     solver_b.load(str(model_dir / game / f"{b}.pt"))
 
-    players = {a: [], b: []}
     # 先手玩家：moon_chess p_black / texas p_sb / mahjong p0
     first = "p_black" if game == "moon_chess" else ("p_sb" if game == "texas_holdem" else "p0")
     order = [first, "p_white" if game == "moon_chess" else ("p_bb" if game == "texas_holdem" else "p1")]
@@ -197,10 +195,10 @@ def main() -> None:
     model_dir = Path(args.model_dir)
 
     pairs = list(itertools.combinations(SOLVERS, 2))
-    print(f'\n{"█" * 60}')
+    print(f"\n{'█' * 60}")
     print(f"  Gavis MARL 单循环赛  games={games}")
     print(f"  对阵: {pairs}  × 主/客场")
-    print(f'{"█" * 60}')
+    print(f"{'█' * 60}")
 
     for game in games:
         n = args.games_per_match or DEFAULT_GAMES_PER_MATCH[game]
@@ -235,8 +233,7 @@ def main() -> None:
             e["draws"] += s["draws"]
             e["n"] += s["n_games"]
         agg_out = {
-            f"{a}_{b}": {"a": a, "b": b, **v, "a_win_rate": v["a_wins"] / max(1, v["n"])}
-            for (a, b), v in agg.items()
+            f"{a}_{b}": {"a": a, "b": b, **v, "a_win_rate": v["a_wins"] / max(1, v["n"])} for (a, b), v in agg.items()
         }
 
         doc = {
@@ -251,7 +248,7 @@ def main() -> None:
             json.dump(doc, f, ensure_ascii=False, indent=1)
         print(f"\n  → {out_path}  (耗时 {time.time() - t0:.0f}s)")
 
-    print(f'\n{"█" * 60}\n  循环赛完成 → {out_root}\n{"█" * 60}')
+    print(f"\n{'█' * 60}\n  循环赛完成 → {out_root}\n{'█' * 60}")
 
 
 if __name__ == "__main__":

@@ -102,8 +102,7 @@ class PlayManager:
         self._sessions: dict[str, GameSession] = {}
         self._lock = threading.Lock()
 
-    def start(self, game_id: str, player_pid: str, difficulty: str,
-              player_count: int = 2) -> GameSession:
+    def start(self, game_id: str, player_pid: str, difficulty: str, player_count: int = 2) -> GameSession:
         """Create a new session; resolves start chance nodes and lets the AI open."""
         spec = GAMES.get(game_id)
         if spec is None:

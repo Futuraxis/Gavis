@@ -50,6 +50,10 @@ addopts = "-v --tb=short"
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+extend-exclude = [
+    "archive/",
+    "_gen_*.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]

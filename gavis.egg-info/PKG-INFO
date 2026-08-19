@@ -1,0 +1,121 @@
+Metadata-Version: 2.4
+Name: gavis
+Version: 0.2.0
+Summary: 自适应策略游戏 AI Agent — 四层架构 (Translator / Engine / Solver / Interface)
+Project-URL: homepage, https://github.com/Quan-huayan/Gavis
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.24
+Provides-Extra: binding
+Requires-Dist: opencv-python>=4.8; extra == "binding"
+Requires-Dist: pydantic>=2.0; extra == "binding"
+Requires-Dist: httpx>=0.25; extra == "binding"
+Provides-Extra: torch
+Requires-Dist: torch>=2.0; extra == "torch"
+Provides-Extra: psro
+Requires-Dist: scipy>=1.10; extra == "psro"
+Requires-Dist: gymnasium>=0.28; extra == "psro"
+Requires-Dist: tqdm>=4.64; extra == "psro"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: ruff>=0.1; extra == "dev"
+Provides-Extra: all
+Requires-Dist: opencv-python>=4.8; extra == "all"
+Requires-Dist: pydantic>=2.0; extra == "all"
+Requires-Dist: httpx>=0.25; extra == "all"
+Requires-Dist: torch>=2.0; extra == "all"
+Requires-Dist: scipy>=1.10; extra == "all"
+Requires-Dist: gymnasium>=0.28; extra == "all"
+Requires-Dist: tqdm>=4.64; extra == "all"
+Requires-Dist: pytest>=7.0; extra == "all"
+Requires-Dist: ruff>=0.1; extra == "all"
+
+# Gavis — 自适应策略游戏 AI Agent
+
+> **G**ame **A**dapti**v**e **I**ntelligence **S**ystem
+
+## 架构概览
+
+```
+┌─────────────────────────────────────────────────┐
+│  Layer 1: Translator      [LLM 规则翻译]        │
+│  Layer 2: Env/Engine      [游戏引擎 + 规则引擎]  │
+│  Layer 3: Solver           [MCTS/CFR/PPO/PSRO]  │
+│  Layer 4: Interface       [VLM 识别 + 前端]     │
+└─────────────────────────────────────────────────┘
+```
+
+四层架构，详见 [`docs/merge/`](docs/merge/)。
+
+## 快速开始
+
+```bash
+# 安装基础依赖
+pip install numpy
+
+# 安装可选依赖
+pip install "gavis[torch]"     # PPO 求解器
+pip install "gavis[binding]"   # 视觉识别
+pip install "gavis[psro]"      # PSRO 求解器
+pip install "gavis[all]"       # 全部
+```
+
+## 运行 Demos
+
+```bash
+# MCTS 随机五子棋
+python -m demos.demo_mcts --size 9 --budget 5000
+
+# CFR 随机五子棋 (小棋盘)
+python -m demos.demo_cfr --size 5 --iters 1000
+
+# 统一基准评测 (所有求解器对比)
+python -m demos.benchmark_all --game moon_chess --episodes 10
+
+# Web 前端 (需 binding 依赖)
+python -m layer4_interface.frontend.app_server
+```
+
+## 项目结构
+
+```
+layer1_translator/      # (预留) LLM 规则翻译层
+layer2_engine/          # 游戏引擎
+  core/                 # GameEngine + state_graph + expr_eval
+  games/                # 游戏定义 (rules.json + 适配器)
+    stochastic_gomoku/  # 随机五子棋
+    moon_chess/         # 月亮棋
+  interfaces/           # SolverAdapter Protocol
+layer3_solvers/         # 求解器
+  base.py               # SolverBase 抽象类
+  mcts/                 # 蒙特卡洛树搜索
+  cfr/                  # 反事实遗憾最小化
+  ppo/                  # 近端策略优化
+  psro/                 # 策略空间响应 Oracle
+  auto_selector/        # (预留) 自动选择求解器
+layer4_interface/       # 交互界面
+  binding/              # VLM 图片识别
+  encoding/             # 状态特征编码
+  frontend/             # Web 服务 + 前端
+  online_learning/      # (预留) 在线自学习
+  vision_bridge.py      # 识别→求解器的桥梁
+demos/                  # 演示入口
+tests/                  # 测试
+archive/                # 原始旧代码存档
+docs/merge/             # 架构设计文档
+```
+
+## 四层详解
+
+详见 `docs/merge/` 下的架构文档：
+
+1. [`01_architecture_design.md`](docs/merge/01_architecture_design.md)
+2. [`02_architecture_pros_cons.md`](docs/merge/02_architecture_pros_cons.md)
+3. [`03_architecture_comparison.md`](docs/merge/03_architecture_comparison.md)
+4. [`04_code_style_analysis.md`](docs/merge/04_code_style_analysis.md)
+5. [`05_algorithm_analysis.md`](docs/merge/05_algorithm_analysis.md)
+6. [`06_merge_architecture_and_migration.md`](docs/merge/06_merge_architecture_and_migration.md)
+
+## 许可证
+
+MIT

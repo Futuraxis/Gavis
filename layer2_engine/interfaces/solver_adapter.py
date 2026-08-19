@@ -7,7 +7,7 @@ object satisfying the Protocol can be used for testing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
 # ── Core data types ──────────────────────────────────────────────
@@ -27,6 +27,7 @@ Derived views are computed on-the-fly by the engine.
 @dataclass
 class ActionInstance:
     """A concrete action generated from an action template at runtime."""
+
     template_id: str
     type: str
     actor_id: str
@@ -37,6 +38,7 @@ class ActionInstance:
 @dataclass
 class ChanceOutcome:
     """A single outcome of a chance node."""
+
     key: str
     probability: float
     effect_ref: str
@@ -52,6 +54,7 @@ visibility projection.
 """
 
 # ── Protocol ─────────────────────────────────────────────────────
+
 
 @runtime_checkable
 class SolverAdapter(Protocol):

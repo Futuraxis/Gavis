@@ -8,7 +8,6 @@ import random
 import pytest
 
 from layer2_engine.games.werewolf.werewolf_adapter import WerewolfAdapter
-
 from layer3_solvers import BayesConfig, BayesSolver
 from layer3_solvers.werewolf.belief import BeliefTracker
 
@@ -35,6 +34,7 @@ def _obs_with(players, **kw):
 
 # ── 信念更新 ────────────────────────────────────────────────────
 
+
 def test_prior_is_conditional():
     t = _tracker()
     # players[0] 是自己（villager），概率确定；其他 8 人从剩余池均等
@@ -48,29 +48,35 @@ def test_prior_is_conditional():
 def test_vote_signal_raises_target_wolf_prob():
     t = _tracker()
     before = t.wolf_prob("p3")
-    t.update_from_observation(_obs_with(
-        [f"p{i}" for i in range(9)],
-        vote_log=[{"voter": "p1", "target": "p3", "round": 1}],
-    ))
+    t.update_from_observation(
+        _obs_with(
+            [f"p{i}" for i in range(9)],
+            vote_log=[{"voter": "p1", "target": "p3", "round": 1}],
+        )
+    )
     assert t.wolf_prob("p3") > before
 
 
 def test_accuse_signal_raises_target_wolf_prob():
     t = _tracker()
     before = t.wolf_prob("p5")
-    t.update_from_observation(_obs_with(
-        [f"p{i}" for i in range(9)],
-        speech_log=[{"speaker": "p2", "intent": "accuse", "text": "我怀疑 p5 是狼", "round": 1}],
-    ))
+    t.update_from_observation(
+        _obs_with(
+            [f"p{i}" for i in range(9)],
+            speech_log=[{"speaker": "p2", "intent": "accuse", "text": "我怀疑 p5 是狼", "round": 1}],
+        )
+    )
     assert t.wolf_prob("p5") > before
 
 
 def test_death_reveals_role_exactly():
     t = _tracker()
-    t.update_from_observation(_obs_with(
-        [f"p{i}" for i in range(9)],
-        dead_roles={"p4": "seer"},
-    ))
+    t.update_from_observation(
+        _obs_with(
+            [f"p{i}" for i in range(9)],
+            dead_roles={"p4": "seer"},
+        )
+    )
     assert t.prob("p4", "seer") == 1.0
     assert t.wolf_prob("p4") == 0.0
     # 池中少一个 seer：其他人的 seer 概率下降
@@ -80,14 +86,17 @@ def test_death_reveals_role_exactly():
 def test_entropy_drops_with_evidence():
     t = _tracker()
     e0 = t.entropy("p3")
-    t.update_from_observation(_obs_with(
-        [f"p{i}" for i in range(9)],
-        speech_log=[{"speaker": "p6", "intent": "accuse", "text": "p3 是狼", "round": 1}],
-    ))
+    t.update_from_observation(
+        _obs_with(
+            [f"p{i}" for i in range(9)],
+            speech_log=[{"speaker": "p6", "intent": "accuse", "text": "p3 是狼", "round": 1}],
+        )
+    )
     assert t.entropy("p3") < e0
 
 
 # ── 联合采样 ────────────────────────────────────────────────────
+
 
 def test_sampling_respects_role_counts():
     t = _tracker()
@@ -103,6 +112,7 @@ def test_sampling_respects_role_counts():
 
 
 # ── 决策层 ──────────────────────────────────────────────────────
+
 
 def test_solver_vote_targets_most_suspicious():
     """投票决策：后验狼概率最高者被投。"""

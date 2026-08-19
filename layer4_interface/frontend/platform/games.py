@@ -373,6 +373,7 @@ def _poker_describe_action(action: ActionInstance) -> str:
 def _make_mahjong_engine(variant: str) -> Callable[..., SolverAdapter]:
     def _create(seed: int, player_count: int = 2) -> SolverAdapter:
         return MahjongAdapter(variant=variant, player_count=player_count, seed=seed)
+
     return _create
 
 
@@ -412,8 +413,7 @@ def _mahjong_apply_human(session: GameSession, action: ActionInstance) -> None:
 def _mahjong_run_ai(session: GameSession, on_ai_action: Optional[Callable[[ActionInstance], None]] = None) -> None:
     """Drive every non-human seat (2-player: the single AI; 4-player:
     both AI seats) through their draw/claim/discard turns."""
-    while not session.over and session.current_player is not None \
-            and session.current_player != session.player_pid:
+    while not session.over and session.current_player is not None and session.current_player != session.player_pid:
         action = session.solver.select_action(session.state)
         if action is None:  # heuristic found nothing — random fallback
             legal = session.engine.get_legal_actions(session.state)
@@ -458,7 +458,8 @@ def _mahjong_snapshot(session: GameSession) -> dict:
         # During a claim the effective actor is the queue head, not the
         # discarder — mirror MahjongAdapter.get_current_player.
         "turn": ((env.get("claim_queue") or [None])[int(env.get("claim_index", 0))])
-        if env.get("phase") == "claim" else session.current_player,
+        if env.get("phase") == "claim"
+        else session.current_player,
         "phase": env.get("phase"),
         "my_hand": _hand(session.player_pid),
         "ai_hand": _hand(session.ai_pid) if over else [],
@@ -475,7 +476,9 @@ def _mahjong_snapshot(session: GameSession) -> dict:
             "queue": list(env.get("claim_queue", [])),
             "passed": int(env.get("claim_index", 0)),
             "actor": env.get("actor"),
-        } if env.get("phase") == "claim" else None,
+        }
+        if env.get("phase") == "claim"
+        else None,
         "legal": legal,
         "last_ai_action": session.last_ai_info.get("action"),
     }

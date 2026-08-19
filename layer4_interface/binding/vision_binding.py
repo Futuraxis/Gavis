@@ -64,7 +64,7 @@ class VisionLLMBinding:
         self._last_frame_seq = -1
 
     def parse(self, source: str) -> Observation:
-        with open(source, 'rb') as f:
+        with open(source, "rb") as f:
             data = f.read()
         return self.parse_bytes(data, "image/png")
 
@@ -92,9 +92,7 @@ class VisionLLMBinding:
         confidence = response.get("confidence")
 
         if not board or not confidence:
-            raise VisionModelResponseError(
-                "Vision model response missing boardObservation or confidence."
-            )
+            raise VisionModelResponseError("Vision model response missing boardObservation or confidence.")
 
         if frame_seq is None:
             self._last_frame_seq += 1

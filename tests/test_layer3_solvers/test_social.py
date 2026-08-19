@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from layer3_solvers.social import (
     LanguageObservation,
     LLMPolicy,
@@ -12,7 +10,7 @@ from layer3_solvers.social import (
 
 
 class _FakeClient:
-    def __init__(self, reply: str = '我是狼人，我觉得他很可疑。'):
+    def __init__(self, reply: str = "我是狼人，我觉得他很可疑。"):
         self._reply = reply
         self.calls: list[list[dict]] = []
 
@@ -23,12 +21,12 @@ class _FakeClient:
 
 def _obs(**kwargs) -> LanguageObservation:
     base = dict(
-        role='狼人',
-        phase='speech',
-        public_context={'round': 1},
-        private_info={'id': 'p2'},
-        history=[{'speaker': 'p1', 'text': '我是村民', 'round': 1}],
-        legal_targets=['p1', 'p2', 'p3'],
+        role="狼人",
+        phase="speech",
+        public_context={"round": 1},
+        private_info={"id": "p2"},
+        history=[{"speaker": "p1", "text": "我是村民", "round": 1}],
+        legal_targets=["p1", "p2", "p3"],
     )
     base.update(kwargs)
     return LanguageObservation(**base)
@@ -42,13 +40,13 @@ class TestTemplatePolicy:
 
     def test_vote_targets_legal(self):
         policy = TemplatePolicy()
-        vote = policy.decide_vote(_obs(phase='vote'))
-        assert vote in {'p1', 'p2', 'p3'}
+        vote = policy.decide_vote(_obs(phase="vote"))
+        assert vote in {"p1", "p2", "p3"}
 
     def test_vote_empty_without_targets(self):
         policy = TemplatePolicy()
-        vote = policy.decide_vote(_obs(phase='vote', legal_targets=[]))
-        assert vote == ''
+        vote = policy.decide_vote(_obs(phase="vote", legal_targets=[]))
+        assert vote == ""
 
 
 class TestLLMPolicy:
@@ -62,16 +60,16 @@ class TestLLMPolicy:
         client = _FakeClient()
         policy = LLMPolicy(client)
         policy.decide_speech(_obs())
-        assert client.calls, 'client must be called'
+        assert client.calls, "client must be called"
         messages = client.calls[0]
-        assert messages[0]['role'] == 'system'
-        joined = messages[1]['content']
-        assert '狼人' in joined
-        assert 'p1' in joined
-        assert '发言' in joined
+        assert messages[0]["role"] == "system"
+        joined = messages[1]["content"]
+        assert "狼人" in joined
+        assert "p1" in joined
+        assert "发言" in joined
 
     def test_vote_instruction_lists_targets(self):
         client = _FakeClient()
         policy = LLMPolicy(client)
-        policy.decide_vote(_obs(phase='vote'))
-        assert 'p1' in client.calls[0][1]['content']
+        policy.decide_vote(_obs(phase="vote"))
+        assert "p1" in client.calls[0][1]["content"]

@@ -23,7 +23,7 @@ from typing import Optional
 
 from ...core.engine import GameEngine
 
-RULES_PATH = Path(__file__).resolve().parent.parent.parent.parent / 'rules' / 'werewolf.json'
+RULES_PATH = Path(__file__).resolve().parent.parent.parent.parent / "rules" / "werewolf.json"
 
 
 class WerewolfAdapter(GameEngine):
@@ -36,85 +36,91 @@ class WerewolfAdapter(GameEngine):
     rules for a different composition.
     """
 
-    def __init__(self, players: int = 9, wolves: int = 3, seers: int = 1,
-                 with_witch: bool = True, with_hunter: bool = True,
-                 with_guard: bool = False,
-                 seed: Optional[int] = None):
-        extras = [r for r, on in (('seer', seers > 0), ('witch', with_witch),
-                                  ('hunter', with_hunter), ('guard', with_guard)) if on]
-        expected_pool = ['wolf'] * wolves + ['villager'] * (players - wolves - len(extras)) + extras
-        with open(RULES_PATH, encoding='utf-8') as f:
+    def __init__(
+        self,
+        players: int = 9,
+        wolves: int = 3,
+        seers: int = 1,
+        with_witch: bool = True,
+        with_hunter: bool = True,
+        with_guard: bool = False,
+        seed: Optional[int] = None,
+    ):
+        extras = [
+            r
+            for r, on in (("seer", seers > 0), ("witch", with_witch), ("hunter", with_hunter), ("guard", with_guard))
+            if on
+        ]
+        expected_pool = ["wolf"] * wolves + ["villager"] * (players - wolves - len(extras)) + extras
+        with open(RULES_PATH, encoding="utf-8") as f:
             rules = json.load(f)
-        pool = rules['constants']['role_pool']
+        pool = rules["constants"]["role_pool"]
         if pool != expected_pool:
             raise ValueError(
-                f'rules/werewolf.json role_pool {pool} does not match requested '
-                f'{expected_pool} — regenerate with _gen_werewolf.py first'
+                f"rules/werewolf.json role_pool {pool} does not match requested "
+                f"{expected_pool} — regenerate with _gen_werewolf.py first"
             )
         self.players = players
         self.wolves = wolves
-        rules['constants'] = dict(rules['constants'])
-        rules['constants']['player_ids'] = [f'p{i}' for i in range(players)]
-        rules['players'] = rules['constants']['player_ids']
-        rules['utility'] = [
-            u for u in rules['utility'] if u['player'] in rules['constants']['player_ids']
-        ]
+        rules["constants"] = dict(rules["constants"])
+        rules["constants"]["player_ids"] = [f"p{i}" for i in range(players)]
+        rules["players"] = rules["constants"]["player_ids"]
+        rules["utility"] = [u for u in rules["utility"] if u["player"] in rules["constants"]["player_ids"]]
         super().__init__(rules, seed=seed)
 
     # ── Turn rotation (night actors / day order) ─────────────────────
 
     def get_current_player(self, state: dict) -> Optional[str]:
-        env = state.get('env', {})
-        phase = env.get('phase')
-        pids = self._constants.get('player_ids', [])
-        roles = state.get('_arrays', {}).get('roles', [])
-        alive = state.get('_arrays', {}).get('alive', [])
+        env = state.get("env", {})
+        phase = env.get("phase")
+        pids = self._constants.get("player_ids", [])
+        roles = state.get("_arrays", {}).get("roles", [])
+        alive = state.get("_arrays", {}).get("alive", [])
 
-        if phase == 'night_wolf':
+        if phase == "night_wolf":
             for i, pid in enumerate(pids):
-                if i < len(roles) and roles[i] == 'wolf' and i < len(alive) and alive[i] == 1:
+                if i < len(roles) and roles[i] == "wolf" and i < len(alive) and alive[i] == 1:
                     return pid
             return None
-        if phase == 'night_seer':
+        if phase == "night_seer":
             for i, pid in enumerate(pids):
-                if i < len(roles) and roles[i] == 'seer' and i < len(alive) and alive[i] == 1:
+                if i < len(roles) and roles[i] == "seer" and i < len(alive) and alive[i] == 1:
                     return pid
             return None
-        if phase in ('day_speech', 'day_vote'):
-            idx = int(env.get('speechIdx' if phase == 'day_speech' else 'voteIdx', 0) or 0)
+        if phase in ("day_speech", "day_vote"):
+            idx = int(env.get("speechIdx" if phase == "day_speech" else "voteIdx", 0) or 0)
             living = [pid for i, pid in enumerate(pids) if i < len(alive) and alive[i] == 1]
             return living[idx] if idx < len(living) else None
-        return env.get('turn')
+        return env.get("turn")
 
     # ── Partial observation ───────────────────────────────────────────
 
     def get_observation(self, state: dict, player_id: str) -> dict:
-        pids = self._constants.get('player_ids', [])
+        pids = self._constants.get("player_ids", [])
         idx = pids.index(player_id) if player_id in pids else -1
-        roles = state.get('_arrays', {}).get('roles', [])
-        alive = state.get('_arrays', {}).get('alive', [])
-        env = state.get('env', {})
+        roles = state.get("_arrays", {}).get("roles", [])
+        alive = state.get("_arrays", {}).get("alive", [])
+        env = state.get("env", {})
         my_role = roles[idx] if 0 <= idx < len(roles) else None
         return {
-            'player': player_id,
-            'my_role': my_role,
-            'my_alive': 0 <= idx < len(alive) and alive[idx] == 1,
-            'alive': [1 if i < len(alive) and alive[i] == 1 else 0 for i in range(len(pids))],
-            'phase': env.get('phase'),
-            'round': env.get('round'),
-            'turn': env.get('turn'),
-            'speech_log': list(state.get('_arrays', {}).get('speechLog', [])),
-            'vote_log': list(state.get('_arrays', {}).get('voteLog', [])),
-            'deaths_arr': list(state.get('_arrays', {}).get('deathsArr', [])),
+            "player": player_id,
+            "my_role": my_role,
+            "my_alive": 0 <= idx < len(alive) and alive[idx] == 1,
+            "alive": [1 if i < len(alive) and alive[i] == 1 else 0 for i in range(len(pids))],
+            "phase": env.get("phase"),
+            "round": env.get("round"),
+            "turn": env.get("turn"),
+            "speech_log": list(state.get("_arrays", {}).get("speechLog", [])),
+            "vote_log": list(state.get("_arrays", {}).get("voteLog", [])),
+            "deaths_arr": list(state.get("_arrays", {}).get("deathsArr", [])),
             # 死者身份公开（死后公布规则）：{pid: role}
-            'dead_roles': {
-                pids[i]: roles[i] for i in range(len(pids))
-                if i < len(alive) and alive[i] == 0 and i < len(roles)
+            "dead_roles": {
+                pids[i]: roles[i] for i in range(len(pids)) if i < len(alive) and alive[i] == 0 and i < len(roles)
             },
-            'guard_last_target': env.get('guardLastTarget'),
-            'witch_save_used': int(env.get('witchSaveUsed') or 0),
-            'witch_poison_used': int(env.get('witchPoisonUsed') or 0),
-            'winner': env.get('winner'),
+            "guard_last_target": env.get("guardLastTarget"),
+            "witch_save_used": int(env.get("witchSaveUsed") or 0),
+            "witch_poison_used": int(env.get("witchPoisonUsed") or 0),
+            "winner": env.get("winner"),
             # 验人结果只有预言家自己可见
-            'seer_result': env.get('seerResult') if my_role == 'seer' else None,
+            "seer_result": env.get("seerResult") if my_role == "seer" else None,
         }
