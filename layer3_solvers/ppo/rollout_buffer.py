@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Iterator, Optional
 
 import numpy as np
 import torch
@@ -17,14 +18,37 @@ class RolloutBatch:
     old_log_probs: torch.Tensor
     returns: torch.Tensor
     advantages: torch.Tensor
-    values: torch.Tensor
 
 
 class RolloutBuffer:
     """Saves PPO trajectories and computes GAE."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        rng: Optional[random.Random] = None,
+        max_size: Optional[int] = None,
+    ) -> None:
+        self._rng = rng or random.Random()
+        self.max_size = max_size
         self.clear()
+
+    @property
+    def advantages(self) -> np.ndarray:
+        return self._advantages
+
+    @advantages.setter
+    def advantages(self, value: np.ndarray) -> None:
+        self._advantages = value
+        self._tensors_valid = False
+
+    @property
+    def returns(self) -> np.ndarray:
+        return self._returns
+
+    @returns.setter
+    def returns(self, value: np.ndarray) -> None:
+        self._returns = value
+        self._tensors_valid = False
 
     def add(
         self,
@@ -38,6 +62,12 @@ class RolloutBuffer:
         value: float,
         next_value: float,
     ) -> None:
+        if done and next_value != 0.0:
+            raise ValueError("done=True 时 next_value 应为 0.0，请检查调用方")
+        if self.max_size is not None and len(self.states) >= self.max_size:
+            raise RuntimeError(
+                f"RolloutBuffer 已满（max_size={self.max_size}），请先 clear() 或调大容量"
+            )
         self.states.append(np.asarray(state, dtype=np.float32))
         self.actions.append(int(action))
         self.action_masks.append(np.asarray(action_mask, dtype=np.float32))
@@ -64,6 +94,8 @@ class RolloutBuffer:
         self._tensors_valid = False
 
     def iterate_minibatches(self, batch_size: int, device: torch.device) -> Iterator[RolloutBatch]:
+        if len(self.states) == 0:
+            raise ValueError("RolloutBuffer 为空，无法生成小批量")
         # Convert numpy → tensor ONCE per update (invalidated on add/GAE),
         # not once per epoch — the same data is replayed for every epoch.
         if not self._tensors_valid or self._tensor_device != device:
@@ -74,11 +106,10 @@ class RolloutBuffer:
             self._log_probs_t = torch.as_tensor(np.asarray(self.log_probs), dtype=torch.float32, device=device)
             self._returns_t = torch.as_tensor(self.returns, dtype=torch.float32, device=device)
             self._advantages_t = torch.as_tensor(self.advantages, dtype=torch.float32, device=device)
-            self._values_t = torch.as_tensor(np.asarray(self.values), dtype=torch.float32, device=device)
             self._tensors_valid = True
 
         indices = np.arange(len(self.states))
-        np.random.shuffle(indices)
+        self._rng.shuffle(indices)
 
         for start in range(0, len(indices), batch_size):
             batch_indices = indices[start : start + batch_size]
@@ -89,7 +120,6 @@ class RolloutBuffer:
                 old_log_probs=self._log_probs_t[batch_indices],
                 returns=self._returns_t[batch_indices],
                 advantages=self._advantages_t[batch_indices],
-                values=self._values_t[batch_indices],
             )
 
     def clear(self) -> None:

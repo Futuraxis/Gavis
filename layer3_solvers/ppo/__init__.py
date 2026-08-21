@@ -7,9 +7,10 @@ will fail gracefully (PPOSolver will not be available).
 try:
     from .networks import ActorCriticNetwork
     from .rollout_buffer import RolloutBatch, RolloutBuffer
-    from .solver import PPOSolver
+    from .solver import PPOConfig, PPOSolver
 
-    __all__ = ["PPOSolver", "ActorCriticNetwork", "RolloutBuffer", "RolloutBatch"]
+    __all__ = ["PPOSolver", "PPOConfig", "ActorCriticNetwork", "RolloutBuffer", "RolloutBatch"]
 except ImportError:
     PPOSolver = None  # type: ignore
+    PPOConfig = None  # type: ignore
     __all__ = []

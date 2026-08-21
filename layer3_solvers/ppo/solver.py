@@ -39,6 +39,8 @@ class PPOConfig(SolverConfig):
     minibatch_size: int = 32
     state_dim: int = 38  # default for MoonChessAdapter
     action_dim: int = 9  # default for 3×3 grid
+    hidden_dim: int = 128  # ActorCriticNetwork 隐藏层宽度
+    update_frequency: int = 16  # 每 N 局更新一次；0 表示每局更新（保持旧行为）
 
 
 class PPOSolver(SolverBase):
@@ -54,13 +56,28 @@ class PPOSolver(SolverBase):
         cfg = self.config
         self._state_dim = getattr(cfg, "state_dim", 38)
         self._action_dim = getattr(cfg, "action_dim", 9)
+        self._board_size = getattr(self.adapter, "BOARD_SIZE", 3)
+        self._action_dim = getattr(self.adapter, "ACTION_DIM", self._action_dim)
+
+        if cfg.seed is not None:
+            torch.manual_seed(cfg.seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(cfg.seed)
+            np.random.seed(cfg.seed)
 
         self.device = self._resolve_device(cfg.device)
-        self.network = ActorCriticNetwork(self._state_dim, self._action_dim).to(self.device)
+        self.network = ActorCriticNetwork(
+            self._state_dim,
+            self._action_dim,
+            hidden_dim=getattr(cfg, "hidden_dim", 128),
+        ).to(self.device)
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=cfg.learning_rate)
-        self.buffer = RolloutBuffer()
         self.rng = random.Random(cfg.seed)
+        self.buffer = RolloutBuffer(rng=self.rng)
         self._mcts_opponent = None  # lazy (created on first 'mcts' opponent move)
+        self._last_agent_step = None  # (feature, action_idx, mask, log_prob, value)
+        self._last_log_prob = 0.0
+        self._last_value = 0.0
 
     @property
     def name(self) -> str:
@@ -75,6 +92,8 @@ class PPOSolver(SolverBase):
 
         mask_tensor = torch.as_tensor(mask, dtype=torch.float32, device=self.device)
         state_tensor = torch.as_tensor(feature, dtype=torch.float32, device=self.device).unsqueeze(0)
+        if not mask_tensor.any():
+            return None
 
         with torch.no_grad():
             logits, _ = self.network(state_tensor)
@@ -103,6 +122,7 @@ class PPOSolver(SolverBase):
 
         for ep in range(episodes):
             state = self.adapter.create_initial_state()
+            self._last_agent_step = None
             ep_reward = 0.0
             step = 0
 
@@ -132,6 +152,13 @@ class PPOSolver(SolverBase):
                             next_value=next_value,
                         )
                         ep_reward += reward
+                        self._last_agent_step = (
+                            self._get_features(state),
+                            self._action_to_index(action),
+                            mask,
+                            log_prob,
+                            value,
+                        )
                         state = next_state
                         step += 1
                     else:
@@ -140,14 +167,27 @@ class PPOSolver(SolverBase):
                         if opp_action is None:
                             break
                         state = self.adapter.apply_action(state, opp_action)
+                        if self.adapter.is_terminal(state) and self._last_agent_step is not None:
+                            feat, act_idx, m, lp, v = self._last_agent_step
+                            self.buffer.add(
+                                state=feat,
+                                action=act_idx,
+                                action_mask=m,
+                                log_prob=lp,
+                                reward=self._get_reward(state, controlled_player, True),
+                                done=True,
+                                value=v,
+                                next_value=0.0,
+                            )
                 elif nt == "chance":
                     outcomes = self.adapter.get_chance_outcomes(state)
                     if outcomes:
-                        o = self.rng.choice(outcomes)
-                        state = self.adapter.apply_chance(state, o)
+                        o = self._sample_outcome(outcomes, self.rng)
+                        if o is not None:
+                            state = self.adapter.apply_chance(state, o)
                 else:
                     break
-                total_steps += 1
+                total_steps += 1  # 环境总步数（含对手/运气步）
 
             # Episode end
             if self.adapter.is_terminal(state):
@@ -156,8 +196,11 @@ class PPOSolver(SolverBase):
                     wins += 1
             total_reward += ep_reward
 
-            # PPO update
-            if len(self.buffer) > 0:
+            # PPO update（攒批：每 update_frequency 局更新一次）
+            if len(self.buffer) > 0 and (
+                self.config.update_frequency <= 0
+                or (ep + 1) % self.config.update_frequency == 0
+            ):
                 metrics = self._update()
                 if verbose and (ep + 1) % max(1, episodes // 10) == 0:
                     win_pct = wins / (ep + 1) * 100
@@ -168,6 +211,9 @@ class PPOSolver(SolverBase):
                         f"vl={metrics['value_loss']:.4f}  "
                         f"ent={metrics['entropy']:.4f}"
                     )
+
+        if len(self.buffer) > 0:
+            self._update()
 
         return SolverMetrics(
             episodes=episodes,
@@ -184,12 +230,23 @@ class PPOSolver(SolverBase):
                 "model_state_dict": self.network.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "config": asdict(self.config),
+                "model_meta": {
+                    "input_dim": self._state_dim,
+                    "action_dim": self._action_dim,
+                    "hidden_dim": getattr(self.config, "hidden_dim", 128),
+                },
             },
             target,
         )
 
     def load(self, path: str) -> None:
         checkpoint = torch.load(path, map_location=self.device)
+        meta = checkpoint.get("model_meta")
+        if meta and meta.get("input_dim") != self._state_dim:
+            raise ValueError(
+                f"checkpoint 的 input_dim={meta.get('input_dim')}，"
+                f"与当前配置 {self._state_dim} 不一致，拒绝加载"
+            )
         self.network.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
@@ -249,12 +306,13 @@ class PPOSolver(SolverBase):
         mask = self._get_mask(state)
         mask_tensor = torch.as_tensor(mask, dtype=torch.float32, device=self.device)
         state_tensor = torch.as_tensor(feature, dtype=torch.float32, device=self.device).unsqueeze(0)
-        logits, value = self.network(state_tensor)
-        masked_logits = logits.masked_fill(mask_tensor.unsqueeze(0) == 0, -1e9)
-        dist = torch.distributions.Categorical(logits=masked_logits)
-        action_idx = int(dist.sample().item())
-        self._last_log_prob = float(dist.log_prob(torch.tensor(action_idx, device=self.device)).item())
-        self._last_value = float(value.squeeze(0).item())
+        with torch.no_grad():
+            logits, value = self.network(state_tensor)
+            masked_logits = logits.masked_fill(mask_tensor.unsqueeze(0) == 0, -1e9)
+            dist = torch.distributions.Categorical(logits=masked_logits)
+            action_idx = int(dist.sample().item())
+            self._last_log_prob = float(dist.log_prob(torch.tensor(action_idx, device=self.device)).item())
+            self._last_value = float(value.squeeze(0).item())
         return self._action_from_index(state, action_idx)
 
     def _evaluate_value(self, state: State) -> float:
@@ -302,7 +360,7 @@ class PPOSolver(SolverBase):
             cell_id = cell.get("id", "") if isinstance(cell, dict) else str(cell)
             try:
                 _, r, c = cell_id.split("_")
-                idx = int(r) * 3 + int(c)
+                idx = int(r) * self._board_size + int(c)
                 if 0 <= idx < self._action_dim:
                     mask[idx] = 1.0
             except (ValueError, IndexError):
@@ -317,12 +375,12 @@ class PPOSolver(SolverBase):
             cell_id = cell.get("id", "") if isinstance(cell, dict) else str(cell)
             try:
                 _, r, c = cell_id.split("_")
-                aidx = int(r) * 3 + int(c)
+                aidx = int(r) * self._board_size + int(c)
                 if aidx == idx:
                     return a
             except (ValueError, IndexError):
-                pass
-        return legal[0] if legal else None  # fallback
+                raise ValueError(f"无法解析动作的格子编号: {cell_id!r}") from None
+        raise ValueError(f"找不到编号 {idx} 对应的合法动作（legal={len(legal)} 个）")
 
     def _action_to_index(self, action: ActionInstance) -> int:
         """Convert ActionInstance back to index."""
@@ -330,14 +388,30 @@ class PPOSolver(SolverBase):
         cell_id = cell.get("id", "") if isinstance(cell, dict) else str(cell)
         try:
             _, r, c = cell_id.split("_")
-            return int(r) * 3 + int(c)
+            return int(r) * self._board_size + int(c)
         except (ValueError, IndexError):
-            return 0
+            raise ValueError(f"无法解析动作的格子编号: {cell_id!r}") from None
 
     def _get_reward(self, state: State, player: str, done: bool) -> float:
         if not done:
             return 0.0
         return self.adapter.get_utility(state, player)
+
+    @staticmethod
+    def _sample_outcome(outcomes, rng):
+        """按 probability 加权采样，概率总和不必为 1。"""
+        if not outcomes:
+            return None
+        total = sum(o.probability for o in outcomes)
+        if total <= 0:
+            return rng.choice(outcomes)
+        r = rng.random() * total
+        cumsum = 0.0
+        for o in outcomes:
+            cumsum += o.probability
+            if r < cumsum:
+                return o
+        return outcomes[-1]
 
     def _opponent_action(self, state: State, opponent_type: str, controlled_player: str) -> Optional[ActionInstance]:
         """Return an opponent action.
@@ -347,7 +421,7 @@ class PPOSolver(SolverBase):
           greedy self-play never explores and collapses to a single line).
         - 'mcts': a small MCTS search (previously silently fell back to
           random).
-        Unknown types fall back to random.
+        Unknown types raise ValueError.
         """
         legal = self.adapter.get_legal_actions(state)
         if not legal:
@@ -362,7 +436,7 @@ class PPOSolver(SolverBase):
             return self._select_action_train(state)
         if opponent_type == "mcts":
             return self._mcts_opponent_action(state)
-        return self.rng.choice(legal)
+        raise ValueError(f"未知的对手类型: {opponent_type!r}（可选: random/self/mcts）")
 
     def _mcts_opponent_action(self, state: State) -> Optional[ActionInstance]:
         """Lazily-created small MCTS opponent (budget 500)."""
