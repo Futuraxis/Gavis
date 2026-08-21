@@ -12,25 +12,26 @@ board-specific code ever running.
 from __future__ import annotations
 
 import random
+import warnings
 from typing import Optional
 
 from layer2_engine.interfaces.solver_adapter import ActionInstance, State
 
 
-def root_player(state: State, adapter) -> Optional[str]:
-    """Rollout-start player id, resolved without KeyError on partial states.
-
-    Chance-node states carry the last actor in ``env.lastActor`` — the
-    value of a rollout that starts at a chance node belongs to them.
-    """
+def root_player(state: State, adapter, default_player: Optional[str] = None) -> Optional[str]:
+    """Rollout-start player id，解析失败时可用 default_player 兜底。"""
     env = state.get("env", {}) if isinstance(state, dict) else {}
     turn = env.get("turn")
     if isinstance(turn, dict):
         turn = turn.get("currentPlayerId", turn)
     if adapter is not None and adapter.get_node_type(state) == "chance":
         turn = env.get("lastActor", turn)
+        if turn is None:
+            warnings.warn("root_player: chance 节点缺少 env.lastActor，视角可能不正确")
     if turn is None and adapter is not None:
         turn = adapter.get_current_player(state)
+    if turn is None:
+        turn = default_player
     return turn
 
 
@@ -47,10 +48,20 @@ class BoardHeuristicPolicy:
 
     All lookups use ``state['_arrays']``/``_constants`` — the policy is
     the only MCTS component allowed to know about board internals.
+
+    注意：当前按格子编号匹配动作，适用于“一格一动作”的游戏；
+    同格多动作的游戏需要再细化匹配。
     """
 
-    def __init__(self, rng: Optional[random.Random] = None):
-        self._rng = rng or random.Random()
+    def __init__(
+        self,
+        rng: Optional[random.Random] = None,
+        block_prob: float = 0.7,
+        max_actions: int = 16,
+    ) -> None:
+        self._rng = rng if rng is not None else random.Random(0)
+        self._block_prob = block_prob
+        self._max_actions = max_actions
 
     def choose(self, state: State, actions: list) -> Optional[ActionInstance]:
         """Heuristic move for square-board line-connect games, else None.
@@ -58,18 +69,24 @@ class BoardHeuristicPolicy:
         Skipped for large action sets (the scan cost is proportional to
         the action count anyway).
         """
-        if len(actions) > 16:
+        if len(actions) > self._max_actions:
             return None
 
         board = state.get("_arrays", {}).get("board", [])
         bs = int(len(board) ** 0.5) if board else 0
         if bs == 0 or bs * bs != len(board):
             return None
-        win_len = int(state.get("_constants", {}).get("win_length", 3))
+        raw_len = state.get("_constants", {}).get("win_length")
+        if not raw_len:
+            warnings.warn("rollout_policy: 规则缺少 win_length，跳过棋感")
+            return None
+        win_len = int(raw_len)
         turn = state.get("env", {}).get("turn")
         if not turn:
             return None
         opponent = self._opponent_of(state, turn)
+        if opponent is None:
+            return None
 
         my_win = self._scan_line_cells(board, bs, win_len, turn)
         if my_win:
@@ -78,7 +95,7 @@ class BoardHeuristicPolicy:
                 return self._rng.choice(wins)
 
         blocks = self._scan_line_cells(board, bs, win_len, opponent)
-        if blocks and self._rng.random() < 0.7:
+        if blocks and self._rng.random() < self._block_prob:
             block_actions = [a for a in actions if self._action_index(a) in blocks]
             if block_actions:
                 return self._rng.choice(block_actions)
@@ -97,7 +114,10 @@ class BoardHeuristicPolicy:
         bs = int(len(board) ** 0.5)
         if bs * bs != len(board):
             return 0.0
-        win_len = int(sim_state.get("_constants", {}).get("win_length", 3))
+        raw_len = sim_state.get("_constants", {}).get("win_length")
+        if not raw_len:
+            return 0.0
+        win_len = int(raw_len)
         players = sim_state.get("_players", [])
         ids = [p["id"] for p in players] if players and isinstance(players[0], dict) else players
         opponent = next((x for x in ids if x != player), None)
@@ -156,7 +176,10 @@ class BoardHeuristicPolicy:
         return -1
 
     @staticmethod
-    def _opponent_of(state: dict, player: str) -> str:
+    def _opponent_of(state: dict, player: str) -> Optional[str]:
         players = state.get("_players", [])
         ids = [p["id"] for p in players] if players and isinstance(players[0], dict) else players
-        return ids[1] if player == ids[0] else ids[0]
+        for pid in ids:
+            if pid != player:
+                return pid
+        return None

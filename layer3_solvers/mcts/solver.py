@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -33,18 +34,21 @@ class MCTSConfig(SolverConfig):
     budget: int = 5000
     ucb_c: float = 1.414
     rollout_depth: int = 20
+    time_limit: Optional[float] = None  # 秒；None 表示只按 budget
+    max_nodes: Optional[int] = None  # 节点数上限；None 表示只按 budget/time_limit
 
 
 @dataclass
 class MCTSNode:
     node_type: NodeType
+    player: Optional[str] = None  # 轮到谁行动；chance/terminal 节点保留 None
     visits: int = 0
     total_value: float = 0.0
-    children: dict = field(default_factory=dict)
-    child_actions: dict = field(default_factory=dict)
-    child_outcomes: dict = field(default_factory=dict)
-    untried_actions: list = field(default_factory=list)
-    untried_outcomes: list = field(default_factory=list)
+    children: dict[str, "MCTSNode"] = field(default_factory=dict)
+    child_actions: dict[str, ActionInstance] = field(default_factory=dict)
+    child_outcomes: dict[str, ChanceOutcome] = field(default_factory=dict)
+    untried_actions: list[ActionInstance] = field(default_factory=list)
+    untried_outcomes: list[ChanceOutcome] = field(default_factory=list)
 
     def is_fully_expanded(self) -> bool:
         if self.node_type == "player":
@@ -53,13 +57,6 @@ class MCTSNode:
 
     def is_leaf(self) -> bool:
         return len(self.children) == 0
-
-    @property
-    def avg_value(self) -> float:
-        if self.visits == 0:
-            return 0.0
-        return self.total_value / self.visits
-
 
 class MCTS(SolverBase):
     """Monte Carlo Tree Search with chance-node handling."""
@@ -78,6 +75,7 @@ class MCTS(SolverBase):
         self.ucb_c = cfg.ucb_c
         self.rollout_depth = cfg.rollout_depth
         self.rng = random.Random(cfg.seed)
+        self._nodes_created = 0
         # Optional rollout policy hook (e.g. a CFR strategy prior from the
         # HybridSolver).  ``fn(state, actions) -> ActionInstance | None``;
         # None falls back to the board heuristic, then to random.
@@ -92,30 +90,44 @@ class MCTS(SolverBase):
         return f"MCTS(b={self.budget})"
 
     def select_action(self, state: State) -> Optional[ActionInstance]:
+        """为玩家节点选棋；若根是 chance 节点则返回 None（随机事件请自行采样）。"""
         root_type = self.adapter.get_node_type(state)
         root = MCTSNode(node_type=root_type)
+        root.player = root_player(state, self.adapter)
+        self._nodes_created = 0
 
         if root_type == "player":
-            root.untried_actions = self.adapter.get_legal_actions(state)
+            root.untried_actions = sorted(
+                self.adapter.get_legal_actions(state), key=lambda a: a.canonical_key
+            )
             if not root.untried_actions:
                 return None
         elif root_type == "chance":
-            root.untried_outcomes = list(self.adapter.get_chance_outcomes(state))
+            root.untried_outcomes = sorted(
+                self.adapter.get_chance_outcomes(state), key=lambda o: o.key
+            )
 
+        _t0 = time.perf_counter()
         for _ in range(self.budget):
             self._iterate(state, root)
+            if self.config.time_limit is not None and time.perf_counter() - _t0 > self.config.time_limit:
+                break
+            if self.config.max_nodes is not None and self._nodes_created >= self.config.max_nodes:
+                break
 
         if root_type == "player":
             if not root.children:
-                actions = self.adapter.get_legal_actions(state)
+                actions = sorted(self.adapter.get_legal_actions(state), key=lambda a: a.canonical_key)
                 return self.rng.choice(actions) if actions else None
+            if getattr(self.config, "verbose", False):
+                print(f"MCTS budget={self.budget} 根节点访问次数={root.visits}")
             best_key = max(root.children, key=lambda k: root.children[k].visits)
             return root.child_actions.get(best_key)
         return None
 
     def train(self, episodes: int, **kwargs) -> SolverMetrics:
-        """MCTS is a search algorithm — training is a no-op."""
-        return SolverMetrics(episodes=0, win_rate=0.0, avg_return=0.0)
+        """MCTS 是搜索算法——训练为空操作，但保留 episodes 语义。"""
+        return SolverMetrics(episodes=episodes, win_rate=0.0, avg_return=0.0)
 
     # ── Internal ──────────────────────────────────────────────────
 
@@ -164,9 +176,10 @@ class MCTS(SolverBase):
         best_key = None
         best_ucb = -float("inf")
 
+        unvisited = [k for k, c in node.children.items() if c.visits == 0]
+        if unvisited:
+            return self.rng.choice(unvisited)
         for key, child in node.children.items():
-            if child.visits == 0:
-                return key
             exploitation = child.total_value / child.visits
             # Backprop stores each node's value from ITS OWN player's
             # perspective (flipping per player node).  In a zero-sum game
@@ -186,11 +199,11 @@ class MCTS(SolverBase):
     def _select_chance(self, node: MCTSNode, state: dict) -> Optional[ChanceOutcome]:
         # Reuse the node's cached outcomes — avoids a full adapter re-query
         # (context build + probability eval) on every selection step.
-        outcomes = list(node.child_outcomes.values())
+        outcomes = sorted(node.child_outcomes.values(), key=lambda o: o.key)
         if not outcomes:
-            outcomes = list(node.untried_outcomes)
+            outcomes = sorted(node.untried_outcomes, key=lambda o: o.key)
         if not outcomes:
-            outcomes = self.adapter.get_chance_outcomes(state)
+            outcomes = sorted(self.adapter.get_chance_outcomes(state), key=lambda o: o.key)
         return self._sample_outcome(outcomes, self.rng)
 
     @staticmethod
@@ -228,14 +241,23 @@ class MCTS(SolverBase):
         child_type = self.adapter.get_node_type(new_state)
         child = MCTSNode(node_type=child_type)
         if child_type == "player":
-            child.untried_actions = self.adapter.get_legal_actions(new_state)
+            child.player = self.adapter.get_current_player(new_state)
+            child.untried_actions = sorted(
+                self.adapter.get_legal_actions(new_state), key=lambda a: a.canonical_key
+            )
         elif child_type == "chance":
-            child.untried_outcomes = list(self.adapter.get_chance_outcomes(new_state))
+            child.player = node.player  # 机会节点继承父节点视角
+            child.untried_outcomes = sorted(
+                self.adapter.get_chance_outcomes(new_state), key=lambda o: o.key
+            )
         node.children[key] = child
         node.child_actions[key] = action
+        self._nodes_created += 1
         return child, new_state
 
     def _expand_chance(self, node: MCTSNode, state: dict):
+        """机会结果一次性全部展开并缓存子状态，避免重复 apply_chance 的随机数不同步；
+        结果集特别大时可改为逐次展开。"""
         if not node.untried_outcomes:
             return None
         # Each outcome is applied exactly once: the child states built here
@@ -248,17 +270,23 @@ class MCTS(SolverBase):
             child_states[outcome.key] = child_state
             child_type = self.adapter.get_node_type(child_state)
             child = MCTSNode(node_type=child_type)
+            child.player = node.player  # 机会子节点继承父节点视角
             if child_type == "player":
-                child.untried_actions = self.adapter.get_legal_actions(child_state)
+                child.untried_actions = sorted(
+                    self.adapter.get_legal_actions(child_state), key=lambda a: a.canonical_key
+                )
             elif child_type == "chance":
-                child.untried_outcomes = list(self.adapter.get_chance_outcomes(child_state))
+                child.untried_outcomes = sorted(
+                    self.adapter.get_chance_outcomes(child_state), key=lambda o: o.key
+                )
             node.children[outcome.key] = child
             node.child_outcomes[outcome.key] = outcome
+            self._nodes_created += 1
         node.untried_outcomes.clear()
 
         # Sample which child the expansion descends into — from the node's
         # own outcome objects, no adapter re-query needed.
-        chosen = self._sample_outcome(list(node.child_outcomes.values()), self.rng)
+        chosen = self._sample_outcome(sorted(node.child_outcomes.values(), key=lambda o: o.key), self.rng)
         if chosen is None:
             return None
         return node.children.get(chosen.key), child_states[chosen.key]
@@ -270,7 +298,9 @@ class MCTS(SolverBase):
             # get_node_type already folds in is_terminal — one call, not two.
             nt = self.adapter.get_node_type(sim_state)
             if nt == "player":
-                actions = self.adapter.get_legal_actions(sim_state)
+                actions = sorted(
+                    self.adapter.get_legal_actions(sim_state), key=lambda a: a.canonical_key
+                )
                 if not actions:
                     break
                 chosen = None
@@ -282,7 +312,9 @@ class MCTS(SolverBase):
                     chosen = self.rng.choice(actions)
                 sim_state = self.adapter.apply_action(sim_state, chosen)
             elif nt == "chance":
-                outcomes = self.adapter.get_chance_outcomes(sim_state)
+                outcomes = sorted(
+                    self.adapter.get_chance_outcomes(sim_state), key=lambda o: o.key
+                )
                 chosen = self._sample_outcome(outcomes, self.rng)
                 if chosen is None:
                     break
@@ -304,8 +336,17 @@ class MCTS(SolverBase):
         return self._board_policy.leaf_value(sim_state, player)
 
     def _backpropagate(self, path: list, value: float):
+        # value 以“推演起点（路径最深玩家节点）”的视角表示；沿路径向上，
+        # 只在玩家确实变化时翻转视角，因此不依赖“双人严格轮流”的假设。
+        perspective = None
+        for _key, node in reversed(path):
+            if node.node_type == "player" and node.player is not None:
+                perspective = node.player
+                break
         for _key, node in reversed(path):
             node.visits += 1
+            if node.node_type == "player" and node.player is not None:
+                if perspective is not None and node.player != perspective:
+                    value = -value
+                    perspective = node.player
             node.total_value += value
-            if node.node_type == "player":
-                value = -value
