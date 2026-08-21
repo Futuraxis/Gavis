@@ -60,6 +60,11 @@ class QMixSolver(SolverBase):
     def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
         super().__init__(adapter, config or QMixConfig())
         cfg = self.config
+        if cfg.seed is not None:
+            torch.manual_seed(cfg.seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(cfg.seed)
+            np.random.seed(cfg.seed)
         self._players = resolve_players(adapter)
         self._encoder = GameEncoder.build_from_adapter(adapter, self._players)
         self._action_space = ActionSpace.build_from_adapter(adapter)
@@ -82,6 +87,7 @@ class QMixSolver(SolverBase):
         self._buffer = ReplayBuffer(cfg.buffer_capacity)
         self._rng = random.Random(cfg.seed)
         self._steps = 0
+        self._grad_steps = 0
         self._epsilon = cfg.epsilon_start
 
     @property
@@ -144,9 +150,10 @@ class QMixSolver(SolverBase):
                     break
                 self._gradient_step()
 
+            epsilon_denom = max(1, cfg.epsilon_decay_steps)  # 防止配置为 0 时除零
             self._epsilon = max(
                 cfg.epsilon_end,
-                cfg.epsilon_start - (cfg.epsilon_start - cfg.epsilon_end) * self._steps / cfg.epsilon_decay_steps,
+                cfg.epsilon_start - (cfg.epsilon_start - cfg.epsilon_end) * self._steps / epsilon_denom,
             )
             if verbose and (ep + 1) % max(1, episodes // 10) == 0:
                 win_pct = wins / (ep + 1) * 100
@@ -174,6 +181,7 @@ class QMixSolver(SolverBase):
                 "optimizer": self._optimizer.state_dict(),
                 "config": asdict(self.config),
                 "steps": self._steps,
+                "grad_steps": self._grad_steps,
                 "epsilon": self._epsilon,
             },
             target,
@@ -187,6 +195,7 @@ class QMixSolver(SolverBase):
         self._mixer_target.load_state_dict(checkpoint["mixer_target"])
         self._optimizer.load_state_dict(checkpoint["optimizer"])
         self._steps = checkpoint.get("steps", 0)
+        self._grad_steps = checkpoint.get("grad_steps", 0)
         self._epsilon = checkpoint.get("epsilon", self.config.epsilon_start)
 
     # ── Internal ────────────────────────────────────────────────────
@@ -240,6 +249,7 @@ class QMixSolver(SolverBase):
         nn.utils.clip_grad_norm_([*self._q_nets.parameters(), *self._mixer.parameters()], cfg.max_grad_norm)
         self._optimizer.step()
 
-        if self._steps % cfg.target_update_interval == 0:
+        self._grad_steps += 1
+        if self._grad_steps % cfg.target_update_interval == 0:
             self._q_targets.load_state_dict(self._q_nets.state_dict())
             self._mixer_target.load_state_dict(self._mixer.state_dict())
