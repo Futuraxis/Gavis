@@ -65,9 +65,7 @@ class RolloutBuffer:
         if done and next_value != 0.0:
             raise ValueError("done=True 时 next_value 应为 0.0，请检查调用方")
         if self.max_size is not None and len(self.states) >= self.max_size:
-            raise RuntimeError(
-                f"RolloutBuffer 已满（max_size={self.max_size}），请先 clear() 或调大容量"
-            )
+            raise RuntimeError(f"RolloutBuffer 已满（max_size={self.max_size}），请先 clear() 或调大容量")
         self.states.append(np.asarray(state, dtype=np.float32))
         self.actions.append(int(action))
         self.action_masks.append(np.asarray(action_mask, dtype=np.float32))

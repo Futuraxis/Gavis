@@ -25,7 +25,7 @@ def system_prompt() -> str:
         "目标方言为 Gavis v5.x：顶层至少包含 meta、players、groundState、derivedViews、constants、"
         "actions、effectors、terminal、utility；chance、queries、functions 可按需加入。"
         "actions 每项必须有 id、params、legal、effectRef；effectRef 必须指向 effectors 中的 key。"
-        "自由文本动作参数使用 {\"type\":\"text\"}，不可枚举。"
+        '自由文本动作参数使用 {"type":"text"}，不可枚举。'
         "表达式只使用规则 JSON 内已有数学原语和 alias，不要引用外部 Python 函数或 BUILTIN。"
         "如果规则太复杂，生成一个保守但可运行的近似规则，并在 meta.description 说明简化点。"
     )
@@ -50,8 +50,7 @@ class RulePromptBuilder:
             {
                 "role": "user",
                 "content": (
-                    "请把以下游戏规则翻译为 Gavis v5.x rules.json。\n"
-                    f"{json.dumps(context, ensure_ascii=False)}"
+                    f"请把以下游戏规则翻译为 Gavis v5.x rules.json。\n{json.dumps(context, ensure_ascii=False)}"
                 ),
             },
         ]

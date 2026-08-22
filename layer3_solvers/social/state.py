@@ -94,7 +94,9 @@ class SocialAgentState:
     belief: SocialBeliefState
 
 
-def uniform_role_beliefs(players: list[str], roles: list[str], self_id: str, self_role: str) -> dict[str, dict[str, float]]:
+def uniform_role_beliefs(
+    players: list[str], roles: list[str], self_id: str, self_role: str
+) -> dict[str, dict[str, float]]:
     """Create a conservative role prior for all players."""
     unique_roles = sorted(set(roles or [self_role or "unknown"]))
     if not unique_roles:

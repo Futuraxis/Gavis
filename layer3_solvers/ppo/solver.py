@@ -198,8 +198,7 @@ class PPOSolver(SolverBase):
 
             # PPO update（攒批：每 update_frequency 局更新一次）
             if len(self.buffer) > 0 and (
-                self.config.update_frequency <= 0
-                or (ep + 1) % self.config.update_frequency == 0
+                self.config.update_frequency <= 0 or (ep + 1) % self.config.update_frequency == 0
             ):
                 metrics = self._update()
                 if verbose and (ep + 1) % max(1, episodes // 10) == 0:
@@ -244,8 +243,7 @@ class PPOSolver(SolverBase):
         meta = checkpoint.get("model_meta")
         if meta and meta.get("input_dim") != self._state_dim:
             raise ValueError(
-                f"checkpoint 的 input_dim={meta.get('input_dim')}，"
-                f"与当前配置 {self._state_dim} 不一致，拒绝加载"
+                f"checkpoint 的 input_dim={meta.get('input_dim')}，与当前配置 {self._state_dim} 不一致，拒绝加载"
             )
         self.network.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])

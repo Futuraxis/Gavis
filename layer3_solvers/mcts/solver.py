@@ -58,6 +58,7 @@ class MCTSNode:
     def is_leaf(self) -> bool:
         return len(self.children) == 0
 
+
 class MCTS(SolverBase):
     """Monte Carlo Tree Search with chance-node handling."""
 
@@ -97,15 +98,11 @@ class MCTS(SolverBase):
         self._nodes_created = 0
 
         if root_type == "player":
-            root.untried_actions = sorted(
-                self.adapter.get_legal_actions(state), key=lambda a: a.canonical_key
-            )
+            root.untried_actions = sorted(self.adapter.get_legal_actions(state), key=lambda a: a.canonical_key)
             if not root.untried_actions:
                 return None
         elif root_type == "chance":
-            root.untried_outcomes = sorted(
-                self.adapter.get_chance_outcomes(state), key=lambda o: o.key
-            )
+            root.untried_outcomes = sorted(self.adapter.get_chance_outcomes(state), key=lambda o: o.key)
 
         _t0 = time.perf_counter()
         for _ in range(self.budget):
@@ -242,14 +239,10 @@ class MCTS(SolverBase):
         child = MCTSNode(node_type=child_type)
         if child_type == "player":
             child.player = self.adapter.get_current_player(new_state)
-            child.untried_actions = sorted(
-                self.adapter.get_legal_actions(new_state), key=lambda a: a.canonical_key
-            )
+            child.untried_actions = sorted(self.adapter.get_legal_actions(new_state), key=lambda a: a.canonical_key)
         elif child_type == "chance":
             child.player = node.player  # 机会节点继承父节点视角
-            child.untried_outcomes = sorted(
-                self.adapter.get_chance_outcomes(new_state), key=lambda o: o.key
-            )
+            child.untried_outcomes = sorted(self.adapter.get_chance_outcomes(new_state), key=lambda o: o.key)
         node.children[key] = child
         node.child_actions[key] = action
         self._nodes_created += 1
@@ -276,9 +269,7 @@ class MCTS(SolverBase):
                     self.adapter.get_legal_actions(child_state), key=lambda a: a.canonical_key
                 )
             elif child_type == "chance":
-                child.untried_outcomes = sorted(
-                    self.adapter.get_chance_outcomes(child_state), key=lambda o: o.key
-                )
+                child.untried_outcomes = sorted(self.adapter.get_chance_outcomes(child_state), key=lambda o: o.key)
             node.children[outcome.key] = child
             node.child_outcomes[outcome.key] = outcome
             self._nodes_created += 1
@@ -298,9 +289,7 @@ class MCTS(SolverBase):
             # get_node_type already folds in is_terminal — one call, not two.
             nt = self.adapter.get_node_type(sim_state)
             if nt == "player":
-                actions = sorted(
-                    self.adapter.get_legal_actions(sim_state), key=lambda a: a.canonical_key
-                )
+                actions = sorted(self.adapter.get_legal_actions(sim_state), key=lambda a: a.canonical_key)
                 if not actions:
                     break
                 chosen = None
@@ -312,9 +301,7 @@ class MCTS(SolverBase):
                     chosen = self.rng.choice(actions)
                 sim_state = self.adapter.apply_action(sim_state, chosen)
             elif nt == "chance":
-                outcomes = sorted(
-                    self.adapter.get_chance_outcomes(sim_state), key=lambda o: o.key
-                )
+                outcomes = sorted(self.adapter.get_chance_outcomes(sim_state), key=lambda o: o.key)
                 chosen = self._sample_outcome(outcomes, self.rng)
                 if chosen is None:
                     break

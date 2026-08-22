@@ -6,3 +6,5 @@ models/
 data/
 platform-frontend/node_modules/
 platform-frontend/dist/
+# 本地文档
+.docs

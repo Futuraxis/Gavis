@@ -60,7 +60,10 @@ class BeliefDrivenPolicy(LanguagePolicy):
         self.last_plan = plan
         if plan.vote_target in obs.legal_targets:
             return str(plan.vote_target)
-        return next((target for target in obs.legal_targets if target != state.player_id), obs.legal_targets[0] if obs.legal_targets else "")
+        return next(
+            (target for target in obs.legal_targets if target != state.player_id),
+            obs.legal_targets[0] if obs.legal_targets else "",
+        )
 
     def _llm_speech(self, state: SocialAgentState, plan: StrategyPlan) -> str:
         messages = [

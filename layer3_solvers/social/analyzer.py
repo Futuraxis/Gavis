@@ -127,7 +127,9 @@ class SocialSituationAnalyzer:
             value = obs.public_context.get(key) or obs.private_info.get(key)
             if isinstance(value, list):
                 return [str(role) for role in value]
-        return ["wolf", "villager", "seer", "witch", "hunter"] if _is_werewolf_like(obs.role) else [obs.role or "unknown"]
+        return (
+            ["wolf", "villager", "seer", "witch", "hunter"] if _is_werewolf_like(obs.role) else [obs.role or "unknown"]
+        )
 
     @staticmethod
     def _players(obs: LanguageObservation, events: list[SocialEvent], self_id: str) -> list[str]:

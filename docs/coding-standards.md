@@ -31,6 +31,7 @@
 
 ```python
 """Module docstring here."""
+
 from __future__ import annotations
 ```
 
@@ -125,6 +126,7 @@ import numpy as np
 
 try:
     import torch
+
     _HAS_TORCH = True
 except ImportError:
     _HAS_TORCH = False
@@ -158,8 +160,10 @@ from ..base import SolverBase, SolverConfig
 __all__ = [
     "SolverBase",
     "SolverConfig",
-    "MCTS", "MCTSConfig",
-    "CFR", "CFRConfig",
+    "MCTS",
+    "MCTSConfig",
+    "CFR",
+    "CFRConfig",
 ]
 ```
 
@@ -197,8 +201,7 @@ __all__ = [
 - **`None` 处理**：优先使用 `X | None` 而非 `Optional[X]`
 
 ```python
-def select_action(self, state: State) -> ActionInstance | None:
-    ...
+def select_action(self, state: State) -> ActionInstance | None: ...
 ```
 
 - **集合类型**：使用 `list[X]`, `dict[str, X]`, `set[X]` 而非大写形式
@@ -240,9 +243,8 @@ rollout-based leaf evaluation.  Implements ``SolverBase``.
 ```python
 class MCTS(SolverBase):
     """Monte Carlo Tree Search with chance-node handling."""
-    
-    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
-        ...
+
+    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None): ...
 ```
 
 或用更详细的格式：
@@ -273,6 +275,7 @@ def select_action(self, state: State) -> ActionInstance | None:
     """Return the best action for ``state``, or None if no legal moves."""
     ...
 
+
 def train(self, episodes: int, **kwargs) -> SolverMetrics:
     """Run training for ``episodes`` self-play or simulated episodes.
 
@@ -294,10 +297,10 @@ def train(self, episodes: int, **kwargs) -> SolverMetrics:
 ```python
 from abc import ABC, abstractmethod
 
+
 class SolverBase(ABC):
     @abstractmethod
-    def select_action(self, state: State) -> ActionInstance | None:
-        ...
+    def select_action(self, state: State) -> ActionInstance | None: ...
 ```
 
 - 抽象方法体使用 `...`（Ellipsis）而非 `pass`
@@ -308,10 +311,10 @@ class SolverBase(ABC):
 ```python
 from typing import Protocol, runtime_checkable
 
+
 @runtime_checkable
 class SolverAdapter(Protocol):
-    def create_initial_state(self) -> State:
-        ...
+    def create_initial_state(self) -> State: ...
 ```
 
 - Protocol 方法体使用 `...`
@@ -326,6 +329,7 @@ class MCTSConfig(SolverConfig):
     budget: int = 5000
     ucb_c: float = 1.414
     rollout_depth: int = 20
+
 
 @dataclass
 class SolverMetrics:
@@ -356,8 +360,10 @@ class SolverMetrics:
 class BindingError(Exception):
     """Base binding error."""
 
+
 class ImageLoadError(BindingError):
     """Image could not be loaded."""
+
 
 class InvalidBoardError(BindingError):
     """Board layout is invalid."""
@@ -384,6 +390,7 @@ except ImageLoadError:
 # 好的写法（可选导入）
 try:
     import torch
+
     _HAS_TORCH = True
 except ImportError:
     _HAS_TORCH = False
@@ -424,6 +431,7 @@ tests/
 
 ```python
 """Tests for MoonChessAdapter (Layer 2)."""
+
 from __future__ import annotations
 
 import pytest
@@ -447,8 +455,7 @@ class TestMoonChessBasics:
 
 
 class TestMoonChessGameplay:
-    def test_place_piece(self, adapter: MoonChessAdapter):
-        ...
+    def test_place_piece(self, adapter: MoonChessAdapter): ...
 ```
 
 ### 9.4 规则
@@ -465,6 +472,7 @@ class TestMoonChessGameplay:
 ```python
 try:
     from layer3_solvers.ppo import PPOSolver, PPOConfig
+
     _HAS_TORCH = True
 except ImportError:
     PPOSolver = None
@@ -474,8 +482,7 @@ except ImportError:
 
 @pytest.mark.skipif(not _HAS_TORCH, reason="torch not installed")
 class TestPPO:
-    def test_select_action_no_training(self, moon_adapter: MoonChessAdapter):
-        ...
+    def test_select_action_no_training(self, moon_adapter: MoonChessAdapter): ...
 ```
 
 ---
@@ -545,14 +552,17 @@ if PPOSolver is not None:
 ```python
 # ── Required ──────────────────────────────────────────────────
 
+
 @abstractmethod
-def select_action(self, state: State) -> Optional[ActionInstance]:
-    ...
+def select_action(self, state: State) -> Optional[ActionInstance]: ...
+
 
 # ── Optional (save/load) ──────────────────────────────────────
 
+
 def save(self, path: str) -> None:
     pass
+
 
 # ── Name ───────────────────────────────────────────────────────
 

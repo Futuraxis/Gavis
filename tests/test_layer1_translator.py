@@ -860,7 +860,7 @@ class TestExternalFrontendRuleReader:
         payload = {
             "config": {"gameFamily": "board_alignment", "boardSize": "7"},
             "attributes": {"data-game-id": "connect_four"},
-            "localStorage": {"rules": "{\"winLength\": 4, \"vanishChance\": \"25%\"}"},
+            "localStorage": {"rules": '{"winLength": 4, "vanishChance": "25%"}'},
             "text": "外部前端说明：7x7 棋盘，四连获胜",
         }
 
