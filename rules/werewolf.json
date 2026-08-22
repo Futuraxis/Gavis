@@ -1088,6 +1088,30 @@
                 "const": null
               }
             ]
+          },
+          {
+            "or": [
+              {
+                "eq": [
+                  {
+                    "var": "$constants.witch_self_save"
+                  },
+                  {
+                    "const": 1
+                  }
+                ]
+              },
+              {
+                "neq": [
+                  {
+                    "var": "$env.nightKill"
+                  },
+                  {
+                    "var": "$env.turn"
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
@@ -1822,7 +1846,69 @@
           "op": "setEnv",
           "key": "turn",
           "value": {
-            "const": "p0"
+            "get": [
+              {
+                "at": [
+                  {
+                    "query": {
+                      "view": "player",
+                      "filter": {
+                        "and": [
+                          {
+                            "eq": [
+                              {
+                                "at": [
+                                  {
+                                    "var": "$alive"
+                                  },
+                                  {
+                                    "get": [
+                                      {
+                                        "var": "$node"
+                                      },
+                                      "_index"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 1
+                              }
+                            ]
+                          },
+                          {
+                            "eq": [
+                              {
+                                "at": [
+                                  {
+                                    "var": "$roles"
+                                  },
+                                  {
+                                    "get": [
+                                      {
+                                        "var": "$node"
+                                      },
+                                      "_index"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "const": "wolf"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              "id"
+            ]
           }
         }
       ]
@@ -1845,33 +1931,142 @@
         {
           "op": "branch",
           "if": {
-            "gt": [
+            "and": [
               {
-                "add": [
+                "gt": [
                   {
-                    "sub": [
-                      {
-                        "const": 1
-                      },
-                      {
-                        "var": "$env.witchSaveUsed"
-                      }
+                    "call": [
+                      "witch_alive"
                     ]
                   },
                   {
-                    "sub": [
-                      {
-                        "const": 1
-                      },
-                      {
-                        "var": "$env.witchPoisonUsed"
-                      }
-                    ]
+                    "const": 0
                   }
                 ]
               },
               {
-                "const": 0
+                "or": [
+                  {
+                    "and": [
+                      {
+                        "eq": [
+                          {
+                            "var": "$env.witchSaveUsed"
+                          },
+                          {
+                            "const": 0
+                          }
+                        ]
+                      },
+                      {
+                        "neq": [
+                          {
+                            "var": "$env.nightKill"
+                          },
+                          {
+                            "const": null
+                          }
+                        ]
+                      },
+                      {
+                        "or": [
+                          {
+                            "eq": [
+                              {
+                                "var": "$constants.witch_self_save"
+                              },
+                              {
+                                "const": 1
+                              }
+                            ]
+                          },
+                          {
+                            "neq": [
+                              {
+                                "var": "$env.nightKill"
+                              },
+                              {
+                                "get": [
+                                  {
+                                    "at": [
+                                      {
+                                        "query": {
+                                          "view": "player",
+                                          "filter": {
+                                            "and": [
+                                              {
+                                                "eq": [
+                                                  {
+                                                    "at": [
+                                                      {
+                                                        "var": "$alive"
+                                                      },
+                                                      {
+                                                        "get": [
+                                                          {
+                                                            "var": "$node"
+                                                          },
+                                                          "_index"
+                                                        ]
+                                                      }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "const": 1
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "eq": [
+                                                  {
+                                                    "at": [
+                                                      {
+                                                        "var": "$roles"
+                                                      },
+                                                      {
+                                                        "get": [
+                                                          {
+                                                            "var": "$node"
+                                                          },
+                                                          "_index"
+                                                        ]
+                                                      }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "const": "witch"
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "const": 0
+                                      }
+                                    ]
+                                  },
+                                  "id"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "eq": [
+                      {
+                        "var": "$env.witchPoisonUsed"
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  }
+                ]
               }
             ]
           },
@@ -1887,61 +2082,189 @@
               "op": "setEnv",
               "key": "turn",
               "value": {
-                "const": "p0"
+                "get": [
+                  {
+                    "at": [
+                      {
+                        "query": {
+                          "view": "player",
+                          "filter": {
+                            "and": [
+                              {
+                                "eq": [
+                                  {
+                                    "at": [
+                                      {
+                                        "var": "$alive"
+                                      },
+                                      {
+                                        "get": [
+                                          {
+                                            "var": "$node"
+                                          },
+                                          "_index"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "const": 1
+                                  }
+                                ]
+                              },
+                              {
+                                "eq": [
+                                  {
+                                    "at": [
+                                      {
+                                        "var": "$roles"
+                                      },
+                                      {
+                                        "get": [
+                                          {
+                                            "var": "$node"
+                                          },
+                                          "_index"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "const": "witch"
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  "id"
+                ]
               }
             }
-          ]
-        },
-        {
-          "op": "branch",
-          "if": {
-            "gt": [
-              {
-                "call": [
-                  "seer_alive"
+          ],
+          "else": [
+            {
+              "op": "branch",
+              "if": {
+                "gt": [
+                  {
+                    "call": [
+                      "seer_alive"
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
                 ]
               },
-              {
-                "const": 0
-              }
-            ]
-          },
-          "then": [
-            {
-              "op": "setEnv",
-              "key": "phase",
-              "value": {
-                "const": "night_seer"
-              }
-            },
-            {
-              "op": "setEnv",
-              "key": "turn",
-              "value": {
-                "const": "p0"
-              }
-            }
-          ]
-        },
-        {
-          "op": "branch",
-          "if": {
-            "eq": [
-              {
-                "var": "$env.phase"
-              },
-              {
-                "const": "night_wolf"
-              }
-            ]
-          },
-          "then": [
-            {
-              "op": "setEnv",
-              "key": "phase",
-              "value": {
-                "const": "night_end"
-              }
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "night_seer"
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "turn",
+                  "value": {
+                    "get": [
+                      {
+                        "at": [
+                          {
+                            "query": {
+                              "view": "player",
+                              "filter": {
+                                "and": [
+                                  {
+                                    "eq": [
+                                      {
+                                        "at": [
+                                          {
+                                            "var": "$alive"
+                                          },
+                                          {
+                                            "get": [
+                                              {
+                                                "var": "$node"
+                                              },
+                                              "_index"
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "const": 1
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "eq": [
+                                      {
+                                        "at": [
+                                          {
+                                            "var": "$roles"
+                                          },
+                                          {
+                                            "get": [
+                                              {
+                                                "var": "$node"
+                                              },
+                                              "_index"
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "const": "seer"
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          {
+                            "const": 0
+                          }
+                        ]
+                      },
+                      "id"
+                    ]
+                  }
+                }
+              ],
+              "else": [
+                {
+                  "op": "branch",
+                  "if": {
+                    "eq": [
+                      {
+                        "var": "$env.phase"
+                      },
+                      {
+                        "const": "night_wolf"
+                      }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "op": "setEnv",
+                      "key": "phase",
+                      "value": {
+                        "const": "night_end"
+                      }
+                    }
+                  ]
+                }
+              ]
             }
           ]
         }
@@ -1990,30 +2313,94 @@
               "op": "setEnv",
               "key": "turn",
               "value": {
-                "const": "p0"
+                "get": [
+                  {
+                    "at": [
+                      {
+                        "query": {
+                          "view": "player",
+                          "filter": {
+                            "and": [
+                              {
+                                "eq": [
+                                  {
+                                    "at": [
+                                      {
+                                        "var": "$alive"
+                                      },
+                                      {
+                                        "get": [
+                                          {
+                                            "var": "$node"
+                                          },
+                                          "_index"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "const": 1
+                                  }
+                                ]
+                              },
+                              {
+                                "eq": [
+                                  {
+                                    "at": [
+                                      {
+                                        "var": "$roles"
+                                      },
+                                      {
+                                        "get": [
+                                          {
+                                            "var": "$node"
+                                          },
+                                          "_index"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "const": "seer"
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  "id"
+                ]
               }
             }
-          ]
-        },
-        {
-          "op": "branch",
-          "if": {
-            "eq": [
-              {
-                "var": "$env.phase"
-              },
-              {
-                "const": "night_witch"
-              }
-            ]
-          },
-          "then": [
+          ],
+          "else": [
             {
-              "op": "setEnv",
-              "key": "phase",
-              "value": {
-                "const": "night_end"
-              }
+              "op": "branch",
+              "if": {
+                "eq": [
+                  {
+                    "var": "$env.phase"
+                  },
+                  {
+                    "const": "night_witch"
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "night_end"
+                  }
+                }
+              ]
             }
           ]
         }
@@ -2067,30 +2454,94 @@
               "op": "setEnv",
               "key": "turn",
               "value": {
-                "const": "p0"
+                "get": [
+                  {
+                    "at": [
+                      {
+                        "query": {
+                          "view": "player",
+                          "filter": {
+                            "and": [
+                              {
+                                "eq": [
+                                  {
+                                    "at": [
+                                      {
+                                        "var": "$alive"
+                                      },
+                                      {
+                                        "get": [
+                                          {
+                                            "var": "$node"
+                                          },
+                                          "_index"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "const": 1
+                                  }
+                                ]
+                              },
+                              {
+                                "eq": [
+                                  {
+                                    "at": [
+                                      {
+                                        "var": "$roles"
+                                      },
+                                      {
+                                        "get": [
+                                          {
+                                            "var": "$node"
+                                          },
+                                          "_index"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "const": "seer"
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  "id"
+                ]
               }
             }
-          ]
-        },
-        {
-          "op": "branch",
-          "if": {
-            "eq": [
-              {
-                "var": "$env.phase"
-              },
-              {
-                "const": "night_witch"
-              }
-            ]
-          },
-          "then": [
+          ],
+          "else": [
             {
-              "op": "setEnv",
-              "key": "phase",
-              "value": {
-                "const": "night_end"
-              }
+              "op": "branch",
+              "if": {
+                "eq": [
+                  {
+                    "var": "$env.phase"
+                  },
+                  {
+                    "const": "night_witch"
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "night_end"
+                  }
+                }
+              ]
             }
           ]
         }
@@ -2334,7 +2785,43 @@
               "op": "setEnv",
               "key": "turn",
               "value": {
-                "const": "p0"
+                "get": [
+                  {
+                    "at": [
+                      {
+                        "query": {
+                          "view": "player",
+                          "filter": {
+                            "eq": [
+                              {
+                                "at": [
+                                  {
+                                    "var": "$roles"
+                                  },
+                                  {
+                                    "get": [
+                                      {
+                                        "var": "$node"
+                                      },
+                                      "_index"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "const": "hunter"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  "id"
+                ]
               }
             }
           ]
@@ -2489,7 +2976,43 @@
                   "op": "setEnv",
                   "key": "turn",
                   "value": {
-                    "const": "p0"
+                    "get": [
+                      {
+                        "at": [
+                          {
+                            "query": {
+                              "view": "player",
+                              "filter": {
+                                "eq": [
+                                  {
+                                    "at": [
+                                      {
+                                        "var": "$alive"
+                                      },
+                                      {
+                                        "get": [
+                                          {
+                                            "var": "$node"
+                                          },
+                                          "_index"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "const": 1
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          {
+                            "const": 0
+                          }
+                        ]
+                      },
+                      "id"
+                    ]
                   }
                 }
               ]
@@ -2702,7 +3225,43 @@
               "op": "setEnv",
               "key": "turn",
               "value": {
-                "const": "p0"
+                "get": [
+                  {
+                    "at": [
+                      {
+                        "query": {
+                          "view": "player",
+                          "filter": {
+                            "eq": [
+                              {
+                                "at": [
+                                  {
+                                    "var": "$alive"
+                                  },
+                                  {
+                                    "get": [
+                                      {
+                                        "var": "$node"
+                                      },
+                                      "_index"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 1
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  "id"
+                ]
               }
             }
           ]
@@ -2773,7 +3332,88 @@
               "op": "setEnv",
               "key": "turn",
               "value": {
-                "const": "p0"
+                "get": [
+                  {
+                    "at": [
+                      {
+                        "query": {
+                          "view": "player",
+                          "filter": {
+                            "eq": [
+                              {
+                                "at": [
+                                  {
+                                    "var": "$alive"
+                                  },
+                                  {
+                                    "get": [
+                                      {
+                                        "var": "$node"
+                                      },
+                                      "_index"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 1
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  "id"
+                ]
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "get": [
+                  {
+                    "at": [
+                      {
+                        "query": {
+                          "view": "player",
+                          "filter": {
+                            "eq": [
+                              {
+                                "at": [
+                                  {
+                                    "var": "$alive"
+                                  },
+                                  {
+                                    "get": [
+                                      {
+                                        "var": "$node"
+                                      },
+                                      "_index"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 1
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "var": "$env.speechIdx"
+                      }
+                    ]
+                  },
+                  "id"
+                ]
               }
             }
           ]
@@ -2828,6 +3468,51 @@
               "key": "phase",
               "value": {
                 "const": "vote_resolve"
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "get": [
+                  {
+                    "at": [
+                      {
+                        "query": {
+                          "view": "player",
+                          "filter": {
+                            "eq": [
+                              {
+                                "at": [
+                                  {
+                                    "var": "$alive"
+                                  },
+                                  {
+                                    "get": [
+                                      {
+                                        "var": "$node"
+                                      },
+                                      "_index"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 1
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "var": "$env.voteIdx"
+                      }
+                    ]
+                  },
+                  "id"
+                ]
               }
             }
           ]
@@ -2939,7 +3624,43 @@
               "op": "setEnv",
               "key": "turn",
               "value": {
-                "const": "p0"
+                "get": [
+                  {
+                    "at": [
+                      {
+                        "query": {
+                          "view": "player",
+                          "filter": {
+                            "eq": [
+                              {
+                                "at": [
+                                  {
+                                    "var": "$roles"
+                                  },
+                                  {
+                                    "get": [
+                                      {
+                                        "var": "$node"
+                                      },
+                                      "_index"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "const": "hunter"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  "id"
+                ]
               }
             }
           ]
@@ -3120,7 +3841,69 @@
                   "op": "setEnv",
                   "key": "turn",
                   "value": {
-                    "const": "p0"
+                    "get": [
+                      {
+                        "at": [
+                          {
+                            "query": {
+                              "view": "player",
+                              "filter": {
+                                "and": [
+                                  {
+                                    "eq": [
+                                      {
+                                        "at": [
+                                          {
+                                            "var": "$alive"
+                                          },
+                                          {
+                                            "get": [
+                                              {
+                                                "var": "$node"
+                                              },
+                                              "_index"
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "const": 1
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "eq": [
+                                      {
+                                        "at": [
+                                          {
+                                            "var": "$roles"
+                                          },
+                                          {
+                                            "get": [
+                                              {
+                                                "var": "$node"
+                                              },
+                                              "_index"
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "const": "wolf"
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          {
+                            "const": 0
+                          }
+                        ]
+                      },
+                      "id"
+                    ]
                   }
                 }
               ]
@@ -3347,7 +4130,69 @@
               "op": "setEnv",
               "key": "turn",
               "value": {
-                "const": "p0"
+                "get": [
+                  {
+                    "at": [
+                      {
+                        "query": {
+                          "view": "player",
+                          "filter": {
+                            "and": [
+                              {
+                                "eq": [
+                                  {
+                                    "at": [
+                                      {
+                                        "var": "$alive"
+                                      },
+                                      {
+                                        "get": [
+                                          {
+                                            "var": "$node"
+                                          },
+                                          "_index"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "const": 1
+                                  }
+                                ]
+                              },
+                              {
+                                "eq": [
+                                  {
+                                    "at": [
+                                      {
+                                        "var": "$roles"
+                                      },
+                                      {
+                                        "get": [
+                                          {
+                                            "var": "$node"
+                                          },
+                                          "_index"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "const": "wolf"
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  "id"
+                ]
               }
             }
           ]

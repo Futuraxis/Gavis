@@ -292,6 +292,74 @@ class TestMAAC:
         raise AssertionError("actor targets never moved away from online nets")
 
 
+# ── 审查 P1-13/14 修复回归 ─────────────────────────────────────────
+
+
+class TestChanceRollForward:
+    def test_next_mask_nonzero_after_chance(self, moon_adapter):
+        """P1-13: 回合制后继状态前滚 chance 后，非终局 transition 的
+        next_mask 必须非全零（旧实现：moon_chess 每步都接 vanish_check
+        chance 节点 → next_mask 全零 → QMix/MAAC bootstrap 被掩成垃圾、
+        QMix target ≈ −1e9 发散）。"""
+        players = ["p_black", "p_white"]
+        encoder = GameEncoder.build_from_adapter(moon_adapter, players)
+        action_space = ActionSpace.build_from_adapter(moon_adapter)
+        rng = random.Random(42)
+
+        def rand_idx(pid, state, mask):
+            idxs = np.flatnonzero(mask)
+            return int(idxs[rng.randrange(len(idxs))]), {}
+
+        traj = run_episode(moon_adapter, players, rng, encoder, action_space, rand_idx)
+        assert traj.transitions
+        for t in traj.transitions:
+            if not t.done:
+                assert t.next_mask.sum() >= 1, "all-zero next_mask on non-done transition"
+
+
+class TestMAACPolicyGradientSeparation:
+    def test_actor_step_does_not_touch_critic(self, moon_adapter):
+        """P1-14: actor 步的 REINFORCE loss 经 q_online.detach() 后不再
+        二次更新 critic（旧实现共享优化器 + 未 detach → critic 每步被
+        步进两次且对 on-policy 动作向量做梯度上升）。"""
+        cfg = MAACConfig(
+            seed=1,
+            start_learning=8,
+            batch_size=16,
+            buffer_capacity=1024,
+            hidden_dim=16,
+            learning_rate=0.01,
+        )
+        solver = MAACSolver(moon_adapter, cfg)
+        rng = random.Random(1)
+        encoder = solver._encoder  # noqa: SLF001
+        action_space = solver._action_space  # noqa: SLF001
+        players = solver._players  # noqa: SLF001
+
+        def rand_idx(pid, state, mask):
+            idxs = np.flatnonzero(mask)
+            return int(idxs[rng.randrange(len(idxs))]), {}
+
+        for _ in range(8):
+            traj = run_episode(moon_adapter, players, rng, encoder, action_space, rand_idx)
+            for t in traj.transitions:
+                solver._buffer.push(t)  # noqa: SLF001
+            if len(solver._buffer) >= cfg.batch_size:  # noqa: SLF001
+                break
+        assert len(solver._buffer) >= cfg.batch_size  # noqa: SLF001
+
+        solver._gradient_step()  # noqa: SLF001
+        for p, net in solver._critics.items():  # noqa: SLF001
+            for param in net.parameters():
+                assert param.grad is None, f"critic {p} received gradient from the actor step"
+        actor_grads = [
+            param.grad is not None
+            for net in solver._actors.values()
+            for param in net.parameters()  # noqa: SLF001
+        ]
+        assert any(actor_grads), "actor parameters received no gradient at all"
+
+
 # ── Action space (unit, no training) ───────────────────────────────
 
 

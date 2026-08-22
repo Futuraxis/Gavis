@@ -488,3 +488,35 @@ class TestPSROSaveLoad:
         restored.load(str(path))
         assert len(restored._policy_pool) == len(solver._policy_pool)  # noqa: SLF001
         np.testing.assert_array_equal(restored._policy_pool[0], solver._policy_pool[0])  # noqa: SLF001
+
+
+# ── 2026-08-22 审查轮：CFR 可复现性与告警（P2-19 / P2-2）─────────
+
+
+class TestCFRReproducibility:
+    def test_play_vs_random_is_seeded(self):
+        """P2-19: 同 seed 的 CFR 实例 _play_vs_random 结果一致（旧实现
+        ``random.Random()`` 无种子，train() 的胜率不可复现）。"""
+        from layer3_solvers.cfr.solver import CFR, CFRConfig
+
+        adapter = TwoStepGame()
+        a = CFR(adapter, CFRConfig(seed=7, iterations=10))
+        b = CFR(adapter, CFRConfig(seed=7, iterations=10))
+        state = adapter.create_initial_state()
+        assert a._play_vs_random(state) == b._play_vs_random(state)  # noqa: SLF001
+
+
+class TestCFRDiscoverPlayersWarning:
+    def test_warns_on_fallback(self, caplog):
+        """P2-2: utility 无字符串 player 字段时告警（旧实现静默兜底，
+        训练产出全 0 策略无任何提示）。"""
+        import logging
+
+        from layer3_solvers.cfr.solver import CFR, CFRConfig
+
+        class _NoUtilityAdapter:
+            rules = {"utility": []}
+
+        with caplog.at_level(logging.WARNING):
+            CFR(_NoUtilityAdapter(), CFRConfig(seed=1))
+        assert any("utility" in r.message for r in caplog.records)

@@ -178,11 +178,24 @@ class GameEngine:
         return new_state
 
     def sample_chance(self, state: dict) -> tuple[ChanceOutcome, dict]:
-        """Sample one chance outcome and apply it."""
+        """Sample one chance outcome and apply it.
+
+        Probabilities are normalized by their sum, so a non-normalized
+        table samples without bias toward its last entry.  An empty (or
+        all-zero) outcome table is a rules bug and raises ``ValueError``
+        instead of crashing on ``outcomes[-1]``.
+        """
         outcomes = self.get_chance_outcomes(state)
-        r = self.rng.random()
+        if not outcomes:
+            phase = state["env"].get("phase", "?")
+            raise ValueError(f"no chance outcomes at phase {phase}")
+        total = sum(o.probability for o in outcomes)
+        if total <= 0:
+            phase = state["env"].get("phase", "?")
+            raise ValueError(f"non-positive total chance probability {total} at phase {phase}")
+        r = self.rng.random() * total
         cumsum = 0.0
-        chosen = outcomes[-1]
+        chosen = outcomes[-1]  # float-cumsum fallback: r may land just below total
         for o in outcomes:
             cumsum += o.probability
             if r < cumsum:

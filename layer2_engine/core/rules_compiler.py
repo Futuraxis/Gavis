@@ -223,18 +223,23 @@ class _Gen:
             return "(" + " + ".join(parts) + ")"
 
         if "switch" in spec:
+            # Single-evaluation if/elif/else chain: the input expression is
+            # bound once via the walrus operator in the first branch, and a
+            # matched branch's ``then`` is returned even when it evaluates to
+            # a falsy value (0/""/[]/None) -- the old ``or``-chain let falsy
+            # branch values fall through to the next case.  Default semantics
+            # mirror the interpreter (expr_eval.py): a case with a "default"
+            # key, or any case without a "case" key that has a "then".
             input_py = self.expr(spec.get("input", {"var": "$input"}))
-            branches = [
-                f"(({input_py}) == {repr(case['case'])} and {self.expr(case['then'])})"
-                for case in spec["switch"]
-                if "case" in case
-            ]
-            defaults = [case for case in spec["switch"] if "case" not in case]
-            if defaults:
-                branches.append(f"({self.expr(defaults[0].get('then'))})")
-            else:
-                branches.append("(None)")
-            return "(" + " or ".join(branches) + ")"
+            cases = [case for case in spec["switch"] if "case" in case]
+            defaults = [case for case in spec["switch"] if "default" in case or ("case" not in case and "then" in case)]
+            out = f"({self.expr(defaults[0]['then'])})" if defaults else "None"
+            for case in reversed(cases[1:]):
+                out = f"({self.expr(case['then'])} if _sw_in == {repr(case['case'])} else {out})"
+            if cases:
+                first = cases[0]
+                out = f"({self.expr(first['then'])} if (_sw_in := {input_py}) == {repr(first['case'])} else {out})"
+            return out
 
         for op, pyop in _CMP_OPS.items():
             if op in spec:
@@ -624,6 +629,7 @@ def _gen_chance(chance: list[dict], constants: dict, view_fns: dict, view_defs: 
         '    env = state["env"]',
         "    _out = []",
     ]
+    first = True
     for ct in chance:
         phases = ct.get("phases", [])
         prob = ct.get("probability", {})
@@ -633,7 +639,12 @@ def _gen_chance(chance: list[dict], constants: dict, view_fns: dict, view_defs: 
         effect_map = ct.get("effectMap", {})
         ck_tmpl = ct.get("canonicalKey", {"template": "chance:{outcome}"})
         phase_guard = " or ".join(f"env['phase'] == {p!r}" for p in phases)
-        lines.append(f"    if {phase_guard}:")
+        # First matching template wins: an if/elif chain mirrors the
+        # interpreter's first-match semantics (engine._interp_chance_outcomes);
+        # the old independent ``if`` blocks emitted a union when templates
+        # shared a phase.
+        lines.append(f"    {'if' if first else 'elif'} {phase_guard}:")
+        first = False
         for entry in explicit:
             outcome_val = entry.get("outcome", entry.get("value"))
             prob_expr = entry.get("prob", entry.get("probability"))

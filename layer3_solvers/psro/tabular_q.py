@@ -19,6 +19,7 @@ def tabular_q_best_response(
     gamma: float = 0.99,
     eval_interval: int = -1,
     opponent_policy: np.ndarray | None = None,
+    seed: int | None = None,
 ) -> np.ndarray:
     """Train a best-response policy via tabular Q-learning.
 
@@ -33,6 +34,8 @@ def tabular_q_best_response(
         Interval for evaluation (-1 = no evaluation).
     opponent_policy : np.ndarray, optional
         Fixed opponent policy. If None, uses random.
+    seed : int, optional
+        Seed for the Q init / exploration RNGs (审查 P2-23).
 
     Returns
     -------
@@ -42,23 +45,35 @@ def tabular_q_best_response(
     obs_dim = env.observation_space.n if hasattr(env.observation_space, "n") else env.observation_space.shape[0]
     n_actions = env.action_space.n
 
+    if seed is not None:
+        np.random.seed(seed)  # Q-table init uses the global RNG
     agent = TabularQAgent(obs_dim, n_actions, epsilon=epsilon, alpha=alpha, gamma=gamma)
+    agent.reset_rng(seed)
     opponent = (
         Agent(opponent_policy, action_dim=n_actions) if opponent_policy is not None else Agent(action_dim=n_actions)
     )
+    opponent.reset_rng(seed)
 
     obs, _ = env.reset()
     for step in range(num_steps):
         mask = env.available_actions()
         action = agent.select_action(obs, mask)
         next_obs, reward, done, _, _ = env.step(action)
-        agent.update(obs, action, reward, next_obs, done, next_mask=env.available_actions())
 
-        # Opponent's turn
+        # Opponent's turn, then update on the agent's OWN next decision
+        # state.  Updating before the opponent's reply (the old order)
+        # bootstrapped Q(s,a) from an opponent-turn state the agent never
+        # acts in, and dropped the terminal ±1 payoff of opponent-ending
+        # games entirely (审查 P1-1) — the learned "best response"
+        # degenerated to 1-ply greediness.
         if not done:
             opp_mask = env.available_actions()
             opp_action = opponent.step(next_obs, amask=opp_mask)
-            next_obs, reward, done, _, _ = env.step(opp_action)
+            next_obs, r2, done, _, _ = env.step(opp_action)
+            # Fold the opponent's immediate reward: nonzero only when the
+            # opponent's move ends the game (row player's view).
+            reward = reward + gamma * r2
+        agent.update(obs, action, reward, next_obs, done, next_mask=env.available_actions())
 
         obs = next_obs
         if done:

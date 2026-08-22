@@ -40,7 +40,6 @@ from layer2_engine.interfaces.solver_adapter import (
 from ..base import SolverBase, SolverConfig, SolverMetrics
 from ..cfr.solver import CFR, CFRConfig
 from ..mcts.solver import MCTS, MCTSConfig, MCTSNode
-from ..psro.solver import PSROConfig, PSROSolver
 from .opponent_model import (
     CFRTableModel,
     OpponentModel,
@@ -49,6 +48,14 @@ from .opponent_model import (
     UniformModel,
     sample_action,
 )
+
+try:
+    # PSRO 是可选依赖（审查 P2-25）：psro extra 缺失时 HybridSolver 仍可
+    # 导入，只有显式请求 psro 模式才报错。
+    from ..psro.solver import PSROConfig, PSROSolver
+except ImportError:  # pragma: no cover — exercised only in minimal installs
+    PSROConfig = None
+    PSROSolver = None
 
 
 @dataclass
@@ -80,9 +87,9 @@ class HybridSolver(SolverBase):
         self.cfr = CFR(
             adapter, CFRConfig(seed=cfg.seed, iterations=cfg.cfr_iterations, depth_limit=cfg.cfr_depth_limit)
         )
-        self.psro = PSROSolver(
-            adapter, PSROConfig(seed=cfg.seed, num_iters=cfg.psro_iters, num_steps_per_iter=cfg.psro_steps_per_iter)
-        )
+        self.psro = None  # lazily built — see _ensure_psro
+        if cfg.mode == "pool" or cfg.opponent_model == "psro":
+            self._ensure_psro(adapter)
 
         self._cfr_table: Optional[dict] = None
         self._pool: list = []
@@ -92,6 +99,24 @@ class HybridSolver(SolverBase):
         self._edge_replies: dict[int, Optional[ActionInstance]] = {}
         if cfg.cfr_table_path and Path(cfg.cfr_table_path).exists():
             self._load_cfr_table(cfg.cfr_table_path)
+
+    def _ensure_psro(self, adapter: SolverAdapter) -> None:
+        """Lazily build the PSRO component (pool mode / psro opponent model).
+
+        Kept out of the main ``__init__`` path so search/table modes work
+        for games PSRO cannot represent (e.g. 5×5 gomoku) and for minimal
+        installs without the psro extra (审查 P2-25).
+        """
+        if self.psro is not None:
+            return
+        if PSROSolver is None:  # pragma: no cover — minimal install
+            raise RuntimeError(
+                "HybridSolver requires the 'psro' extra (gymnasium/tqdm) for pool mode / the psro opponent model"
+            )
+        cfg: HybridConfig = self.config
+        self.psro = PSROSolver(
+            adapter, PSROConfig(seed=cfg.seed, num_iters=cfg.psro_iters, num_steps_per_iter=cfg.psro_steps_per_iter)
+        )
 
     @property
     def name(self) -> str:
@@ -133,6 +158,7 @@ class HybridSolver(SolverBase):
 
         # 2) PSRO pool + Nash mixture (opponent model).
         if cfg.opponent_model == "psro" or cfg.mode == "pool":
+            self._ensure_psro(self.adapter)
             if verbose:
                 print(f"  Hybrid: running PSRO ({cfg.psro_iters} iters)...")
             self.psro.train(episodes=max(1, cfg.psro_iters), verbose=verbose)

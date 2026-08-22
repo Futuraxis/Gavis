@@ -10,6 +10,7 @@ utility section and mapped to dynamic reach-array indices — no
 
 from __future__ import annotations
 
+import logging
 import math
 import random
 from collections import defaultdict
@@ -164,7 +165,16 @@ class CFR(SolverBase):
             p = rule.get("player")
             if isinstance(p, str):
                 players.add(p)
-        return sorted(players) or ["p_black", "p_white"]
+        if not players:
+            # 审查 P2-2: 静默兜底会让 reach 数组与 get_utility 恒 0，
+            # 训练产出全 0 策略 — 至少告警而不是无痕降级。
+            logging.getLogger(__name__).warning(
+                "CFR: no string 'player' fields in rules['utility']; "
+                "falling back to %s — utilities will not reach any player",
+                ["p_black", "p_white"],
+            )
+            return ["p_black", "p_white"]
+        return sorted(players)
 
     def _get_players(self, state: dict) -> list[str]:
         """Player ids (kept for API compatibility; discovered at init)."""
@@ -363,7 +373,8 @@ class CFR(SolverBase):
     def _play_vs_random(self, state: dict) -> int:
         """Play one game: CFR as the first player vs random others. 1/0/-1."""
         s = clone_state(state)
-        grng = random.Random()
+        # 审查 P2-19: 对手随机动作同样用配置 seed，保证 train() 可复现
+        grng = random.Random(getattr(self.config, "seed", None))
         me = self._players[0]
         while not self.adapter.is_terminal(s):
             nt = self.adapter.get_node_type(s)

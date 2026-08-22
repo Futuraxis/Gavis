@@ -48,6 +48,10 @@ class HAPPOSolver(SolverBase):
     def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
         super().__init__(adapter, config or HAPPOConfig())
         cfg = self.config
+        if cfg.seed is not None:
+            # 可复现性（审查 P2-27）：与 QMix 一致，种子化 torch/np 全局 RNG
+            torch.manual_seed(cfg.seed)
+            np.random.seed(cfg.seed)
         self._players = resolve_players(adapter)
         self._encoder = GameEncoder.build_from_adapter(adapter, self._players)
         self._action_space = ActionSpace.build_from_adapter(adapter)

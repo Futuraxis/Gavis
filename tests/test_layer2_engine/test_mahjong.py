@@ -202,10 +202,10 @@ class TestWins:
     def test_tsumo_win_ends_game(self):
         a = MahjongAdapter(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
-        # Plant a ready hand for p0 (14 tiles: three runs + pair, with the
-        # last drawn tile completing the pair).
+        # Plant a ready hand for p0 (14 tiles: three runs + pair; the last
+        # drawn tile is the second p3, already in the hand).
         s["_arrays"]["hand_p0"] = ["m1", "m2", "m3", "m4", "m5", "m6", "p1", "p2", "p3", "s1", "s2", "s3", "p3", "p3"]
-        s["env"]["last_drawn"] = "z1"
+        s["env"]["last_drawn"] = "p3"
         assert _win_legal(a, s)
         s = _act(a, s, "win_self")
         assert a.is_terminal(s)
@@ -228,7 +228,9 @@ class TestWins:
     def test_fan_pay_scale(self):
         a = MahjongAdapter(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
-        s["_arrays"]["hand_p0"] = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p1", "p2", "p3", "z1"]
+        # 14-tile ready hand: three runs + p123 + z1 pair; the drawn tile
+        # (z1) is already part of the hand.
+        s["_arrays"]["hand_p0"] = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p1", "p2", "p3", "z1", "z1"]
         s["env"]["last_drawn"] = "z1"
         s = _act(a, s, "win_self")
         # 鸡胡(1) + 平胡(2, 无刻子) = 3 番 → 10 × 2^2 = 40
@@ -242,9 +244,9 @@ class TestVariants:
     def test_blood_continues_after_first_win(self):
         a = MahjongAdapter(variant="blood", player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
-        # p0 tsumos
+        # p0 tsumos (drawn tile p3 already in hand)
         s["_arrays"]["hand_p0"] = ["m1", "m2", "m3", "m4", "m5", "m6", "p1", "p2", "p3", "s1", "s2", "s3", "p3", "p3"]
-        s["env"]["last_drawn"] = "z1"
+        s["env"]["last_drawn"] = "p3"
         s = _act(a, s, "win_self")
         assert not a.is_terminal(s), "blood continues after one win"
         assert s["env"]["done"] == ["p0"]
@@ -262,9 +264,56 @@ class TestVariants:
         a = MahjongAdapter(variant="guangdong", player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         s["_arrays"]["hand_p0"] = ["m1", "m2", "m3", "m4", "m5", "m6", "p1", "p2", "p3", "s1", "s2", "s3", "p3", "p3"]
-        s["env"]["last_drawn"] = "z1"
+        s["env"]["last_drawn"] = "p3"
         s = _act(a, s, "win_self")
         assert a.is_terminal(s)
+
+    def test_seven_pairs_tsumo_legal(self):
+        """P1-4: seven pairs tsumo must be legal and scored on the real
+        14-tile hand (the old check appended last_drawn to the hand that
+        already contained it, making COUNT==15 and qidui never legal)."""
+        a = MahjongAdapter(player_count=2, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        hand = ["z1", "z1", "z2", "z2", "z3", "z3", "z4", "z4", "z5", "z5", "z6", "z6", "m1", "m1"]
+        s["_arrays"]["hand_p0"] = hand
+        s["env"]["last_drawn"] = "m1"
+        assert _win_legal(a, s)
+        s = _act(a, s, "win_self")
+        assert a.is_terminal(s)
+        assert s["env"]["winner"] == "p0"
+        # win_hand must be the 14-tile hand itself, not 15 with a duplicate.
+        assert s["env"]["win_hand"] == hand
+        # Engine-computed fan for this qidui hand (鸡胡+平胡+七对+绝张
+        # → 8 番): FAN_PAY[7] = 1280.  The point is qidui now contributes;
+        # the old 15-tile path could never reach this.
+        assert s["env"]["fan_pay"] == 1280
+
+    def test_non_winning_hand_cannot_tsumo(self):
+        """P1-4: a 14-tile non-winning hand (with the drawn tile in hand)
+        must not expose a legal win_self — the old 15-tile check could
+        cover 14 tiles with a duplicate draw."""
+        a = MahjongAdapter(player_count=2, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        # m123 m456 p123 + p333 pung + z1 z2 singletons → no pair, not a win.
+        s["_arrays"]["hand_p0"] = ["m1", "m2", "m3", "m4", "m5", "m6", "p1", "p2", "p3", "p3", "p3", "p3", "z1", "z2"]
+        s["env"]["last_drawn"] = "z1"
+        assert not _win_legal(a, s)
+
+    def test_claim_phase_observation_rotates(self):
+        """审查 J1: claim 阶段 get_observation 的 my_turn/legal 必须按
+        get_current_player（队列头）判定 — 旧实现用 env.turn（弃牌者），
+        响应者看到空 legal 而弃牌者看到一堆 claim 选项。"""
+        a = MahjongAdapter(player_count=2, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        s["_arrays"]["hand_p0"] = ["m3"] + s["_arrays"]["hand_p0"][1:]
+        s["_arrays"]["hand_p1"] = ["m3", "m3", "p1", "p2", "p3", "s1", "s2", "s3", "z1", "z2", "z3", "m1", "m2"]
+        s = _act(a, s, "discard", tile="m3")
+        assert s["env"]["phase"] == "claim"
+        obs_responder = a.get_observation(s, "p1")
+        assert obs_responder["my_turn"] is True
+        assert any(entry["type"] == "claim_peng" for entry in obs_responder["legal"])
+        obs_discarder = a.get_observation(s, "p0")
+        assert obs_discarder["my_turn"] is False
 
     def test_wall_empty_draw(self):
         a = MahjongAdapter(player_count=2, seed=1)

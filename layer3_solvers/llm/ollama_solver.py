@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Optional
@@ -95,7 +96,9 @@ class OllamaSolver(SolverBase):
         obs = self.adapter.get_observation(state, self.player_id)
         try:
             reply = self._ask_model(self._build_prompt(obs, legal))
-        except Exception:
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+            # 网络/响应质量问题才随机回退；编程错误（如规则形状不匹配）
+            # 不再被吞掉，上浮以便修复（审查 P1-15 曾被裸 except 掩盖）。
             return self._fallback(legal)
         action = self._parse_reply(reply, legal)
         return action if action is not None else self._fallback(legal)
@@ -142,8 +145,15 @@ class OllamaSolver(SolverBase):
                 "请只输出一个 JSON 对象（不要任何其他文字），格式："
                 '{"intent": "claim|accuse|defend|question|persuade", "speech": "你的发言（一句话，中文）"}'
             )
+        elif phase == "night_witch":
+            targets = sorted({t for a in legal if (t := self._target_of(a.params)) is not None})
+            lines.append(f"可选目标：{targets}")
+            lines.append(
+                '请只输出一个 JSON 对象（不要任何其他文字），格式：{"potion": "heal"|"poison", "target": "pX"}'
+                "（heal 的目标必须是当夜被狼刀者，且每瓶药只能使用一次）"
+            )
         else:
-            targets = sorted({a.params.get("target", {}).get("id", "") for a in legal if a.params.get("target")})
+            targets = sorted({t for a in legal if (t := self._target_of(a.params)) is not None})
             lines.append(f"可选目标：{targets}")
             lines.append(
                 '请只输出一个 JSON 对象（不要任何其他文字），格式：{"target": "pX"}'
@@ -176,6 +186,18 @@ class OllamaSolver(SolverBase):
 
     # ── Reply parsing ──────────────────────────────────────────────
 
+    @staticmethod
+    def _target_of(params: dict) -> object:
+        """Normalize an action param's target value.
+
+        Player-entity params are dicts (``{"id": ...}``); night_witch
+        ``heal``'s target is the raw ``nightKill`` string (the generator
+        stores it as ``{"expr": [{"var": "$env.nightKill"}]}``), which
+        crashed the old ``.get("id")`` calls (审查 P1-15).
+        """
+        t = params.get("target")
+        return t.get("id") if isinstance(t, dict) else t
+
     def _parse_reply(self, reply: str, legal: list[ActionInstance]) -> ActionInstance | None:
         reply = reply.strip()
         if not reply:
@@ -194,12 +216,26 @@ class OllamaSolver(SolverBase):
         target = data.get("target")
         intent = data.get("intent")
         speech = data.get("speech")
+        potion = data.get("potion")
+        if potion is not None:
+            # night_witch 双动作（heal/poison）歧义：potion 字段显式区分
+            # （审查 P1-17）。heal 的目标由 nightKill 固定（do_heal 只读
+            # nightKill），无需核对 target；poison 按 target 匹配。
+            potion = str(potion)
+            for a in legal:
+                if a.template_id != potion:
+                    continue
+                if potion == "heal":
+                    return a
+                if target is not None and self._target_of(a.params) == str(target):
+                    return a
+            return None
         for a in legal:
             if a.template_id == "speak":
                 if intent is not None and a.params.get("intent", {}).get("id") == str(intent):
                     return self._with_speech(a, speech)
                 continue
-            if target is not None and a.params.get("target", {}).get("id") == str(target):
+            if target is not None and self._target_of(a.params) == str(target):
                 return a
         return None
 

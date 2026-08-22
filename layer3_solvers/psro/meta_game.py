@@ -152,6 +152,15 @@ def exploitability(
 ) -> float:
     """Compute the exploitability of a Nash mixture.
 
+    Each pool member is measured as the COLUMN player against the Nash
+    mixture (row player): ``v_i = u(nash, pi_i)``.  In a zero-sum game the
+    mixture's NE value is ≤ 0 against every member (≤ 0 for members inside
+    the NE support), so ``expl = -mean(v_i)`` is a non-negative
+    exploitability proxy.  The old code measured ``u(pi_i, nash)`` — by
+    symmetry ≤ 0 for every member — and clipped with ``max(v, 0)``, so the
+    reported value was pure evaluation noise and never measured real
+    exploitability (审查 P1-3).
+
     Parameters
     ----------
     env : GymAdapter
@@ -168,7 +177,7 @@ def exploitability(
     Returns
     -------
     float
-        Average exploitability.
+        Average negative deviation of the pool against the mixture.
     """
     env_factory = getattr(env, "clone", None)
     if env_factory is not None and num_workers != 1 and len(pi) > 1:
@@ -177,7 +186,7 @@ def exploitability(
             values = list(
                 tqdm(
                     pool.map(
-                        lambda i: estimate_reward(env_factory(), Ne, Agent(pi[i]), Agent(nash_pi)),
+                        lambda i: estimate_reward(env_factory(), Ne, Agent(nash_pi), Agent(pi[i])),
                         range(len(pi)),
                     ),
                     total=len(pi),
@@ -189,7 +198,7 @@ def exploitability(
     else:
         nash_agent = Agent(nash_pi)
         values = [
-            estimate_reward(env, Ne, Agent(pi[i]), nash_agent)
+            estimate_reward(env, Ne, nash_agent, Agent(pi[i]))
             for i in tqdm(range(len(pi)), desc="Exploitability", position=1, leave=False)
         ]
-    return sum(max(v, 0.0) for v in values) / len(pi)
+    return -sum(values) / len(pi)

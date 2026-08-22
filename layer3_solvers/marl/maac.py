@@ -57,6 +57,10 @@ class MAACSolver(SolverBase):
     def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
         super().__init__(adapter, config or MAACConfig())
         cfg = self.config
+        if cfg.seed is not None:
+            # 可复现性（审查 P2-27）：与 QMix 一致，种子化 torch/np 全局 RNG
+            torch.manual_seed(cfg.seed)
+            np.random.seed(cfg.seed)
         self._players = resolve_players(adapter)
         self._encoder = GameEncoder.build_from_adapter(adapter, self._players)
         self._action_space = ActionSpace.build_from_adapter(adapter)
@@ -241,11 +245,14 @@ class MAACSolver(SolverBase):
         critic_loss.backward()
         self._optimizer.step()
 
-        # ── Actor (entropy-regularized policy gradient) ───────────
-        # SAC-style: re-sample ``a ~ π(·|s)`` for the actor loss instead
-        # of scoring the replay buffer's stale action (C-07).  Using the
-        # replayed action is not a valid policy-gradient form and the
-        # actor cannot move toward high-Q regions.
+        # ── Actor (REINFORCE with entropy regularization) ──────────
+        # Re-sample ``a ~ π(·|s)`` and score it (C-07).  The old
+        # ``-(q_online − τ·log π)`` had two defects (审查 P1-14): with a
+        # sampled discrete index the Q term carries no actor gradient (the
+        # loss degenerated to a zero-mean log-prob random walk), and
+        # ``q_online`` was not detached, so the shared optimizer's actor
+        # step updated the critic a second time.  REINFORCE
+        # ``∇[log π(a) · (Q − τ·log π(a))]`` fixes both.
         actor_losses = []
         for i, p in enumerate(self._players):
             sel = batch.player_idx == i
@@ -260,7 +267,7 @@ class MAACSolver(SolverBase):
             new_joint = actions[sel].clone()
             new_joint[:, i] = a_new
             q_online = self._critics[p](obs_slots[sel], new_joint, acting[sel])[:, i]
-            actor_losses.append(-(q_online - cfg.entropy_temperature * log_prob).mean())
+            actor_losses.append(-(log_prob * (q_online.detach() - cfg.entropy_temperature * log_prob)).mean())
         if actor_losses:
             actor_loss = torch.stack(actor_losses).mean()
             self._optimizer.zero_grad()

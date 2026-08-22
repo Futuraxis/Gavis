@@ -104,3 +104,44 @@ def test_illegal_move_rejected():
 
     with pytest.raises(PlayError):
         session.human_move("vote", {"target": "p0"})  # 非投票阶段或非法目标
+
+
+def test_human_witch_heal_target_normalized():
+    """P1-15（连带）: session 的 _find_action/snapshot 对 heal 的字符串
+    target 不得再 AttributeError（旧实现 .get("id") 崩溃）。"""
+    from layer4_interface.frontend.play_werewolf.session import GameSession  # noqa: F401
+
+    session = None
+    for s in range(50):
+        cand = _make_session(seed=5 + s)
+        rng = random.Random(s)
+        st = cand.engine.create_initial_state()
+        for _ in range(400):
+            if st["env"].get("phase") == "night_witch" and cand.engine.get_node_type(st) == "player":
+                break
+            nt = cand.engine.get_node_type(st)
+            if nt == "chance":
+                outs = cand.engine.get_chance_outcomes(st)
+                if not outs:
+                    break
+                st = cand.engine.apply_chance(st, rng.choices(outs, weights=[o.probability for o in outs], k=1)[0])
+            elif nt == "player":
+                legal = cand.engine.get_legal_actions(st)
+                if not legal:
+                    break
+                st = cand.engine.apply_action(st, rng.choice(legal))
+            else:
+                break
+        if st["env"].get("phase") == "night_witch" and cand.engine.get_node_type(st) == "player":
+            cand.state = st
+            session = cand
+            break
+    if session is None:
+        pytest.skip("no game reached night_witch")
+    night_kill = session.state["env"].get("nightKill")
+    assert night_kill is not None
+    action = session._find_action("heal", {"target": night_kill})  # noqa: SLF001
+    assert action is not None
+    assert action.template_id == "heal"
+    # snapshot 遍历合法动作时不再因字符串 target 崩溃
+    session.snapshot()

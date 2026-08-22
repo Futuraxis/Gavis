@@ -715,32 +715,10 @@
         "call": [
           "is_win_hand",
           {
-            "concat": [
+            "call": [
+              "hand_of",
               {
-                "call": [
-                  "hand_of",
-                  {
-                    "var": "$env.turn"
-                  }
-                ]
-              },
-              {
-                "map": {
-                  "list": {
-                    "range": {
-                      "from": {
-                        "const": 0
-                      },
-                      "to": {
-                        "const": 1
-                      }
-                    }
-                  },
-                  "as": "$node",
-                  "expr": {
-                    "var": "$env.last_drawn"
-                  }
-                }
+                "var": "$env.turn"
               }
             ]
           }
@@ -2457,8 +2435,11 @@
           "op": "setEnv",
           "key": "win_hand",
           "value": {
-            "concat": [
-              {
+            "if": {
+              "cond": {
+                "var": "self_win"
+              },
+              "then": {
                 "call": [
                   "hand_of",
                   {
@@ -2466,25 +2447,37 @@
                   }
                 ]
               },
-              {
-                "map": {
-                  "list": {
-                    "range": {
-                      "from": {
-                        "const": 0
+              "else": {
+                "concat": [
+                  {
+                    "call": [
+                      "hand_of",
+                      {
+                        "var": "pid"
+                      }
+                    ]
+                  },
+                  {
+                    "map": {
+                      "list": {
+                        "range": {
+                          "from": {
+                            "const": 0
+                          },
+                          "to": {
+                            "const": 1
+                          }
+                        }
                       },
-                      "to": {
-                        "const": 1
+                      "as": "$node",
+                      "expr": {
+                        "var": "tile"
                       }
                     }
-                  },
-                  "as": "$node",
-                  "expr": {
-                    "var": "tile"
                   }
-                }
+                ]
               }
-            ]
+            }
           }
         },
         {

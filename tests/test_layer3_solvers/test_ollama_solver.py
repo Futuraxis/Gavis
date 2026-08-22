@@ -167,3 +167,79 @@ def test_model_exception_falls_back():
     assert action is not None
     legal_keys = {a.canonical_key for a in adapter.get_legal_actions(st)}
     assert action.canonical_key in legal_keys
+
+
+# ── 女巫夜（P1-15/17 修复回归）─────────────────────────────────────
+
+
+def _reach_night_witch():
+    """Advance to a live night_witch phase (witch alive, some potion)."""
+    for s in range(50):
+        adapter = _adapter(seed=s)
+        st = _advance(adapter, "night_witch", max_steps=400)
+        if st is not None and adapter.get_node_type(st) == "player":
+            return adapter, st
+    pytest.skip("no game reached night_witch")
+
+
+def test_night_witch_prompt_specs_potion():
+    """P1-17: night_witch prompt 必须区分救/毒（potion 字段）。"""
+    adapter, st = _reach_night_witch()
+    solver = OllamaSolver(adapter, OllamaConfig(fallback_seed=1), player_id="p0")
+    legal = adapter.get_legal_actions(st)
+    # 旧实现：heal 的 target 是字符串 → _build_prompt 内 .get("id") 崩溃
+    prompt = solver._build_prompt(adapter.get_observation(st, "p0"), legal)
+    assert '"potion"' in prompt
+    assert "heal" in prompt and "poison" in prompt
+    assert "可选目标" in prompt
+
+
+def test_night_witch_poison_reply():
+    """P1-17: {"potion":"poison"} 必须解析到 poison 动作（旧实现会错配 heal）。"""
+    adapter, st = _reach_night_witch()
+    solver = OllamaSolver(adapter, OllamaConfig(fallback_seed=1), player_id="p0")
+    legal = adapter.get_legal_actions(st)
+    poison_target = next(a.params["target"]["id"] for a in legal if a.template_id == "poison")
+    with _FakeModel(solver, f'{{"potion": "poison", "target": "{poison_target}"}}'):
+        action = solver.select_action(st)
+    assert action is not None
+    assert action.template_id == "poison"
+    assert action.params["target"]["id"] == poison_target
+
+
+def test_night_witch_heal_reply():
+    """P1-15: heal 的 target 是 nightKill 字符串，解析不得崩溃且匹配 heal。"""
+    adapter, st = _reach_night_witch()
+    solver = OllamaSolver(adapter, OllamaConfig(fallback_seed=1), player_id="p0")
+    night_kill = st["env"].get("nightKill")
+    assert night_kill is not None
+    legal = adapter.get_legal_actions(st)
+    heal = next(a for a in legal if a.template_id == "heal")
+    assert isinstance(heal.params["target"], str), "heal target must stay a string"
+    with _FakeModel(solver, f'{{"potion": "heal", "target": "{night_kill}"}}'):
+        action = solver.select_action(st)
+    assert action is not None
+    assert action.template_id == "heal"
+
+
+def test_night_witch_old_format_no_crash():
+    """P1-15: 无 potion 键的旧格式 {"target": ...} 在 night_witch 不崩溃。"""
+    adapter, st = _reach_night_witch()
+    solver = OllamaSolver(adapter, OllamaConfig(fallback_seed=1), player_id="p0")
+    night_kill = st["env"].get("nightKill")
+    assert night_kill is not None
+    with _FakeModel(solver, f'{{"target": "{night_kill}"}}'):
+        action = solver.select_action(st)
+    assert action is not None
+    assert action.template_id == "heal"
+
+
+def test_night_witch_invalid_potion_falls_back():
+    """P1-17: 非法 potion 值 → 随机回退（合法动作）。"""
+    adapter, st = _reach_night_witch()
+    solver = OllamaSolver(adapter, OllamaConfig(fallback_seed=5), player_id="p0")
+    with _FakeModel(solver, '{"potion": "screw", "target": "p0"}'):
+        action = solver.select_action(st)
+    assert action is not None
+    legal_keys = {a.canonical_key for a in adapter.get_legal_actions(st)}
+    assert action.canonical_key in legal_keys

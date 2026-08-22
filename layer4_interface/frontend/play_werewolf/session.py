@@ -113,7 +113,8 @@ class GameSession:
                 if intent == params.get("intent"):
                     return self._with_speech(action, params.get("text", ""))
                 continue
-            if p.get("target", {}).get("id") == params.get("target"):
+            # target 归一化：heal 的 target 是 nightKill 字符串，其余是实体 dict
+            if OllamaSolver._target_of(p) == params.get("target"):  # noqa: SLF001
                 return action
         return None
 
@@ -121,7 +122,8 @@ class GameSession:
     def _with_speech(action, text: str):
         from dataclasses import replace
 
-        return replace(action, params={**action.params, "text": text})
+        # 输入侧清洗：人类发言同样剔除控制字符并限长（审查 P2-6）
+        return replace(action, params={**action.params, "text": OllamaSolver._sanitize_speech(text)})  # noqa: SLF001
 
     def _ai_turns(self) -> None:
         """Drive AI players until the human's turn (or game over)."""
@@ -176,7 +178,7 @@ class GameSession:
                 if action.template_id == "speak":
                     legal.append({"id": action.template_id, "intent": p.get("intent", {}).get("id")})
                 else:
-                    legal.append({"id": action.template_id, "target": p.get("target", {}).get("id")})
+                    legal.append({"id": action.template_id, "target": OllamaSolver._target_of(p)})  # noqa: SLF001
 
         phase = env.get("phase")
         return {

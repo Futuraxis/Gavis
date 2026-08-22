@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from layer2_engine.interfaces.solver_adapter import ActionInstance
 from layer3_solvers.psro.gym_adapter import GymAdapter
@@ -189,3 +190,99 @@ def test_psro_save_load_preserves_payoff_matrix(tmp_path: Path) -> None:
         restored_solver._payoff_matrix,
         expected_matrix,
     )
+
+
+# ── 审查 P1-1/2/3 修复回归 ─────────────────────────────────────────
+
+
+class _OpponentEndsEnv:
+    """Row player's move is non-terminal (reward 0); the column player's
+    reply ends the game with +1 from the row player's view."""
+
+    observation_space = type("S", (), {"n": 2})()
+    action_space = type("S", (), {"n": 2})()
+
+    def __init__(self) -> None:
+        self.steps = 0
+
+    def reset(self, seed=None):
+        self.steps = 0
+        return 0, {}
+
+    def available_actions(self) -> np.ndarray:
+        return np.array([True, True])
+
+    def step(self, action: int):
+        self.steps += 1
+        if self.steps == 1:
+            return 1, 0.0, False, False, {}
+        return 0, 1.0, True, False, {}
+
+
+def test_best_response_folds_opponent_terminal_payoff():
+    """P1-1: 对手终局的收益必须折进 Q 更新（旧实现 update 在对手应手
+    之前执行，对手终结的输局收益被整体丢弃，BR 退化为 1-ply 贪心）。"""
+    from layer3_solvers.psro.agent import TabularQAgent
+
+    env = _OpponentEndsEnv()
+    agent = TabularQAgent(2, 2, epsilon=0.0, alpha=1.0, gamma=0.9)
+    agent.reset_rng(0)
+    obs, _ = env.reset()
+    mask = env.available_actions()
+    action = agent.select_action(obs, mask)
+    next_obs, r1, done, _, _ = env.step(action)
+    assert not done
+    _, r2, done, _, _ = env.step(0)  # opponent's reply ends the game
+    assert done
+    # tabular_q_best_response 的固定循环：对手应手之后才 update，
+    # reward = r1 + gamma * r2。
+    agent.update(obs, action, r1 + 0.9 * r2, next_obs, done, next_mask=env.available_actions())
+    assert agent.Q[obs, action] == pytest.approx(0.9)
+
+
+def test_select_action_masks_from_passed_state():
+    """P1-2: select_action 的 mask 必须来自传入 state（旧实现读 gym 的
+    陈旧 _state → 全真 mask → 采到已占格 → 返回 None 违反契约）。"""
+    from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
+
+    adapter = MoonChessAdapter(seed=3)
+    solver = PSROSolver(adapter, PSROConfig(seed=1))
+    solver._nash_mixture = np.full((19683, 9), 1.0 / 9)  # noqa: SLF001
+    state = adapter.create_initial_state()
+    state["_arrays"]["board"] = ["p_black"] * 4 + ["p_white"] * 4 + [None]
+    action = solver.select_action(state)
+    assert action is not None
+    cell_id = action.params["cell"]["id"]
+    assert cell_id == "cell_2_2", f"mixture picked an occupied cell: {cell_id}"
+
+
+class _RowAlwaysLosesEnv:
+    """Row player (the Nash mixture) always loses: step reward -1, terminal."""
+
+    observation_space = type("S", (), {"n": 2})()
+    action_space = type("S", (), {"n": 2})()
+    players = ("row", "column")
+
+    def reset(self, seed=None):
+        return 0, {}
+
+    def available_actions(self) -> np.ndarray:
+        return np.array([True, True])
+
+    def step(self, action: int):
+        return 0, -1.0, True, False, {}
+
+    def get_current_player(self):
+        return None
+
+
+def test_exploitability_measures_column_deviation():
+    """P1-3: exploitability 必须测量"混合物作行玩家被池成员击败"的方向
+    （旧实现方向相反 + max(v,0) 截断 → 恒 ≈ 0 的噪声指标）。"""
+    from layer3_solvers.psro.meta_game import exploitability
+
+    nash = np.full((2, 2), 0.5)
+    pool = [np.eye(2)[0].repeat(2).reshape(2, 2), np.eye(2)[1].repeat(2).reshape(2, 2)]
+    expl = exploitability(_RowAlwaysLosesEnv(), nash, pool, Ne=1, num_workers=1)
+    # row loses every episode → values = [-1, -1] → expl = -mean = 1.0
+    assert expl == pytest.approx(1.0)

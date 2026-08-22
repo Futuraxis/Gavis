@@ -8,11 +8,11 @@ and role composition are injected into ``constants`` here:
 
 Partially observable: ``get_observation`` filters roles / night results per
 player (the seer alone sees ``seerResult``); ``speechLog`` / ``voteLog`` /
-``deaths`` are public.  Turn rotation — night actors and day speech/vote
-order — is resolved in ``get_current_player``: "next alive player" cycling
-is awkward in pure rule expressions, so the adapter owns the mapping (same
-division of labour as the texas/mahjong adapters).  Actions themselves
-remain declared in the rules JSON.
+``deaths`` are public.  Turn rotation — night actors (role holders) and the
+day speech/vote order — is advanced in the rules themselves (the generator
+sets ``env.turn`` at every phase entry and after each speech/vote), so
+``get_current_player`` is the base implementation (env.turn + node-type
+guard).  Actions themselves remain declared in the rules JSON.
 """
 
 from __future__ import annotations
@@ -67,31 +67,6 @@ class WerewolfAdapter(GameEngine):
         rules["players"] = rules["constants"]["player_ids"]
         rules["utility"] = [u for u in rules["utility"] if u["player"] in rules["constants"]["player_ids"]]
         super().__init__(rules, seed=seed)
-
-    # ── Turn rotation (night actors / day order) ─────────────────────
-
-    def get_current_player(self, state: dict) -> Optional[str]:
-        env = state.get("env", {})
-        phase = env.get("phase")
-        pids = self._constants.get("player_ids", [])
-        roles = state.get("_arrays", {}).get("roles", [])
-        alive = state.get("_arrays", {}).get("alive", [])
-
-        if phase == "night_wolf":
-            for i, pid in enumerate(pids):
-                if i < len(roles) and roles[i] == "wolf" and i < len(alive) and alive[i] == 1:
-                    return pid
-            return None
-        if phase == "night_seer":
-            for i, pid in enumerate(pids):
-                if i < len(roles) and roles[i] == "seer" and i < len(alive) and alive[i] == 1:
-                    return pid
-            return None
-        if phase in ("day_speech", "day_vote"):
-            idx = int(env.get("speechIdx" if phase == "day_speech" else "voteIdx", 0) or 0)
-            living = [pid for i, pid in enumerate(pids) if i < len(alive) and alive[i] == 1]
-            return living[idx] if idx < len(living) else None
-        return env.get("turn")
 
     # ── Partial observation ───────────────────────────────────────────
 

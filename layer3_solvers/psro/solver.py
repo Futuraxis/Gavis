@@ -45,14 +45,16 @@ class PSROSolver(SolverBase):
 
     def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
         super().__init__(adapter, config or PSROConfig())
-        self._gym = GymAdapter(adapter)
+        # 审查 P2-23: 全链路种子化（初始池 / chance 采样 / Q 表初始化）
+        self._rng = np.random.RandomState(getattr(self.config, "seed", None))
+        self._gym = GymAdapter(adapter, seed=getattr(self.config, "seed", None))
 
         # Get state/action dimensions from the gym adapter
         obs_dim = self._gym.observation_space.n
         n_actions = self._gym.action_space.n
 
-        # Initialize with one random policy
-        tmp = np.random.rand(obs_dim, n_actions)
+        # Initialize with one random policy (seeded local rng)
+        tmp = self._rng.rand(obs_dim, n_actions)
         pi = np.eye(n_actions)[tmp.argmax(-1)]
         self._policy_pool: list[np.ndarray] = [pi]
         self._nash_mixture: np.ndarray | None = None
@@ -71,10 +73,13 @@ class PSROSolver(SolverBase):
             legal = self.adapter.get_legal_actions(state)
             return legal[0] if legal else None
 
-        # Encode state
+        # Encode state; mask must come from the SAME state that was passed
+        # in — the gym's internal ``_state`` is stale/None here because all
+        # play runs on clone copies (审查 P1-2).  A stale all-ones mask lets
+        # the mixture sample an occupied cell and select_action returns None.
         obs = self._gym._encode_state(state)
         agent = Agent(self._nash_mixture)
-        mask = self._gym.available_actions()
+        mask = self._gym.available_actions(state)
         action_idx = agent.step(obs, amask=mask)
 
         # Convert back to ActionInstance
@@ -124,6 +129,7 @@ class PSROSolver(SolverBase):
                 epsilon=eps,
                 alpha=alpha,
                 opponent_policy=self._nash_mixture,
+                seed=getattr(self.config, "seed", None),
             )
 
             # Check for duplicate policy (tolerance-aware — exact float

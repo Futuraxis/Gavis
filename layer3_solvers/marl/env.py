@@ -170,6 +170,25 @@ def run_episode(
             traj.payoffs = {p: 0.0 for p in players}
             break
 
+        # Roll forward chance nodes so the recorded successor is a real
+        # decision/terminal state (审查 P1-13): the old code kept the raw
+        # post-action state, whose legal mask is empty on chance nodes
+        # (mahjong claim_pass → draw, texas bet → deal).  An all-zero
+        # ``next_mask`` collapsed the QMix/MAAC bootstrap (targets ≈ −1e9).
+        forced_end = False
+        while adapter.get_node_type(next_state) == "chance":
+            outcomes = adapter.get_chance_outcomes(next_state)
+            if not outcomes:
+                break
+            next_state = adapter.apply_chance(next_state, weighted_choice(outcomes, rng))
+            steps += 1
+            if max_steps and steps >= max_steps:
+                # Pathological chance→chance loop: hard stop without recording.
+                forced_end = True
+                break
+        if forced_end:
+            break
+
         done = adapter.is_terminal(next_state)
         if not done and next_value_fn is not None:
             info["next_value"] = float(next_value_fn(next_state, pid))

@@ -44,8 +44,7 @@ from pathlib import Path
 INTENTS = ["claim", "accuse", "defend", "question", "persuade"]
 
 ROLES = ("wolf", "villager", "seer", "witch", "hunter", "guard")
-ROLE_LABEL = {"wolf": "狼人", "villager": "村民", "seer": "预言家",
-              "witch": "女巫", "hunter": "猎人", "guard": "守卫"}
+ROLE_LABEL = {"wolf": "狼人", "villager": "村民", "seer": "预言家", "witch": "女巫", "hunter": "猎人", "guard": "守卫"}
 
 
 def _count_eq(list_expr: dict, item_var: str, node_id_expr: dict) -> dict:
@@ -120,12 +119,15 @@ class WerewolfRules:
         role_list = ["wolf"] * wolves + ["villager"] * 1  # placeholder, fixed below
         self.players = players
         self.ids = [f"p{i}" for i in range(players)]
-        extras = [r for r, on in (("seer", seers > 0), ("witch", with_witch),
-                                  ("hunter", with_hunter), ("guard", with_guard)) if on]
+        extras = [
+            r
+            for r, on in (("seer", seers > 0), ("witch", with_witch), ("hunter", with_hunter), ("guard", with_guard))
+            if on
+        ]
         self.extras = extras
         villagers = players - wolves - len(extras)
         if wolves < 1 or villagers < 1:
-            raise ValueError(f'players={players} wolves={wolves} extras={len(extras)} leaves {villagers} villagers')
+            raise ValueError(f"players={players} wolves={wolves} extras={len(extras)} leaves {villagers} villagers")
         self.role_pool = ["wolf"] * wolves + ["villager"] * villagers + extras
         self.win_mode = win_mode
         self.first_night_protect = first_night_protect
@@ -150,47 +152,84 @@ class WerewolfRules:
         else:
             ops.append({"op": "setEnv", "key": "phase", "value": {"const": "night_wolf"}})
             ops.append({"op": "setEnv", "key": "round", "value": {"const": 1}})
-            ops.append({"op": "setEnv", "key": "turn", "value": {"const": self.ids[0]}})
+            # 首个存活的狼（座位号最小的狼人）持刀
+            ops.append({"op": "setEnv", "key": "turn", "value": self._role_holder("wolf")})
         return {"description": f"Deal role to {self.ids[i]}", "ops": ops}
 
-    def _night_chain(self, after: str) -> list[dict]:
-        """Branch chain: enter each remaining live night role's phase in order.
+    def _role_holder(self, role: str, alive: bool = True) -> dict:
+        """env.turn value: the (first) player holding ``role``.
 
-        Branches are executed sequentially and may overwrite ``phase``, so
-        the final night_end branch is guarded by "phase still at the
-        chain's entry phase" (i.e. no later role was entered).
+        ``alive=True`` filters to living players (night role phases);
+        ``alive=False`` returns the first holder regardless of state --
+        hunter shooting phases act for the already-dead hunter.
+        """
+        cond = {"and": [_alive_cond(), _role_cond(role)]} if alive else _role_cond(role)
+        return {"get": [{"at": [{"query": {"view": "player", "filter": cond}}, {"const": 0}]}, "id"]}
+
+    def _living(self, idx: dict) -> dict:
+        """env.turn value: the idx-th alive player (day rotation)."""
+        return {
+            "get": [
+                {"at": [{"query": {"view": "player", "filter": _alive_cond()}}, idx]},
+                "id",
+            ]
+        }
+
+    def _night_chain(self, after: str) -> list[dict]:
+        """Branch chain: enter the next live night role's phase in order.
+
+        Nested ``if/else`` gives elif semantics: the first role whose entry
+        condition holds wins and later roles never overwrite ``phase``
+        (the old sequential branches let the seer branch clobber
+        ``night_witch``).  Visited order: guard → witch → seer.
         """
         entry = f"night_{after}"
-        steps = []
-        for role, phase in (("guard", "night_guard"), ("witch", "night_witch"), ("seer", "night_seer")):
-            if not self.has[role] or role == after:
-                continue
-            if role == "witch":
-                # 女巫无药（两瓶都用完）时跳过夜晚阶段，否则无合法动作会卡死
-                cond = {"gt": [{"add": [
-                    {"sub": [{"const": 1}, {"var": "$env.witchSaveUsed"}]},
-                    {"sub": [{"const": 1}, {"var": "$env.witchPoisonUsed"}]},
-                ]}, {"const": 0}]}
-            else:
-                cond = {"gt": [{"call": [f"{role}_alive"]}, {"const": 0}]}
-            steps.append(
-                {
-                    "op": "branch",
-                    "if": cond,
-                    "then": [
-                        {"op": "setEnv", "key": "phase", "value": {"const": phase}},
-                        {"op": "setEnv", "key": "turn", "value": {"const": self.ids[0]}},
-                    ],
-                }
-            )
-        steps.append(
+        roles = [r for r in ("guard", "witch", "seer") if self.has[r] and r != after]
+        # Fallback: still at the chain's entry phase → the night is over.
+        ops: list[dict] = [
             {
                 "op": "branch",
                 "if": {"eq": [{"var": "$env.phase"}, {"const": entry}]},
                 "then": [{"op": "setEnv", "key": "phase", "value": {"const": "night_end"}}],
             }
-        )
-        return steps
+        ]
+        for role in reversed(roles):
+            if role == "witch":
+                # 女巫入场：存活 且 至少有一瓶药能用。
+                # 药可用 ≠ 入场充分：被刀的女巫在自救关闭时不能救自己，
+                # 若毒也用过则没有任何合法动作 → 该夜直接跳过女巫阶段。
+                heal_ok = {
+                    "and": [
+                        {"eq": [{"var": "$env.witchSaveUsed"}, {"const": 0}]},
+                        {"neq": [{"var": "$env.nightKill"}, {"const": None}]},
+                        {
+                            "or": [
+                                {"eq": [{"var": "$constants.witch_self_save"}, {"const": 1}]},
+                                {"neq": [{"var": "$env.nightKill"}, self._role_holder("witch")]},
+                            ]
+                        },
+                    ]
+                }
+                cond = {
+                    "and": [
+                        {"gt": [{"call": ["witch_alive"]}, {"const": 0}]},
+                        {"or": [heal_ok, {"eq": [{"var": "$env.witchPoisonUsed"}, {"const": 0}]}]},
+                    ]
+                }
+            else:
+                cond = {"gt": [{"call": [f"{role}_alive"]}, {"const": 0}]}
+            ops = [
+                {
+                    "op": "branch",
+                    "if": cond,
+                    "then": [
+                        {"op": "setEnv", "key": "phase", "value": {"const": f"night_{role}"}},
+                        {"op": "setEnv", "key": "turn", "value": self._role_holder(role)},
+                    ],
+                    "else": ops,
+                }
+            ]
+        return ops
 
     def _win_checks(self) -> list[dict]:
         """胜负判定。狼赢条件按 win_mode：side = 民或神全灭；total = 好人全灭。"""
@@ -239,7 +278,7 @@ class WerewolfRules:
             {"op": "setEnv", "key": "voteIdx", "value": {"const": 0}},
             {"op": "inc", "key": "round", "by": 1},
             {"op": "setEnv", "key": "phase", "value": {"const": "night_wolf"}},
-            {"op": "setEnv", "key": "turn", "value": {"const": self.ids[0]}},
+            {"op": "setEnv", "key": "turn", "value": self._role_holder("wolf")},
         ]
 
     def _kill_player(self, pid_expr: dict) -> dict:
@@ -299,10 +338,16 @@ class WerewolfRules:
             e["do_check"] = {
                 "description": "Seer checks one player's role",
                 "ops": [
-                    {"op": "setEnv", "key": "seerResult", "value": {"at": [
-                        {"var": "$roles"},
-                        {"call": ["player_index", {"get": [{"var": "$target"}, "id"]}]},
-                    ]}},
+                    {
+                        "op": "setEnv",
+                        "key": "seerResult",
+                        "value": {
+                            "at": [
+                                {"var": "$roles"},
+                                {"call": ["player_index", {"get": [{"var": "$target"}, "id"]}]},
+                            ]
+                        },
+                    },
                     {"op": "setEnv", "key": "phase", "value": {"const": "night_end"}},
                 ],
             }
@@ -359,9 +404,7 @@ class WerewolfRules:
             )
         # 3) 守卫目标轮换（守过的不能连守）
         if self.has["guard"]:
-            night_ops.append(
-                {"op": "setEnv", "key": "guardLastTarget", "value": {"var": "$env.guardTarget"}}
-            )
+            night_ops.append({"op": "setEnv", "key": "guardLastTarget", "value": {"var": "$env.guardTarget"}})
         # 4) 猎人被夜杀 → 进入开枪阶段
         if self.has["hunter"]:
             night_ops.append(
@@ -388,7 +431,8 @@ class WerewolfRules:
                     },
                     "then": [
                         {"op": "setEnv", "key": "phase", "value": {"const": "night_hunter"}},
-                        {"op": "setEnv", "key": "turn", "value": {"const": self.ids[0]}},
+                        # 猎人此时已死亡：turn 必须是已死的猎人本人
+                        {"op": "setEnv", "key": "turn", "value": self._role_holder("hunter", alive=False)},
                     ],
                 }
             )
@@ -409,7 +453,7 @@ class WerewolfRules:
                             {"op": "setEnv", "key": "witchSavedTarget", "value": {"const": None}},
                             {"op": "setEnv", "key": "speechIdx", "value": {"const": 0}},
                             {"op": "setEnv", "key": "phase", "value": {"const": "day_speech"}},
-                            {"op": "setEnv", "key": "turn", "value": {"const": self.ids[0]}},
+                            {"op": "setEnv", "key": "turn", "value": self._living({"const": 0})},
                         ],
                     },
                 ],
@@ -442,7 +486,7 @@ class WerewolfRules:
                             {"op": "setEnv", "key": "witchSavedTarget", "value": {"const": None}},
                             {"op": "setEnv", "key": "speechIdx", "value": {"const": 0}},
                             {"op": "setEnv", "key": "phase", "value": {"const": "day_speech"}},
-                            {"op": "setEnv", "key": "turn", "value": {"const": self.ids[0]}},
+                            {"op": "setEnv", "key": "turn", "value": self._living({"const": 0})},
                         ],
                     },
                 ],
@@ -452,32 +496,53 @@ class WerewolfRules:
         e["do_speak"] = {
             "description": "Record the speech, advance the speaking turn",
             "ops": [
-                {"op": "append", "array": "speechLog", "value": {
-                    "speaker": {"var": "$env.turn"},
-                    "intent": {"get": [{"var": "$intent"}, "id"]},
-                    "text": {"var": "$text"},
-                    "round": {"var": "$env.round"},
-                }},
+                {
+                    "op": "append",
+                    "array": "speechLog",
+                    "value": {
+                        "speaker": {"var": "$env.turn"},
+                        "intent": {"get": [{"var": "$intent"}, "id"]},
+                        "text": {"var": "$text"},
+                        "round": {"var": "$env.round"},
+                    },
+                },
                 {"op": "inc", "key": "speechIdx", "by": 1},
-                {"op": "branch", "if": {"gte": [{"var": "$env.speechIdx"}, {"call": ["alive_count"]}]},
-                 "then": [
-                     {"op": "setEnv", "key": "phase", "value": {"const": "day_vote"}},
-                     {"op": "setEnv", "key": "voteIdx", "value": {"const": 0}},
-                     {"op": "setEnv", "key": "turn", "value": {"const": self.ids[0]}},
-                 ]},
+                {
+                    "op": "branch",
+                    "if": {"gte": [{"var": "$env.speechIdx"}, {"call": ["alive_count"]}]},
+                    "then": [
+                        {"op": "setEnv", "key": "phase", "value": {"const": "day_vote"}},
+                        {"op": "setEnv", "key": "voteIdx", "value": {"const": 0}},
+                        {"op": "setEnv", "key": "turn", "value": self._living({"const": 0})},
+                    ],
+                    "else": [
+                        # 规则层推进发言轮转：turn 指向下一位存活玩家
+                        {"op": "setEnv", "key": "turn", "value": self._living({"var": "$env.speechIdx"})},
+                    ],
+                },
             ],
         }
         e["do_vote"] = {
             "description": "Record the vote, advance the voting turn",
             "ops": [
-                {"op": "append", "array": "voteLog", "value": {
-                    "voter": {"var": "$env.turn"},
-                    "target": {"get": [{"var": "$target"}, "id"]},
-                    "round": {"var": "$env.round"},
-                }},
+                {
+                    "op": "append",
+                    "array": "voteLog",
+                    "value": {
+                        "voter": {"var": "$env.turn"},
+                        "target": {"get": [{"var": "$target"}, "id"]},
+                        "round": {"var": "$env.round"},
+                    },
+                },
                 {"op": "inc", "key": "voteIdx", "by": 1},
-                {"op": "branch", "if": {"gte": [{"var": "$env.voteIdx"}, {"call": ["alive_count"]}]},
-                 "then": [{"op": "setEnv", "key": "phase", "value": {"const": "vote_resolve"}}]},
+                {
+                    "op": "branch",
+                    "if": {"gte": [{"var": "$env.voteIdx"}, {"call": ["alive_count"]}]},
+                    "then": [{"op": "setEnv", "key": "phase", "value": {"const": "vote_resolve"}}],
+                    "else": [
+                        {"op": "setEnv", "key": "turn", "value": self._living({"var": "$env.voteIdx"})},
+                    ],
+                },
             ],
         }
 
@@ -510,7 +575,8 @@ class WerewolfRules:
                     },
                     "then": [
                         {"op": "setEnv", "key": "phase", "value": {"const": "vote_hunter"}},
-                        {"op": "setEnv", "key": "turn", "value": {"const": self.ids[0]}},
+                        # 被放逐的猎人已死亡：turn 必须是猎人本人
+                        {"op": "setEnv", "key": "turn", "value": self._role_holder("hunter", alive=False)},
                     ],
                 }
             )
@@ -559,111 +625,174 @@ class WerewolfRules:
             return {"target": {"view": "player", "domain": {"ref": "alive_players"}}}
 
         actions = [
-            {"id": "kill", "type": "night", "phases": ["night_wolf"],
-             "actor": {"var": "$env.turn"}, "params": target_param(),
-             "legal": {"const": True}, "effectRef": "do_kill",
-             "canonicalKey": {"template": "kill:{$target.id}"}},
+            {
+                "id": "kill",
+                "type": "night",
+                "phases": ["night_wolf"],
+                "actor": {"var": "$env.turn"},
+                "params": target_param(),
+                "legal": {"const": True},
+                "effectRef": "do_kill",
+                "canonicalKey": {"template": "kill:{$target.id}"},
+            },
         ]
         if self.has["guard"]:
             actions.append(
-                {"id": "guard", "type": "night", "phases": ["night_guard"],
-                 "actor": {"var": "$env.turn"}, "params": target_param(),
-                 "legal": {"neq": [{"get": [{"var": "$target"}, "id"]}, {"var": "$env.guardLastTarget"}]},
-                 "effectRef": "do_guard",
-                 "canonicalKey": {"template": "guard:{$target.id}"}}
+                {
+                    "id": "guard",
+                    "type": "night",
+                    "phases": ["night_guard"],
+                    "actor": {"var": "$env.turn"},
+                    "params": target_param(),
+                    "legal": {"neq": [{"get": [{"var": "$target"}, "id"]}, {"var": "$env.guardLastTarget"}]},
+                    "effectRef": "do_guard",
+                    "canonicalKey": {"template": "guard:{$target.id}"},
+                }
             )
         if self.has["witch"]:
             actions.append(
-                {"id": "heal", "type": "night", "phases": ["night_witch"],
-                 "actor": {"var": "$env.turn"},
-                 "params": {"target": {"view": "player", "domain": {"expr": [{"var": "$env.nightKill"}]}}},
-                 "legal": {"and": [
-                     {"eq": [{"var": "$env.witchSaveUsed"}, {"const": 0}]},
-                     {"neq": [{"var": "$env.nightKill"}, {"const": None}]},
-                 ]},
-                 "effectRef": "do_heal",
-                 "canonicalKey": {"template": "heal:{$target}"}}
+                {
+                    "id": "heal",
+                    "type": "night",
+                    "phases": ["night_witch"],
+                    "actor": {"var": "$env.turn"},
+                    "params": {"target": {"view": "player", "domain": {"expr": [{"var": "$env.nightKill"}]}}},
+                    "legal": {
+                        "and": [
+                            {"eq": [{"var": "$env.witchSaveUsed"}, {"const": 0}]},
+                            {"neq": [{"var": "$env.nightKill"}, {"const": None}]},
+                            # 自救仅当 witch_self_save 开启（默认 false：刀中女巫不可自救）
+                            {
+                                "or": [
+                                    {"eq": [{"var": "$constants.witch_self_save"}, {"const": 1}]},
+                                    {"neq": [{"var": "$env.nightKill"}, {"var": "$env.turn"}]},
+                                ]
+                            },
+                        ]
+                    },
+                    "effectRef": "do_heal",
+                    "canonicalKey": {"template": "heal:{$target}"},
+                }
             )
             actions.append(
-                {"id": "poison", "type": "night", "phases": ["night_witch"],
-                 "actor": {"var": "$env.turn"}, "params": target_param(),
-                 "legal": {"eq": [{"var": "$env.witchPoisonUsed"}, {"const": 0}]},
-                 "effectRef": "do_poison",
-                 "canonicalKey": {"template": "poison:{$target.id}"}}
+                {
+                    "id": "poison",
+                    "type": "night",
+                    "phases": ["night_witch"],
+                    "actor": {"var": "$env.turn"},
+                    "params": target_param(),
+                    "legal": {"eq": [{"var": "$env.witchPoisonUsed"}, {"const": 0}]},
+                    "effectRef": "do_poison",
+                    "canonicalKey": {"template": "poison:{$target.id}"},
+                }
             )
         if self.has["seer"]:
             actions.append(
-                {"id": "check", "type": "night", "phases": ["night_seer"],
-                 "actor": {"var": "$env.turn"}, "params": target_param(),
-                 "legal": {"const": True}, "effectRef": "do_check",
-                 "canonicalKey": {"template": "check:{$target.id}"}}
+                {
+                    "id": "check",
+                    "type": "night",
+                    "phases": ["night_seer"],
+                    "actor": {"var": "$env.turn"},
+                    "params": target_param(),
+                    "legal": {"const": True},
+                    "effectRef": "do_check",
+                    "canonicalKey": {"template": "check:{$target.id}"},
+                }
             )
         if self.has["hunter"]:
             # 夜晚死亡开枪 / 放逐死亡开枪：两个 effector（结算去向不同）
             actions.append(
-                {"id": "shoot", "type": "night", "phases": ["night_hunter"],
-                 "actor": {"var": "$env.turn"},
-                 "params": {"target": {"view": "shoot_target", "domain": {"ref": "shoot_targets"}}},
-                 "legal": {"const": True}, "effectRef": "do_hunter_shoot",
-                 "canonicalKey": {"template": "shoot:{$target.id}"}}
+                {
+                    "id": "shoot",
+                    "type": "night",
+                    "phases": ["night_hunter"],
+                    "actor": {"var": "$env.turn"},
+                    "params": {"target": {"view": "shoot_target", "domain": {"ref": "shoot_targets"}}},
+                    "legal": {"const": True},
+                    "effectRef": "do_hunter_shoot",
+                    "canonicalKey": {"template": "shoot:{$target.id}"},
+                }
             )
             if self.hunter_shoots_when_lynched:
                 actions.append(
-                    {"id": "shoot_lynched", "type": "night", "phases": ["vote_hunter"],
-                     "actor": {"var": "$env.turn"},
-                     "params": {"target": {"view": "shoot_target", "domain": {"ref": "shoot_targets"}}},
-                     "legal": {"const": True}, "effectRef": "do_vote_hunter_shoot",
-                     "canonicalKey": {"template": "shoot:{$target.id}"}}
+                    {
+                        "id": "shoot_lynched",
+                        "type": "night",
+                        "phases": ["vote_hunter"],
+                        "actor": {"var": "$env.turn"},
+                        "params": {"target": {"view": "shoot_target", "domain": {"ref": "shoot_targets"}}},
+                        "legal": {"const": True},
+                        "effectRef": "do_vote_hunter_shoot",
+                        "canonicalKey": {"template": "shoot:{$target.id}"},
+                    }
                 )
         actions.append(
-            {"id": "speak", "type": "speech", "phases": ["day_speech"],
-             "actor": {"var": "$env.turn"},
-             "params": {"intent": {"view": "intent", "domain": {"ref": "intents"}},
-                        "text": {"type": "text"}},
-             "legal": {"const": True}, "effectRef": "do_speak",
-             "canonicalKey": {"template": "speak:{$intent.id}"}}
+            {
+                "id": "speak",
+                "type": "speech",
+                "phases": ["day_speech"],
+                "actor": {"var": "$env.turn"},
+                "params": {"intent": {"view": "intent", "domain": {"ref": "intents"}}, "text": {"type": "text"}},
+                "legal": {"const": True},
+                "effectRef": "do_speak",
+                "canonicalKey": {"template": "speak:{$intent.id}"},
+            }
         )
         actions.append(
-            {"id": "vote", "type": "vote", "phases": ["day_vote"],
-             "actor": {"var": "$env.turn"}, "params": target_param(),
-             "legal": {"const": True}, "effectRef": "do_vote",
-             "canonicalKey": {"template": "vote:{$target.id}"}}
+            {
+                "id": "vote",
+                "type": "vote",
+                "phases": ["day_vote"],
+                "actor": {"var": "$env.turn"},
+                "params": target_param(),
+                "legal": {"const": True},
+                "effectRef": "do_vote",
+                "canonicalKey": {"template": "vote:{$target.id}"},
+            }
         )
         return actions
 
     def _chance(self) -> list[dict]:
         chance = [
-            {"id": f"deal_{i}", "phases": [f"deal_{i}"],
-             "params": {"role": {"view": "role", "domain": {"ref": "unassigned_roles"}}},
-             "probability": {"uniform": {"over": "role"}},
-             "effectRef": f"do_deal_{i}",
-             "canonicalKey": {"template": "deal:{outcome}"}}
+            {
+                "id": f"deal_{i}",
+                "phases": [f"deal_{i}"],
+                "params": {"role": {"view": "role", "domain": {"ref": "unassigned_roles"}}},
+                "probability": {"uniform": {"over": "role"}},
+                "effectRef": f"do_deal_{i}",
+                "canonicalKey": {"template": "deal:{outcome}"},
+            }
             for i in range(self.players)
         ]
         chance.append(
-            {"id": "night_end", "phases": ["night_end"],
-             "params": {"resolve": {"view": "resolve", "domain": {"ref": "resolves"}}},
-             "probability": {"explicit": [{"outcome": "resolve", "prob": 1.0}]},
-             "effectMap": {"resolve": "do_night_end"},
-             "canonicalKey": {"template": "night:{outcome}"}}
+            {
+                "id": "night_end",
+                "phases": ["night_end"],
+                "params": {"resolve": {"view": "resolve", "domain": {"ref": "resolves"}}},
+                "probability": {"explicit": [{"outcome": "resolve", "prob": 1.0}]},
+                "effectMap": {"resolve": "do_night_end"},
+                "canonicalKey": {"template": "night:{outcome}"},
+            }
         )
         chance.append(
-            {"id": "vote_resolve", "phases": ["vote_resolve"],
-             "params": {"resolve": {"view": "resolve", "domain": {"ref": "resolves"}}},
-             "probability": {"explicit": [{"outcome": "resolve", "prob": 1.0}]},
-             "effectMap": {"resolve": "do_vote_resolve"},
-             "canonicalKey": {"template": "resolve:{outcome}"}}
+            {
+                "id": "vote_resolve",
+                "phases": ["vote_resolve"],
+                "params": {"resolve": {"view": "resolve", "domain": {"ref": "resolves"}}},
+                "probability": {"explicit": [{"outcome": "resolve", "prob": 1.0}]},
+                "effectMap": {"resolve": "do_vote_resolve"},
+                "canonicalKey": {"template": "resolve:{outcome}"},
+            }
         )
         return chance
 
     def _phases(self) -> list[dict]:
-        phases = (
-            [{"id": f"deal_{i}", "actions": [], "description": f"Deal role to {self.ids[i]}"}
-             for i in range(self.players)]
-            + [
-                {"id": "night_wolf", "actions": ["kill"], "description": "狼人杀人"},
-            ]
-        )
+        phases = [
+            {"id": f"deal_{i}", "actions": [], "description": f"Deal role to {self.ids[i]}"}
+            for i in range(self.players)
+        ] + [
+            {"id": "night_wolf", "actions": ["kill"], "description": "狼人杀人"},
+        ]
         if self.has["guard"]:
             phases.append({"id": "night_guard", "actions": ["guard"], "description": "守卫守人"})
         if self.has["witch"]:
@@ -673,11 +802,13 @@ class WerewolfRules:
         phases.append({"id": "night_end", "actions": [], "description": "夜晚结算"})
         if self.has["hunter"]:
             phases.append({"id": "night_hunter", "actions": ["shoot"], "description": "猎人开枪"})
-        phases.extend([
-            {"id": "day_speech", "actions": ["speak"], "description": "存活玩家轮流发言"},
-            {"id": "day_vote", "actions": ["vote"], "description": "存活玩家轮流投票"},
-            {"id": "vote_resolve", "actions": [], "description": "放逐结算"},
-        ])
+        phases.extend(
+            [
+                {"id": "day_speech", "actions": ["speak"], "description": "存活玩家轮流发言"},
+                {"id": "day_vote", "actions": ["vote"], "description": "存活玩家轮流投票"},
+                {"id": "vote_resolve", "actions": [], "description": "放逐结算"},
+            ]
+        )
         if self.has["hunter"] and self.hunter_shoots_when_lynched:
             phases.append({"id": "vote_hunter", "actions": ["shoot"], "description": "猎人被放逐开枪"})
         phases.append({"id": "game_over", "actions": [], "description": "Game over"})
@@ -711,10 +842,12 @@ class WerewolfRules:
         queries = {
             "unassigned_roles": {
                 "view": "role",
-                "filter": {"lt": [
-                    _count_eq({"var": "$roles"}, "$r", {"get": [{"var": "$node"}, "id"]}),
-                    _count_eq({"var": "$constants.role_pool"}, "$p", {"get": [{"var": "$node"}, "id"]}),
-                ]},
+                "filter": {
+                    "lt": [
+                        _count_eq({"var": "$roles"}, "$r", {"get": [{"var": "$node"}, "id"]}),
+                        _count_eq({"var": "$constants.role_pool"}, "$p", {"get": [{"var": "$node"}, "id"]}),
+                    ]
+                },
             },
             "alive_players": {"view": "player", "filter": alive_filter},
             "intents": {"view": "intent"},
@@ -742,9 +875,15 @@ class WerewolfRules:
             "alive_count": {
                 "description": "Number of alive players",
                 "params": [],
-                "expr": {"count": {"filter": {
-                    "list": {"var": "$alive"}, "as": "$v",
-                    "where": {"eq": [{"var": "$v"}, {"const": 1}]}}}},
+                "expr": {
+                    "count": {
+                        "filter": {
+                            "list": {"var": "$alive"},
+                            "as": "$v",
+                            "where": {"eq": [{"var": "$v"}, {"const": 1}]},
+                        }
+                    }
+                },
             },
             "alive_wolves": {"params": [], "expr": _alive_role_count("wolf")},
             "alive_villagers": {"params": [], "expr": _alive_role_count("villager")},
@@ -760,8 +899,12 @@ class WerewolfRules:
                             "filter": {
                                 "and": [
                                     _alive_cond(),
-                                    {"neq": [{"at": [{"var": "$roles"}, {"get": [{"var": "$node"}, "_index"]}]},
-                                            {"const": "wolf"}]},
+                                    {
+                                        "neq": [
+                                            {"at": [{"var": "$roles"}, {"get": [{"var": "$node"}, "_index"]}]},
+                                            {"const": "wolf"},
+                                        ]
+                                    },
                                 ]
                             },
                         }
@@ -773,26 +916,34 @@ class WerewolfRules:
                 "params": [],
                 "expr": {
                     "get": [
-                        {"at": [
-                            {"sort": {
-                                "list": {"group": {
-                                    "list": {
-                                        "filter": {
-                                            "list": {"var": "$voteLog"},
-                                            "as": "$v",
-                                            "where": {"eq": [
-                                                {"get": [{"var": "$v"}, "round"]},
-                                                {"var": "$env.round"},
-                                            ]},
-                                        }
-                                    },
-                                    "by": {"get": [{"var": "$item"}, "target"]},
-                                }},
-                                "by": {"get": [{"var": "$node"}, "count"]},
-                                "reverse": True,
-                            }},
-                            {"const": 0},
-                        ]},
+                        {
+                            "at": [
+                                {
+                                    "sort": {
+                                        "list": {
+                                            "group": {
+                                                "list": {
+                                                    "filter": {
+                                                        "list": {"var": "$voteLog"},
+                                                        "as": "$v",
+                                                        "where": {
+                                                            "eq": [
+                                                                {"get": [{"var": "$v"}, "round"]},
+                                                                {"var": "$env.round"},
+                                                            ]
+                                                        },
+                                                    }
+                                                },
+                                                "by": {"get": [{"var": "$item"}, "target"]},
+                                            }
+                                        },
+                                        "by": {"get": [{"var": "$node"}, "count"]},
+                                        "reverse": True,
+                                    }
+                                },
+                                {"const": 0},
+                            ]
+                        },
                         "key",
                     ]
                 },
@@ -837,22 +988,30 @@ class WerewolfRules:
         for pid in self.ids:
             role_at = {"at": [{"var": "$roles"}, {"call": ["player_index", {"const": pid}]}]}
             for win_role in ("wolf", "good"):
-                utility.append({
-                    "player": pid,
-                    "value": 1 if win_role == "wolf" else -1,
-                    "when": {"and": [
-                        {"eq": [{"get": ["$env", "winner"]}, win_role]},
-                        {"eq": [role_at, {"const": "wolf"}]},
-                    ]},
-                })
-                utility.append({
-                    "player": pid,
-                    "value": -1 if win_role == "wolf" else 1,
-                    "when": {"and": [
-                        {"eq": [{"get": ["$env", "winner"]}, win_role]},
-                        {"neq": [role_at, {"const": "wolf"}]},
-                    ]},
-                })
+                utility.append(
+                    {
+                        "player": pid,
+                        "value": 1 if win_role == "wolf" else -1,
+                        "when": {
+                            "and": [
+                                {"eq": [{"get": ["$env", "winner"]}, win_role]},
+                                {"eq": [role_at, {"const": "wolf"}]},
+                            ]
+                        },
+                    }
+                )
+                utility.append(
+                    {
+                        "player": pid,
+                        "value": -1 if win_role == "wolf" else 1,
+                        "when": {
+                            "and": [
+                                {"eq": [{"get": ["$env", "winner"]}, win_role]},
+                                {"neq": [role_at, {"const": "wolf"}]},
+                            ]
+                        },
+                    }
+                )
         return {
             "meta": {
                 "name": "werewolf",
@@ -885,11 +1044,9 @@ class WerewolfRules:
             "phases": self._phases(),
             "visibility": {"default": "public"},
             "terminal": [
-                {"id": "game_over",
-                 "condition": {"neq": [{"get": ["$env", "winner"]}, {"const": None}]}},
+                {"id": "game_over", "condition": {"neq": [{"get": ["$env", "winner"]}, {"const": None}]}},
                 # 轮次上限（法官干预）：超限判平局（winner 保持 None）
-                {"id": "max_rounds",
-                 "condition": {"gte": [{"get": ["$env", "round"]}, {"const": self.max_rounds}]}},
+                {"id": "max_rounds", "condition": {"gte": [{"get": ["$env", "round"]}, {"const": self.max_rounds}]}},
             ],
             "utility": utility,
         }
@@ -909,9 +1066,14 @@ def gen_rules(
 ) -> dict:
     """Generate the werewolf rules dict (see WerewolfRules docstring)."""
     return WerewolfRules(
-        players=players, wolves=wolves, seers=seers,
-        with_witch=with_witch, with_hunter=with_hunter, with_guard=with_guard,
-        win_mode=win_mode, first_night_protect=first_night_protect,
+        players=players,
+        wolves=wolves,
+        seers=seers,
+        with_witch=with_witch,
+        with_hunter=with_hunter,
+        with_guard=with_guard,
+        win_mode=win_mode,
+        first_night_protect=first_night_protect,
         witch_self_save=witch_self_save,
         hunter_shoots_when_lynched=hunter_shoots_when_lynched,
     ).build()
@@ -933,8 +1095,12 @@ def main() -> None:
     args = parser.parse_args()
 
     rules = gen_rules(
-        args.players, args.wolves, args.seers,
-        with_witch=args.with_witch, with_hunter=args.with_hunter, with_guard=args.with_guard,
+        args.players,
+        args.wolves,
+        args.seers,
+        with_witch=args.with_witch,
+        with_hunter=args.with_hunter,
+        with_guard=args.with_guard,
         win_mode=args.win_mode,
         first_night_protect=not args.no_first_night_protect,
         witch_self_save=args.witch_self_save,

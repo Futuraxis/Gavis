@@ -71,8 +71,14 @@ class MahjongAdapter(GameEngine):
         env = state.get("env", {})
         pid = player_id
 
+        # 审查 J1: claim 阶段 env.turn 仍是弃牌者，真正行动者是
+        # claim_queue 队头 — 用 get_current_player 判定 my_turn/legal，
+        # 否则响应者看到空的 legal 而弃牌者看到一堆 claim 选项。
+        current = self.get_current_player(state)
+        my_turn = current == player_id and env.get("phase") in ("action", "claim")
+
         legal = []
-        if not self.is_terminal(state) and env.get("turn") == player_id:
+        if my_turn and not self.is_terminal(state):
             for action in self.get_legal_actions(state):
                 legal.append(
                     {
@@ -91,7 +97,7 @@ class MahjongAdapter(GameEngine):
             "last_drawn": env.get("last_drawn"),
             "phase": env.get("phase"),
             "turn": env.get("turn"),
-            "my_turn": env.get("turn") == player_id and env.get("phase") in ("action", "claim"),
+            "my_turn": my_turn,
             "done": list(env.get("done", [])),
             "winners": list(env.get("winners", [])),
             "payoffs": list(env.get("payoffs", [])),
