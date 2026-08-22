@@ -104,7 +104,8 @@ class QMixSolver(SolverBase):
         legal = self.adapter.get_legal_actions(state)
         if not legal:
             return None
-        mask = self._action_space.legal_mask(state)
+        # 复用已求值的 legal（legal_mask 支持传入，避免第二次引擎求值）
+        mask = self._action_space.legal_mask(state, legal)
         with torch.no_grad():
             q = self._q_nets[player](
                 torch.as_tensor(self._encoder.encode_obs(state, player), device=self.device).unsqueeze(0)
@@ -134,6 +135,7 @@ class QMixSolver(SolverBase):
                 self._encoder,
                 self._action_space,
                 self._select_train,
+                max_steps=4096,  # 病理局面步数上限（正常对局远低于此）
             )
             for t in traj.transitions:
                 self._buffer.push(t)

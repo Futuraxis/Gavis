@@ -92,6 +92,18 @@ class SolverAdapter(Protocol):
         """Return a new state after applying the chance outcome."""
         ...
 
+    def sample_chance(self, state: State) -> tuple[ChanceOutcome, State]:
+        """(Optional) Sample one chance outcome and return ``(outcome, new_state)``.
+
+        Engine-side convenience: ``GameEngine`` implements it with seeded
+        RNG.  Custom adapters may provide their own sampling, but SOLVERS
+        MUST NOT rely on this method — they must sample via
+        ``get_chance_outcomes`` + ``apply_chance`` (C-06).
+        """
+        raise NotImplementedError(
+            "sample_chance is optional; sample via get_chance_outcomes + apply_chance instead"
+        )
+
     def is_terminal(self, state: State) -> bool:
         """Return True if the state is terminal."""
         ...

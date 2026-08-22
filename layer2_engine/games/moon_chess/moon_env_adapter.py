@@ -77,12 +77,10 @@ class MoonChessAdapter(GameEngine):
             if board is not None:
                 result["_arrays"]["board"] = list(board)
 
-        # Merge env
+        # Merge env（update 已覆盖 turn 等全部字段，无需单独分支）
         ext_env = state.get("env", {})
         if ext_env:
             result["env"].update(ext_env)
-            if "turn" in ext_env:
-                result["env"]["turn"] = ext_env.get("turn", "p_black")
 
         # Piece order (migrate from v4.1 dict format if needed)
         ext_po = ext_arrays.get("pieceOrder")
@@ -105,7 +103,9 @@ class MoonChessAdapter(GameEngine):
 
         Feature layout:
           0-26:    9 cells × 3 one-hot (empty / self / opponent)
-          27-35:   9 cells × age encoding (1=latest … 3=oldest)
+          27-35:   9 cells × age encoding (1=oldest … 3=latest; pieceOrder
+                  appends on placement and trims from the head, so index 0
+                  is the oldest piece)
           36:      whose turn (1 = perspective player)
           37:      normalized step count
         """
@@ -156,9 +156,3 @@ class MoonChessAdapter(GameEngine):
             except (ValueError, IndexError):
                 pass
         return mask
-
-    def apply_action(self, state: dict, action) -> dict:
-        """Apply action and increment step count."""
-        new_state = super().apply_action(state, action)
-        new_state["env"]["round"] = state["env"].get("round", 0) + 1
-        return new_state

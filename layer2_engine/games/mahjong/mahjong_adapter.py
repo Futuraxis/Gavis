@@ -77,6 +77,8 @@ class MahjongAdapter(GameEngine):
         current = self.get_current_player(state)
         my_turn = current == player_id and env.get("phase") in ("action", "claim")
 
+        # J2 备注：legal 全量展开（含 choose 和牌枚举）只为 UI/LLM 消费者服务；
+        # MARL 编码器直读数组绕过本 obs，热路径不受影响。
         legal = []
         if my_turn and not self.is_terminal(state):
             for action in self.get_legal_actions(state):

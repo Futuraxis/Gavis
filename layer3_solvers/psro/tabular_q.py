@@ -17,7 +17,6 @@ def tabular_q_best_response(
     epsilon: float = 0.1,
     alpha: float = 0.1,
     gamma: float = 0.99,
-    eval_interval: int = -1,
     opponent_policy: np.ndarray | None = None,
     seed: int | None = None,
 ) -> np.ndarray:
@@ -30,8 +29,6 @@ def tabular_q_best_response(
         Total training steps.
     epsilon, alpha, gamma : float
         Q-learning hyper-parameters.
-    eval_interval : int
-        Interval for evaluation (-1 = no evaluation).
     opponent_policy : np.ndarray, optional
         Fixed opponent policy. If None, uses random.
     seed : int, optional

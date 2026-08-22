@@ -13,11 +13,19 @@ terminal state ``get_utility(state, p)`` is assigned to **each player's
 own last transition** (marked ``done=True``).  In turn-based games a
 player's final decision is often not the game-ending decision, and
 without this the terminal utility would never enter that player's
-returns.  Earlier transitions bootstrap normally.
+returns.  Earlier transitions bootstrap normally.  (Design trade-off:
+the payoff lands undiscounted on the player's last decision even though
+the opponent may act afterwards — a mild overestimate at γ=0.99; revisit
+if γ is lowered.)
+
+Episodes that end abnormally (exception, ``max_steps``, dead chance/player
+node) mark every recorded transition ``done=True`` with zero payoffs, so
+HAPPO/MAAC never bootstrap a truncated episode as if it continued.
 """
 
 from __future__ import annotations
 
+import logging
 import random
 from dataclasses import dataclass, field
 from typing import Callable
@@ -32,6 +40,8 @@ from layer2_engine.interfaces.solver_adapter import (
 
 from .action_space import ActionSpace
 from .encoders import GameEncoder
+
+logger = logging.getLogger(__name__)
 
 # ``select_idx`` returns the chosen action index plus an info dict
 # (HAPPO fills ``log_prob`` / ``value`` / ``next_value``; others ignore it).
@@ -79,6 +89,10 @@ def resolve_players(adapter: SolverAdapter) -> list[str]:
     players = env.get("player_ids")
     if players:
         return [str(p) for p in players]
+    logger.warning(
+        "resolve_players: no rules['players'] / env.player_ids — falling back to "
+        "['p_black', 'p_white']; a game with different player ids will misalign agents"
+    )
     return ["p_black", "p_white"]
 
 
@@ -136,38 +150,49 @@ def run_episode(
     traj = EpisodeTrajectory()
     last_by_player: dict[int, Transition] = {}
     steps = 0
+    abnormal = False
+
+    def _abort():
+        """Abnormal episode end: record nothing further, flag truncation."""
+        nonlocal abnormal
+        abnormal = True
 
     while True:
         if max_steps and steps >= max_steps:
+            _abort()
             break
         steps += 1
         node = adapter.get_node_type(state)
         if node == "chance":
             outcomes = adapter.get_chance_outcomes(state)
             if not outcomes:
+                _abort()
                 break
             state = adapter.apply_chance(state, weighted_choice(outcomes, rng))
             continue
         if node != "player":
-            break
+            break  # terminal — normal end, payoffs settled below
         current = adapter.get_current_player(state)
         if current is None or current not in player_idx:
+            _abort()
             break
         pid = player_idx[current]
         legal = adapter.get_legal_actions(state)
         if not legal:
+            _abort()
             break
         mask = action_space.legal_mask(state, legal)
         action_idx, info = select_idx(pid, state, mask)
         action = action_space.action_from_index(action_idx, legal)
         if action is None:
+            _abort()
             break
         try:
             next_state = adapter.apply_action(state, action)
         except Exception:
             # Engine/rules edge case (e.g. mahjong degenerate chi chains
             # crashing payoff evaluation): end the episode as a draw.
-            traj.payoffs = {p: 0.0 for p in players}
+            _abort()
             break
 
         # Roll forward chance nodes so the recorded successor is a real
@@ -179,6 +204,9 @@ def run_episode(
         while adapter.get_node_type(next_state) == "chance":
             outcomes = adapter.get_chance_outcomes(next_state)
             if not outcomes:
+                # Dead chance node: the successor is not a decision state —
+                # abort rather than record a bootstrap-free transition.
+                forced_end = True
                 break
             next_state = adapter.apply_chance(next_state, weighted_choice(outcomes, rng))
             steps += 1
@@ -187,6 +215,7 @@ def run_episode(
                 forced_end = True
                 break
         if forced_end:
+            _abort()
             break
 
         done = adapter.is_terminal(next_state)
@@ -218,6 +247,14 @@ def run_episode(
         state = next_state
         if done:
             break
+
+    if abnormal:
+        # Truncated/aborted episode: zero payoffs and close every recorded
+        # transition so HAPPO/MAAC do not bootstrap a never-resolved chain.
+        traj.payoffs = {p: 0.0 for p in players}
+        for t in traj.transitions:
+            t.done = True
+        return traj
 
     # Terminal utility only reaches each player's own final decision.
     if adapter.is_terminal(state):

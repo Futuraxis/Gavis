@@ -39,9 +39,9 @@ class OpenAICompatibleClient:
     """OpenAI-compatible ``/chat/completions`` HTTP client.
 
     api_key 走统一读取流程（audit 3.6 决策 6）：
-    显式参数 > ``LLM_API_KEY`` 环境变量 > 本地 ollama 默认值 ``'ollama'``
-    （本地端点忽略鉴权，保留默认保证零配置体验；key 为空时不发送
-    Authorization 头，远程端点会明确失败而非静默带占位 key）。
+    显式参数 > ``LLM_API_KEY`` 环境变量 > 本地 ollama 默认值 ``'ollama'``。
+    注意：``resolve_api_key`` 的 default 使 key 恒非空，Authorization 头
+    总是携带（本地端点忽略鉴权；远程端点若要求真实 key，由环境变量提供）。
     """
 
     base_url: str = "http://127.0.0.1:11434/v1"  # ollama-style default
@@ -125,4 +125,5 @@ class LLMPolicy:
     def _complete(self, messages: list[dict]) -> str:
         text = self._client.complete(messages)
         text = _CONTROL_CHARS_RE.sub("", text)[:MAX_SPEECH_LEN].strip()
-        return text or "（沉默）"
+        # 空结果返回 "" — LanguagePolicy 空值契约："" = 沉默/弃权
+        return text

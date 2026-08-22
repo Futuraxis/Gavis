@@ -103,7 +103,9 @@ class PSROSolver(SolverBase):
 
         verbose = kwargs.get("verbose", False)
 
+        iterations_run = 0
         for niter in range(1, num_iters + 1):
+            iterations_run = niter
             # Expand the cached gamescape with only the newly added policies.
             payoff_matrix = gamescape(
                 self._gym,
@@ -121,6 +123,7 @@ class PSROSolver(SolverBase):
 
             # Compute exploitability
             expl = exploitability(self._gym, self._nash_mixture, self._policy_pool, Ne=n_eval, num_workers=n_workers)
+            self._expl_history.append(expl)
 
             # Train new best response
             beta = tabular_q_best_response(
@@ -141,7 +144,6 @@ class PSROSolver(SolverBase):
                 break
 
             self._policy_pool.append(beta)
-            self._expl_history.append(expl)
 
             if verbose:
                 print(
@@ -152,7 +154,7 @@ class PSROSolver(SolverBase):
                 )
 
         return SolverMetrics(
-            episodes=num_iters,
+            episodes=iterations_run,
             win_rate=0.0,
             avg_return=0.0,
             extra={

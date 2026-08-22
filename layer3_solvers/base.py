@@ -36,7 +36,8 @@ class SolverMetrics:
     episodes: int = 0
     win_rate: float = 0.0
     avg_return: float = 0.0
-    extra: dict[str, float] = field(default_factory=dict)
+    # Solver-specific extras (counts like info_sets/pool_size/steps are ints).
+    extra: dict[str, float | int] = field(default_factory=dict)
 
 
 class SolverBase(ABC):

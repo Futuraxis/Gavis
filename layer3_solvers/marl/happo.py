@@ -87,7 +87,8 @@ class HAPPOSolver(SolverBase):
         legal = self.adapter.get_legal_actions(state)
         if not legal:
             return None
-        mask = self._action_space.legal_mask(state)
+        # 复用已求值的 legal（legal_mask 支持传入，避免第二次引擎求值）
+        mask = self._action_space.legal_mask(state, legal)
         with torch.no_grad():
             logits = self._actors[player](
                 torch.as_tensor(self._encoder.encode_obs(state, player), device=self.device).unsqueeze(0)
@@ -118,6 +119,7 @@ class HAPPOSolver(SolverBase):
                 self._action_space,
                 self._select_train,
                 self._eval_next,
+                max_steps=4096,  # 病理局面步数上限（正常对局远低于此）
             )
             total_steps += len(traj.transitions)
             for t in traj.transitions:
@@ -184,7 +186,9 @@ class HAPPOSolver(SolverBase):
         action = int(dist.sample().item())
         log_prob = float(dist.log_prob(torch.tensor(action, device=self.device)).item())
         global_state = torch.as_tensor(self._encoder.encode_global(state), device=self.device).unsqueeze(0)
-        value = float(self._critics[player](global_state).item())
+        # 训练期 value 前向无梯度需求 — no_grad 省去构图开销
+        with torch.no_grad():
+            value = float(self._critics[player](global_state).item())
         return action, {"log_prob": log_prob, "value": value}
 
     def _eval_next(self, state: State, player_idx: int) -> float:

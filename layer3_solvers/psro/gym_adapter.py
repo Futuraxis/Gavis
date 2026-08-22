@@ -12,10 +12,18 @@ meaningless results (审查 P2-22).
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from gymnasium import spaces
 
-from layer2_engine.interfaces.solver_adapter import SolverAdapter, State
+from layer2_engine.interfaces.solver_adapter import (
+    ActionInstance,
+    SolverAdapter,
+    State,
+)
+
+logger = logging.getLogger(__name__)
 
 _BOARD_SIZE = 3
 
@@ -52,6 +60,7 @@ class GymAdapter:
             self._p2 = "p_white"
 
         self._turn = 0
+        self._warned_invalid_action = False
 
         # 审查 P2-22: 只支持 3×3 月亮棋形状 — 校验 board 尺寸与动作模板
         # 可解析性，失败即抛错（此前非 3×3 游戏静默降级成无意义结果）。
@@ -107,7 +116,11 @@ class GymAdapter:
         action_instance = self._int_to_action(action, legal)
 
         if action_instance is None:
-            # Fallback: take first legal action
+            # Fallback: take first legal action（非法/未映射动作 → 显式告警，
+            # 不再静默替换；正常路径下 mask 已保证动作合法）
+            if not self._warned_invalid_action:
+                self._warned_invalid_action = True
+                logger.warning("GymAdapter.step: unmapped action %s; falling back to legal[0]", action)
             action_instance = legal[0] if legal else None
             if action_instance is None:
                 return self._encode_state(self._state), -1.0, True, False, {}
@@ -186,7 +199,13 @@ class GymAdapter:
     # ── Internal ──────────────────────────────────────────────────
 
     def _encode_state(self, state: State) -> int:
-        """Encode board as 3-base integer (matching original PSRO encoding)."""
+        """Encode board as 3-base integer (matching original PSRO encoding).
+
+        Note: the encoding captures only the board occupancy — pieceOrder
+        (FIFO age) and the round counter are dropped.  Acceptable under
+        the shared-policy symmetry of PSRO's pool, but states that differ
+        only in age/round collapse to the same code.
+        """
         board = state.get("_board")
         if board is None:
             board = state.get("_arrays", {}).get("board", [])
@@ -201,7 +220,7 @@ class GymAdapter:
             code += digit * (3**i)
         return code
 
-    def _int_to_action(self, action_idx: int, legal: list) -> any:
+    def _int_to_action(self, action_idx: int, legal: list) -> ActionInstance | None:
         """Map 0-8 int to the corresponding ActionInstance."""
         for a in legal:
             cell = a.params.get("cell", {})

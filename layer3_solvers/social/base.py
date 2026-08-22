@@ -31,10 +31,18 @@ class LanguageObservation:
 
 
 class LanguagePolicy(Protocol):
-    """Policy for language/social games."""
+    """Policy for language/social games.
+
+    Empty-value contract (审查 P3-8):
+      - ``decide_speech`` returns the utterance text; the empty string
+        ``""`` means "stay silent" (no speech is recorded).
+      - ``decide_vote`` returns a target player id from
+        ``obs.legal_targets``, or ``""`` when the agent abstains /
+        no legal target exists.  Callers must tolerate ``""``.
+    """
 
     def decide_speech(self, obs: LanguageObservation) -> str:
         """Return the agent's utterance for the current speech round."""
 
     def decide_vote(self, obs: LanguageObservation) -> str:
-        """Return the target player id this agent votes for."""
+        """Return the target player id this agent votes for ("" = abstain)."""

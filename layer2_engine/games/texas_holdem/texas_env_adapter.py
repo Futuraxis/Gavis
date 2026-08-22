@@ -89,8 +89,13 @@ class TexasHoldemAdapter(GameEngine):
         return int(env.get("sb_committed", 0) + env.get("bb_committed", 0))
 
     def hand_value(self, cards: list) -> list:
-        """Best-5 value list ``[category, tiebreaks...]`` via the rules alias."""
-        ctx = {"$constants": self._constants, "$env": {}}
+        """Best-5 value list ``[category, tiebreaks...]`` via the rules alias.
+
+        ``$cards`` is bound explicitly so the ctx is self-sufficient even
+        if the alias grows to reference it directly (currently only the
+        call argument binding provides it).
+        """
+        ctx = {"$constants": self._constants, "$env": {}, "$cards": list(cards)}
         return self.expr.eval({"call": ["best5", {"const": list(cards)}]}, ctx)
 
     def hand_name(self, cards: list) -> str:

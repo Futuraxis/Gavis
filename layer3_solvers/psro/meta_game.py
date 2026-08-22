@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 
@@ -9,6 +10,11 @@ import numpy as np
 from tqdm import tqdm
 
 from .agent import Agent
+
+logger = logging.getLogger(__name__)
+
+# max_steps 截断告警进程级只报一次（长对局按配对/按调用会刷屏）
+_truncation_warned = False
 
 
 def _workers_for(num_workers: int | None, tasks: int) -> int:
@@ -36,6 +42,7 @@ def estimate_reward(env, num_episodes: int, p1: Agent, p2: Agent, max_steps: int
         Average reward for p1.
     """
     total_reward = 0.0
+    truncated_any = False
 
     for _ in range(num_episodes):
         obs, _ = env.reset()
@@ -62,17 +69,31 @@ def estimate_reward(env, num_episodes: int, p1: Agent, p2: Agent, max_steps: int
             done = terminated or truncated
             steps += 1
 
+        if steps >= max_steps and not done:
+            truncated_any = True
+
+    global _truncation_warned
+    if truncated_any and not _truncation_warned:
+        _truncation_warned = True
+        # 静默截断长对局会低估收益 — 显式告警（进程内只报一次）
+        logger.warning("estimate_reward: episode(s) hit max_steps=%d without finishing", max_steps)
     return total_reward / num_episodes
 
 
 def gamescape(
     env,
     pi: list[np.ndarray],
-    Ne: int = 10,  # noqa: N803 — preserved for API compatibility
+    Ne: int = 50,  # noqa: N803 — preserved for API compatibility
     previous: np.ndarray | None = None,
     num_workers: int | None = None,
 ) -> np.ndarray:
     """Compute or incrementally expand the policy payoff matrix.
+
+    Each new match-up is estimated ONCE with ``Ne`` episodes; the ±1
+    outcome noise (std ≈ sqrt(1-p²)/sqrt(Ne)) therefore propagates into
+    the Nash solution, and the matrix is never re-estimated across
+    iterations.  Raise ``Ne`` for a stabler meta-game (the default
+    matches ``exploitability``'s Ne=50).
 
     Parameters
     ----------

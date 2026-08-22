@@ -34,7 +34,10 @@ from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapte
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 
-# 角色策略提示：每个身份一段简短行为指南（8B 模型的推理上限内的实用策略）
+# 角色策略提示：每个身份一段简短行为指南（8B 模型的推理上限内的实用策略）。
+# 注意：guard 不在 ROLE_GUIDE 中 — 当前生成的 rules/werewolf.json 没有
+# night_guard 阶段/protect 动作（with_guard=True 时守卫只是村民），
+# 保留守卫提示属于死配置，等规则侧补上守卫再恢复。
 ROLE_GUIDE = {
     "wolf": (
         "你是狼人。白天要伪装成普通村民，不要暴露身份；"
@@ -48,12 +51,13 @@ ROLE_GUIDE = {
     "hunter": (
         "你是猎人。白天低调发言避免被狼人优先刀死；死亡开枪时带走你认为最可能是狼的玩家（不确定时选 pass 不开枪）。"
     ),
-    "guard": ("你是守卫。夜晚保护你认为最可能被狼刀的人（预言家/女巫优先）；不能连续两晚守同一个人。"),
     "villager": ("你是普通村民。白天听发言找狼：观察谁在说谎、谁在带节奏；投票给发言最可疑的玩家。"),
 }
 
-TARGET_PHASES = ("night_wolf", "night_guard", "night_witch", "night_seer", "night_hunter", "vote_hunter", "day_vote")
 SPEECH_PHASES = ("day_speech",)
+# 意图枚举兜底（规则常量缺失时）：正常路径在 _build_prompt 里从
+# 合法 speak 动作动态提取，避免与 rules intents 漂移（审查 P3-6）。
+_FALLBACK_INTENTS = ("claim", "accuse", "defend", "question", "persuade")
 
 # 发言清洗：剔除控制字符（含 \x00-\x1f、\x7f）——审计 3.6 prompt 注入修复
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -76,12 +80,23 @@ class OllamaSolver(SolverBase):
     def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None, player_id: str | None = None):
         super().__init__(adapter, config or OllamaConfig())
         self.player_id = player_id or self._default_player(adapter)
-        self._rng = random.Random(getattr(self.config, "fallback_seed", None))
+        # 单一 seed 旋钮：优先 SolverConfig.seed，fallback_seed 保留兼容
+        # （审查 P3-5：双 seed 曾导致复现性混乱）。
+        cfg = self.config
+        seed = getattr(cfg, "seed", None)
+        if seed is None:
+            seed = getattr(cfg, "fallback_seed", None)
+        self._rng = random.Random(seed)
 
     @staticmethod
     def _default_player(adapter: SolverAdapter) -> str:
-        state = adapter.create_initial_state()
-        return str(adapter.get_current_player(state) or "p0")
+        """首个玩家的便宜推导（不展开初始状态 — 8 个 AI 席位曾重复 8 次发牌）。"""
+        rules = getattr(adapter, "rules", None)
+        players = rules.get("players") if isinstance(rules, dict) else None
+        if players:
+            first = players[0]
+            return str(first.get("id", first)) if isinstance(first, dict) else str(first)
+        return "p0"
 
     @property
     def name(self) -> str:
@@ -115,19 +130,24 @@ class OllamaSolver(SolverBase):
         # 存活玩家 id 列表（obs['alive'] 是 [0/1] 数组，玩家命名 p0..pN-1）
         alive = [f"p{i}" for i, v in enumerate(obs.get("alive") or []) if v == 1]
 
+        def _yes_no(v) -> str:
+            return "已用" if bool(v) else "未用"
+
         guide = ROLE_GUIDE.get(str(obs.get("my_role")), "你是普通玩家。")
+        deaths = obs.get("deaths_arr") or obs.get("deaths") or []
         lines = [
             f"你是《狼人杀》玩家 {self.player_id}，身份是{obs.get('my_role')}。{guide}",
             "",
             f"当前：第 {obs.get('round')} 轮，阶段 {phase}",
             f"存活玩家：{alive}",
-            f"昨夜/近日死亡：{obs.get('deaths_arr') or obs.get('deaths') or '无'}",
+            # deathsArr 是死者 id 列表 — 直接列名而非 Python repr
+            f"昨夜/近日死亡：{'、'.join(str(d) for d in deaths) if deaths else '无'}",
         ]
         if obs.get("seer_result"):
             lines.append(f"你的验人结果：{obs['seer_result']}")
         if obs.get("witch_save_used") is not None:
             lines.append(
-                f"你已用解药：{bool(obs.get('witch_save_used'))}，已用毒药：{bool(obs.get('witch_poison_used'))}"
+                f"你已用解药：{_yes_no(obs.get('witch_save_used'))}，已用毒药：{_yes_no(obs.get('witch_poison_used'))}"
             )
         speech = list(obs.get("speech_log") or [])[-cfg.max_speech_log :]
         if speech:
@@ -138,12 +158,23 @@ class OllamaSolver(SolverBase):
         votes = list(obs.get("vote_log") or [])
         if votes:
             lines.append("")
-            lines.append(f"投票记录（共 {len(votes)} 条）：{votes[-20:]}")
+            lines.append(f"投票记录（共 {len(votes)} 条）：")
+            for v in votes[-20:]:
+                lines.append(f"  {v.get('voter')} → {v.get('target')}（第{v.get('round')}轮）")
         lines.append("")
         if phase in SPEECH_PHASES:
+            # 意图枚举从合法动作动态提取（审查 P3-6）：与 rules intents
+            # 同源，改规则不会忘改 prompt 而错配。
+            intents = sorted(
+                {
+                    str(a.params.get("intent", {}).get("id", ""))
+                    for a in legal
+                    if a.template_id == "speak" and isinstance(a.params.get("intent"), dict)
+                }
+            ) or list(_FALLBACK_INTENTS)
             lines.append(
                 "请只输出一个 JSON 对象（不要任何其他文字），格式："
-                '{"intent": "claim|accuse|defend|question|persuade", "speech": "你的发言（一句话，中文）"}'
+                f'{{"intent": "{"|".join(intents)}", "speech": "你的发言（一句话，中文）"}}'
             )
         elif phase == "night_witch":
             targets = sorted({t for a in legal if (t := self._target_of(a.params)) is not None})

@@ -84,6 +84,8 @@ class WerewolfAdapter(GameEngine):
             "alive": [1 if i < len(alive) and alive[i] == 1 else 0 for i in range(len(pids))],
             "phase": env.get("phase"),
             "round": env.get("round"),
+            # W7 备注：turn 由规则层在各阶段入场与每次发言/投票后推进
+            # （_gen_werewolf.py），obs 的 turn 即真实行动者，非恒 p0。
             "turn": env.get("turn"),
             "speech_log": list(state.get("_arrays", {}).get("speechLog", [])),
             "vote_log": list(state.get("_arrays", {}).get("voteLog", [])),

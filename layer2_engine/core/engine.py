@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import random
 from pathlib import Path
 from typing import Any, Optional
@@ -25,6 +26,16 @@ from .state_graph import (
     clone_state,
     create_initial_state,
 )
+
+logger = logging.getLogger(__name__)
+
+# Action-expansion guard: parameter-domain cartesian products beyond this
+# size are a rules bug (combination explosion) and raise instead of
+# silently stalling or exhausting memory.
+_MAX_ACTION_COMBINATIONS = 65536
+# Trigger cascades are drained in bounded cycles; an event chain longer
+# than this is a rules bug and the remainder is dropped.
+_TRIGGER_CYCLE_CAP = 16
 
 
 class GameEngine:
@@ -57,8 +68,9 @@ class GameEngine:
             "derivedViews": rules.get("derivedViews", {}),
         }
 
-        # Derived view engine (lazy)
-        self._view_engine = DerivedViewEngine(self._schema)
+        # Derived view engine (lazy); rule aliases registered so ``call``
+        # works in view fields (pure expression definitions).
+        self._view_engine = DerivedViewEngine(self._schema, rules.get("functions", {}))
 
         # Pre-parse effectors, actions, etc.
         self._actions: list[dict] = rules.get("actions", [])
@@ -232,6 +244,10 @@ class GameEngine:
         default_level = visibility.get("default", "public")
         rules = visibility.get("rules", [])
 
+        # Base context built once per projection — rebuilding it per entity
+        # (constants + arrays copies) made partial-info projection O(N²).
+        base_ctx = None if default_level == "public" else self._build_context(state)
+
         for vname in view_names:
             entities = self._materialize_view(state, vname)
             if default_level == "public":
@@ -241,7 +257,7 @@ class GameEngine:
                 # Partial information: filter fields per entity
                 filtered = []
                 for entity in entities:
-                    entity_ctx = {**self._build_context(state), "$node": entity, "$viewer": viewer}
+                    entity_ctx = {**base_ctx, "$node": entity, "$viewer": viewer}
                     entity_obs = dict(entity)
                     for rule in rules:
                         if rule.get("view", "") != vname:
@@ -431,12 +447,25 @@ class GameEngine:
         return filtered
 
     def _materialize_view(self, state: dict, view_name: str) -> list[dict]:
-        """Materialize a derived view from current state."""
+        """Materialize a derived view from current state.
+
+        Results are cached on the state dict itself (``_view_cache``):
+        views are a pure function of (arrays, env, players, constants), and
+        every ground-state mutation invalidates the cache via
+        ``_execute_op``, so the cache can never go stale.  ``clone_state``
+        drops the key, so each clone recomputes fresh.
+        """
+        cache = state.get("_view_cache")
+        if cache is not None and view_name in cache:
+            return cache[view_name]
         if self._compiled is not None and self._compiled.materialize is not None and "_arrays" in state:
             result = self._compiled.materialize(state, view_name)
             if result is not None:
+                state.setdefault("_view_cache", {})[view_name] = result
                 return result
-        return self._view_engine.materialize(state, view_name)
+        result = self._view_engine.materialize(state, view_name)
+        state.setdefault("_view_cache", {})[view_name] = result
+        return result
 
     # ── Chance expansion ─────────────────────────────────────────────
 
@@ -498,9 +527,14 @@ class GameEngine:
     # ── Effector execution ───────────────────────────────────────────
 
     def _execute_effector(self, effect_name: str, ctx: dict, state: dict):
-        """Execute a named effector's op sequence."""
+        """Execute a named effector's op sequence.
+
+        An unknown effector is a rules typo (e.g. a bad ``effectRef``) and
+        is logged rather than silently ignored.
+        """
         effector = self._effectors.get(effect_name)
         if effector is None:
+            logger.warning("unknown effector %r (rules typo?)", effect_name)
             return
         for op in effector.get("ops", []):
             self._execute_op(op, ctx, state)
@@ -518,6 +552,7 @@ class GameEngine:
             arr = state["_arrays"].get(arr_name)
             if arr is not None and isinstance(at, int) and 0 <= at < len(arr):
                 arr[at] = value
+                self._invalidate_views(state)
 
         elif op_type == "append":
             arr_name = self._resolve_array_name(op, ctx)
@@ -538,9 +573,11 @@ class GameEngine:
             arr = state["_arrays"].get(arr_name)
             if arr is not None:
                 arr.append(value)
+                self._invalidate_views(state)
             elif isinstance(arr_name, str) and isinstance(state["env"].get(arr_name), list):
                 # Env lists are shared by reference across clones — rebind.
                 state["env"][arr_name] = state["env"][arr_name] + [value]
+                self._invalidate_views(state)
 
         elif op_type == "remove":
             """Multiset difference A⊖B — remove up to ``count`` matches by value.
@@ -550,14 +587,17 @@ class GameEngine:
             """
             arr_name = self._resolve_array_name(op, ctx)
             value = self.expr.eval(op["value"], ctx)
-            count = int(self.expr.eval(op.get("count", {"const": 1}), ctx))
+            count = self.expr.eval(op.get("count", {"const": 1}), ctx)
+            count = int(count) if count is not None else 1
             arr = state["_arrays"].get(arr_name)
             if arr is None and isinstance(arr_name, str) and isinstance(state["env"].get(arr_name), list):
                 state["env"][arr_name] = _remove_matches(state["env"][arr_name], value, count)
+                self._invalidate_views(state)
                 return
             if arr is None:
                 return
             state["_arrays"][arr_name] = _remove_matches(arr, value, count)
+            self._invalidate_views(state)
 
         elif op_type == "setArray":
             """Wholesale array replacement (e.g. rewriting a meld list).
@@ -570,41 +610,48 @@ class GameEngine:
             fresh = list(value) if isinstance(value, list) else []
             if isinstance(arr_name, str) and arr_name in state["_arrays"]:
                 state["_arrays"][arr_name] = fresh
+                self._invalidate_views(state)
             elif isinstance(arr_name, str) and arr_name in state["env"]:
                 state["env"][arr_name] = fresh
+                self._invalidate_views(state)
 
         elif op_type == "trimByKey":
             arr_name = op["array"]
-            max_val = int(self.expr.eval(op["max"], ctx))
+            max_val = self.expr.eval(op["max"], ctx)
+            max_val = int(max_val) if max_val is not None else 0
             key = op["key"]
             value = self.expr.eval(op["value"], ctx)
             on_evict = op.get("onEvict", [])
             arr = state["_arrays"].get(arr_name)
             if arr is None or not isinstance(arr, list):
                 return
-            # Group by key, trim each group
-            filtered = [x for x in arr if x.get(key) != value]
-            group = [x for x in arr if x.get(key) == value]
+            # Group by key, trim each group; 非 dict 元素按"不匹配该键"保留
+            filtered = [x for x in arr if not (isinstance(x, dict) and x.get(key) == value)]
+            group = [x for x in arr if isinstance(x, dict) and x.get(key) == value]
             while len(group) > max_val:
                 evicted = group.pop(0)
                 if on_evict:
-                    # Compute evicted board index from cell_id (e.g. "cell_1_2")
+                    # Compute evicted board index from cell_id (e.g. "cell_1_2"):
+                    # row-major (row * cols + col), matching do_place.  cols
+                    # comes from the grid view over the board array (not a
+                    # square-board sqrt guess) so non-square boards work.
                     evicted_cell = evicted.get("cell_id", "")
                     evicted_idx = 0
                     try:
                         parts = evicted_cell.split("_")
-                        board_arr = state["_arrays"].get("board", [])
-                        bs = int(len(board_arr) ** 0.5) if board_arr else 3
                         if len(parts) >= 3:
-                            # cell_id is "cell_{row}_{col}"; board index is
-                            # row-major (row * bs + col), matching do_place.
-                            evicted_idx = int(parts[-2]) * bs + int(parts[-1])
+                            board_arr = state["_arrays"].get("board", [])
+                            cols = self._grid_view_cols("board")
+                            if cols is None:
+                                cols = int(len(board_arr) ** 0.5) if board_arr else 3
+                            evicted_idx = int(parts[-2]) * cols + int(parts[-1])
                     except (ValueError, IndexError):
                         pass
                     evict_ctx = {**ctx, "$evicted": evicted, "evicted_index": evicted_idx}
                     for eop in on_evict:
                         self._execute_op(eop, evict_ctx, state)
             state["_arrays"][arr_name] = filtered + group
+            self._invalidate_views(state)
 
         # ── Environment ops ───────────────────────────────────────────
 
@@ -612,21 +659,25 @@ class GameEngine:
             key = op["key"]
             value = self.expr.eval(op["value"], ctx)
             state["env"][key] = value
+            self._invalidate_views(state)
 
         elif op_type == "inc":
             key = op["key"]
-            by = int(self.expr.eval(op["by"], ctx))
+            by = self.expr.eval(op["by"], ctx)
+            by = int(by) if by is not None else 1
             current = state["env"].get(key, 0)
             if not isinstance(current, (int, float)):
                 current = 0
             state["env"][key] = current + by
+            self._invalidate_views(state)
 
         # ── Control flow ──────────────────────────────────────────────
 
         elif op_type == "branch":
             cond = self.expr.eval(op["if"], ctx)
             branch_ops = op.get("then") if cond else op.get("else", [])
-            for sub_op in branch_ops:
+            # 缺 ``then`` 且条件为真 → 空分支（不再遍历 None 崩溃）
+            for sub_op in branch_ops or []:
                 self._execute_op(sub_op, ctx, state)
 
         elif op_type == "callEffect":
@@ -638,6 +689,9 @@ class GameEngine:
 
         elif op_type == "forEach":
             items = self.expr.eval(op["list"], ctx)
+            # list 求值为 None/非 list → 空迭代（不再 TypeError）
+            if not isinstance(items, list):
+                items = []
             as_var = op.get("as", "$item")
             for item in items:
                 sub_ctx = {**ctx, as_var: item}
@@ -662,31 +716,69 @@ class GameEngine:
             return self.expr.eval(raw, ctx)
         return raw
 
+    @staticmethod
+    def _invalidate_views(state: dict):
+        """Drop the per-state view cache after any ground-state mutation."""
+        state.pop("_view_cache", None)
+
+    def _grid_view_cols(self, arr_name: str) -> int | None:
+        """Columns of the grid view over ``arr_name``, per the rules schema.
+
+        The grid view's ``cols`` is the authority for flat (row-major)
+        indices into the array; ``None`` when no grid view covers it.
+        """
+        for vdef in self._schema.get("derivedViews", {}).values():
+            src = vdef.get("from", {})
+            if src.get("type") == "grid" and src.get("array") == arr_name:
+                cols = self.expr.eval(
+                    src.get("cols", {"const": 1}),
+                    {"$constants": self._constants, "$players": self._players, "$env": {}},
+                )
+                if isinstance(cols, (int, float)) and cols > 0:
+                    return int(cols)
+        return None
+
     # ── Triggers ──────────────────────────────────────────────────────
 
     def _run_triggers(self, state: dict):
-        pending = state.pop("_pending_events", [])
-        pending_effects = state.pop("_pending_effects", [])
+        """Process queued events and effects, cascading included.
 
-        for event_name, payload in pending:
-            for trigger in self._triggers:
-                if trigger["event"] != event_name:
-                    continue
-                cond = trigger.get("condition")
-                if cond is not None:
+        Trigger effectors may ``emit`` further events / ``enqueueEffect``
+        during execution; these are drained in a loop so cascading
+        triggers actually fire (previously they were dropped after the
+        first pass).  The cycle cap bounds runaway chains; on exhaustion
+        the remainder is dropped rather than processed forever.
+        """
+        for _ in range(_TRIGGER_CYCLE_CAP):
+            pending = state.pop("_pending_events", [])
+            pending_effects = state.pop("_pending_effects", [])
+            if not pending and not pending_effects:
+                return
+
+            for event_name, payload in pending:
+                for trigger in self._triggers:
+                    if trigger["event"] != event_name:
+                        continue
+                    cond = trigger.get("condition")
+                    if cond is not None:
+                        t_ctx = self._build_context(state)
+                        t_ctx["$event"] = payload
+                        if not self.expr.eval(cond, t_ctx):
+                            continue
                     t_ctx = self._build_context(state)
                     t_ctx["$event"] = payload
-                    if not self.expr.eval(cond, t_ctx):
-                        continue
-                t_ctx = self._build_context(state)
-                t_ctx["$event"] = payload
-                t_ctx.update(payload)
-                self._execute_effector(trigger["effectRef"], t_ctx, state)
+                    t_ctx.update(payload)
+                    self._execute_effector(trigger["effectRef"], t_ctx, state)
 
-        for effect_ref, args in pending_effects:
-            e_ctx = self._build_context(state)
-            e_ctx.update(args)
-            self._execute_effector(effect_ref, e_ctx, state)
+            for effect_ref, args in pending_effects:
+                e_ctx = self._build_context(state)
+                e_ctx.update(args)
+                self._execute_effector(effect_ref, e_ctx, state)
+
+        # Cycle cap exhausted — drop whatever was re-queued.
+        logger.warning("trigger cascade exceeded %d cycles; dropping remainder", _TRIGGER_CYCLE_CAP)
+        state.pop("_pending_events", None)
+        state.pop("_pending_effects", None)
 
     # ── Context building ──────────────────────────────────────────────
 
@@ -839,9 +931,21 @@ def _remove_matches(arr: list, value: Any, count: int) -> list:
 
 
 def _cartesian_product(param_domains: dict[str, list]) -> list[dict]:
-    """Cartesian product of multiple parameter domains."""
+    """Cartesian product of multiple parameter domains.
+
+    Guards against combination explosion: multi-parameter templates with
+    large domains are a rules bug and raise instead of stalling.
+    """
     if not param_domains:
         return [{}]
+    total = 1
+    for vals in param_domains.values():
+        total *= len(vals)
+        if total > _MAX_ACTION_COMBINATIONS:
+            raise ValueError(
+                f"action expansion exceeds {_MAX_ACTION_COMBINATIONS} combinations "
+                f"({total} from domains {list(param_domains.keys())})"
+            )
     keys = list(param_domains.keys())
     values = list(param_domains.values())
     results: list[dict] = []

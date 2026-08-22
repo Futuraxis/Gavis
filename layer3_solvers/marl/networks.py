@@ -137,6 +137,10 @@ class AttentionCritic(nn.Module):
         super().__init__()
         self.n_agents = n_agents
         self.action_embed = nn.Embedding(action_dim + 1, hidden_dim, padding_idx=action_dim)
+        # No-op token 行被 padding_idx 冻结在随机初值、永不学习 — 显式置零，
+        # 让"未行动"标记是中性向量而非任意随机向量。
+        with torch.no_grad():
+            self.action_embed.weight.data[action_dim] = 0.0
         self.obs_embed = nn.Sequential(
             nn.Linear(obs_dim, hidden_dim),
             nn.ReLU(),

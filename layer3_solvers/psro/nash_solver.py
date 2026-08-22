@@ -6,7 +6,11 @@ from a payoff matrix using ``scipy.optimize.linprog``.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def solve_nash(reward_matrix: np.ndarray) -> np.ndarray:
@@ -64,7 +68,8 @@ def solve_nash(reward_matrix: np.ndarray) -> np.ndarray:
     result = linprog(c, A_ub=a_ub, b_ub=b_ub, A_eq=a_eq, b_eq=b_eq, bounds=bounds, method="highs")
 
     if not result.success:
-        # Fallback: uniform distribution
+        # Fallback: uniform distribution — 显式告警而不是无痕降级
+        logger.warning("solve_nash: LP failed (%s); falling back to uniform", result.message)
         return np.ones(strategy_count) / strategy_count
 
     nash = result.x[:strategy_count]

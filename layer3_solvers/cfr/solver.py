@@ -64,6 +64,8 @@ class CFR(SolverBase):
         # Monotonic iteration counter for CFR+ weighted averaging.  Grows
         # across warm-started ``solve`` calls; reset() brings it back to 0.
         self._iter: int = 0
+        # Silent-0.0 fallback sites report once per condition (not per walk).
+        self._warned_once: set[str] = set()
 
     @property
     def name(self) -> str:
@@ -130,24 +132,35 @@ class CFR(SolverBase):
         self._iter = 0
 
     def train(self, episodes: int, **kwargs) -> SolverMetrics:
-        """Run CFR for ``episodes`` iterations (0 → use config default)."""
+        """Run a fresh CFR training for ``episodes`` iterations (0 → config default).
+
+        ``train()`` always starts from a clean table — warm-starting is
+        only available through an explicit :meth:`solve` call, so repeated
+        ``train()`` calls (e.g. benchmark loops) never let the CFR+
+        iteration weight accumulate across runs.
+        """
         verbose = kwargs.get("verbose", False)
         iters = episodes if episodes > 0 else self.iterations
+        self.reset()
         state = self.adapter.create_initial_state()
         self.solve(state, iterations=iters, verbose=verbose)
 
-        # Evaluate win rate vs random
+        # Evaluate win rate vs random (avg_return = (wins − losses)/total)
         wins = 0
+        losses = 0
         total = min(100, episodes)
         for _ in range(total):
             s = clone_state(state)
             result = self._play_vs_random(s)
             if result == 1:
                 wins += 1
+            elif result == -1:
+                losses += 1
+        total = max(1, total)
         return SolverMetrics(
             episodes=iters,
-            win_rate=wins / max(1, total),
-            avg_return=wins / max(1, total),
+            win_rate=wins / total,
+            avg_return=(wins - losses) / total,
             extra={"info_sets": len(self.info_sets)},
         )
 
@@ -191,6 +204,7 @@ class CFR(SolverBase):
         if nt == "chance":
             outcomes = self.adapter.get_chance_outcomes(state)
             if not outcomes:
+                self._warn_once("chance_no_outcomes", "chance node without outcomes — returning 0.0")
                 return 0.0
             o = self._sample_outcome(outcomes)
             return self._walk(
@@ -202,12 +216,14 @@ class CFR(SolverBase):
 
         current_player = self.adapter.get_current_player(state)
         if current_player is None:
+            self._warn_once("current_player_none", "player node with no current player — returning 0.0")
             return 0.0
 
         info_key = self.adapter.get_info_set_key(state, current_player)
         info = self._get_info(info_key)
         actions = self.adapter.get_legal_actions(state)
         if not actions:
+            self._warn_once("no_legal_actions", "player node with no legal actions — returning 0.0")
             return 0.0
 
         keys = [a.canonical_key for a in actions]
@@ -241,19 +257,13 @@ class CFR(SolverBase):
                 info["strategy_sum"][k] += iter_weight * reach[my_idx] * strategy[k]
             return ev
         else:
-            k_list = list(strategy.keys())
-            p_list = [strategy[k] for k in k_list]
-            sampled_k = self.rng.choices(k_list, weights=p_list, k=1)[0]
-            sampled_a = None
-            for a in actions:
-                if a.canonical_key == sampled_k:
-                    sampled_a = a
-                    break
-            if sampled_a is None:
-                sampled_a = actions[0]
+            # 直接从动作表按当前策略采样：不再先采样 key 再线性查找
+            # （兜底路径曾把未匹配 key 换成 actions[0] 且 reach 乘 1.0，
+            # 静默污染估计器）。
+            sampled_a = self.rng.choices(actions, weights=[strategy[a.canonical_key] for a in actions], k=1)[0]
             nr = list(reach)
             pi = self._player_idx.get(current_player, 0)
-            nr[pi] *= strategy.get(sampled_a.canonical_key, 1.0)
+            nr[pi] *= strategy[sampled_a.canonical_key]
             return self._walk(
                 self.adapter.apply_action(state, sampled_a),
                 updating_player,
@@ -283,6 +293,12 @@ class CFR(SolverBase):
         if self.adapter.is_terminal(s):
             return self.adapter.get_utility(s, player)
         return self._leaf_heuristic(s, player)
+
+    def _warn_once(self, key: str, message: str) -> None:
+        """Warn about a silent-0.0 fallback, at most once per condition."""
+        if key not in self._warned_once:
+            self._warned_once.add(key)
+            logging.getLogger(__name__).warning("CFR: %s", message)
 
     def _rollout_action(self, state: dict, actions: list) -> ActionInstance:
         """Sample a rollout move from the current regret-matching strategy.

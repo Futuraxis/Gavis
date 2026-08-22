@@ -13,8 +13,7 @@ from pathlib import Path
 
 from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import clone_state
-from layer3_solvers.base import SolverConfig
-from layer3_solvers.cfr import CFR
+from layer3_solvers.cfr import CFR, CFRConfig
 
 SYMBOLS = {"p_black": "●", "p_white": "○", None: "·"}
 
@@ -53,13 +52,13 @@ def main():
 
     cfr = CFR(
         engine,
-        SolverConfig(
+        CFRConfig(
             seed=args.seed,
             verbose=True,
+            iterations=args.iters,
+            use_cfr_plus=not args.no_cfr_plus,
         ),
     )
-    cfr.iterations = args.iters
-    cfr.use_cfr_plus = not args.no_cfr_plus
 
     print("\n训练中...\n")
     t0 = time.perf_counter()

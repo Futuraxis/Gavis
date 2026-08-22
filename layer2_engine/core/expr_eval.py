@@ -60,33 +60,36 @@ class ExprEvaluator:
                     continue
             self._functions[name] = defn
 
-        # Static recursion-cycle detection (Tarjan-lite DFS over the
-        # call graph).  Cyclic aliases keep a guard that raises on call;
-        # the interpreter call path also enforces ``_MAX_CALL_DEPTH``.
-        visiting: set[str] = set()
+        # Static recursion-cycle detection (DFS over the call graph with an
+        # explicit stack).  When a callee is already on the stack, the cycle
+        # is exactly the stack slice from that callee's first occurrence
+        # onward — only those members are marked ``_cyclic`` (a caller above
+        # the cycle, e.g. C→B→A→B, is not a cycle member).  Cyclic aliases
+        # raise on call; the interpreter also enforces ``_MAX_CALL_DEPTH``.
+        stack: list[str] = []
+        on_stack: set[str] = set()
         done: set[str] = set()
 
         def _visit(name: str):
             if name in done:
                 return
-            if name in visiting:
-                raise RecursionError(f"Alias recursion cycle involving {name!r}")
+            if name in on_stack:
+                # Cycle found: every alias from ``name`` up the stack is a member.
+                for cname in stack[stack.index(name) :]:
+                    self._cyclic.add(cname)
+                return
             defn = self._functions.get(name)
             if isinstance(defn, dict):
-                visiting.add(name)
+                stack.append(name)
+                on_stack.add(name)
                 for callee in _collect_call_names(defn.get("expr", {})):
                     _visit(callee)
-                visiting.remove(name)
+                stack.pop()
+                on_stack.discard(name)
             done.add(name)
 
         for name in list(self._functions):
-            try:
-                _visit(name)
-            except RecursionError:
-                # Only the members of the cycle are unusable; others keep working.
-                for cname in visiting:
-                    self._cyclic.add(cname)
-                visiting.clear()
+            _visit(name)
 
     def _alias_call(self, fn_name: str, args: list, ctx: dict) -> Any:
         """Evaluate an alias definition with ``args`` bound to its params."""
@@ -1074,7 +1077,9 @@ class ExprEvaluator:
 
         s = _ARITH_BARE_RE.sub(_replace_bare, s)
 
-        # Step 3: Evaluate safely
+        # Step 3: Evaluate.  ``__builtins__`` is stripped to keep the surface
+        # minimal, but this is NOT a security sandbox (literal attribute
+        # access can escape) — inputs are trusted static rules JSON.
         try:
             return int(eval(s, {"__builtins__": {}}, {}))
         except Exception:

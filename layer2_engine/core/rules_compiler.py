@@ -30,8 +30,10 @@ from typing import Any
 from .state_graph import ActionInstance, ChanceOutcome
 
 _TEMPLATE_RE = re.compile(r"\{([^}]+)\}")
-_ARITH_PREFIX_RE = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_.]*)")
-_ARITH_BARE_RE = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_.]*)\b")
+# Single-pass token matcher for arithmetic strings: ``$``-prefixed paths
+# (group 1) and bare identifiers (group 2) in one scan, so substituted
+# paths are never re-matched as bare names by the second alternative.
+_ARITH_TOKEN_RE = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_.]*)|([a-zA-Z_][a-zA-Z0-9_.]*)\b")
 _IDENT_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 _CMP_OPS = {
@@ -89,20 +91,7 @@ class _Gen:
         """
         return f"(({list_py}) if isinstance(({list_py}), (list, tuple, range)) else [])"
 
-    def _with_item(self, as_var: str, body_py: str) -> str:
-        """Bind ``as_var`` (e.g. '$node' → 'node') to the loop variable ``_it``."""
-        return self._gen_expr(body_py, as_var)
-
     def _gen_expr(self, spec: Any, as_var: str) -> str:
-        """Compile ``spec`` with ``as_var`` bound to the loop item ``_it``."""
-        sub = _Gen(
-            self.constants,
-            self.view_fns,
-            self.view_defs,
-            {**self.binder, as_var.lstrip("$"): "_it"},
-            functions=self.functions,
-        )
-        return sub.expr(spec)
         """Compile ``spec`` with ``as_var`` bound to the loop item ``_it``."""
         sub = _Gen(
             self.constants,
@@ -263,7 +252,9 @@ class _Gen:
                 arg = arg["query"]
             if isinstance(arg, dict) and arg.get("view", "") in self.view_fns:
                 return self._count_py(arg)
-            return f"len({self._list_guard(self.expr(arg))})"
+            # 与解释器一致（expr_eval: len(list|dict)，其余 0）——dict 也是计数对象
+            arg_py = self.expr(arg)
+            return f"(len({arg_py}) if isinstance({arg_py}, (list, dict)) else 0)"
 
         if "query" in spec:
             return self._query_py(spec["query"])
@@ -319,21 +310,28 @@ class _Gen:
         return f"{head}[{part!r}]"
 
     def _arith(self, raw: str) -> str:
-        """Compile a compact arithmetic string into a Python expression."""
+        """Compile a compact arithmetic string into a Python expression.
 
-        def _repl_prefixed(m: re.Match) -> str:
-            return self._path_str(f"${m.group(1)}")
+        ``$``-prefixed paths resolve through the binder (env/node/...);
+        bare identifiers resolve to numeric constants.  Anything else is
+        left to the interpreter (UnsupportedShapeError), matching its
+        ``_eval_arithmetic`` fallback semantics.
+        """
 
-        s = _ARITH_PREFIX_RE.sub(_repl_prefixed, raw)
-
-        def _repl_bare(m: re.Match) -> str:
-            name = m.group(1)
+        def _repl(m: re.Match) -> str:
+            if m.group(1) is not None:
+                # $name[.rest]: compile only when resolvable in this context
+                head = m.group(1).split(".")[0]
+                if head == "constants" or head in self.binder:
+                    return self._path_str(f"${m.group(1)}")
+                raise UnsupportedShapeError(f"arith:${m.group(1)}")
+            name = m.group(2)
             val = self.constants.get(name)
             if isinstance(val, (int, float)):
                 return repr(val)
             raise UnsupportedShapeError(f"arith:{name}")
 
-        return _ARITH_BARE_RE.sub(_repl_bare, s)
+        return _ARITH_TOKEN_RE.sub(_repl, raw)
 
     # ── Query / aggregate specialisation ─────────────────────────────
 
@@ -472,8 +470,13 @@ def _resolve_cols(cols_expr: dict, constants: dict) -> int:
 
 
 def _safe_eval(py_expr: str) -> Any:
-    """Evaluate a generated constant expression safely."""
-    return eval(py_expr, {"__builtins__": {}}, {})  # noqa: S307 — consts only
+    """Evaluate a generated constant expression.
+
+    ``__builtins__`` is removed to keep the surface minimal, but this is
+    NOT a security sandbox (literal attribute access can escape) — inputs
+    are trusted static rules JSON, so the risk is acceptable.
+    """
+    return eval(py_expr, {"__builtins__": {}}, {})  # noqa: S307 — trusted consts only
 
 
 # ── Terminal / actions / chance codegen ──────────────────────────────
@@ -499,7 +502,13 @@ def _gen_is_terminal(terminal: list[dict], constants: dict, view_fns: dict, view
 
 
 def _gen_legal_actions(
-    actions: list[dict], queries: dict, constants: dict, view_fns: dict, view_defs: dict, functions: dict | None = None
+    actions: list[dict],
+    queries: dict,
+    constants: dict,
+    view_fns: dict,
+    view_defs: dict,
+    functions: dict | None = None,
+    engine_ref: object | None = None,
 ) -> str:
     """Generate ``legal_actions(state)`` for the supported template shapes.
 
@@ -512,6 +521,10 @@ def _gen_legal_actions(
       - ``legal``: ``const true`` or any compilable expression
       - expressions: const/var/get/template/switch/comparisons/boolean/
         arith/count/query/filter/at + inlined rule-alias ``call``
+
+    ``engine_ref`` must be provided when any template is skipped: the
+    generated code calls ``_engine._expand_missing``, so compiling without
+    an engine would emit code that NameErrors at runtime.
     """
     if not actions:
         raise UnsupportedShapeError("no actions")
@@ -529,6 +542,8 @@ def _gen_legal_actions(
     if not skipped and len(lines) == 3:
         raise UnsupportedShapeError("no supported action templates")
     if skipped:
+        if engine_ref is None:
+            raise UnsupportedShapeError(f"skipped action templates need engine fallback: {skipped}")
         lines.append(f"    _out.extend(_engine._expand_missing({skipped!r}, state))")
     lines.append("    return _out")
     return "\n".join(lines) + "\n"
@@ -650,9 +665,9 @@ def _gen_chance(chance: list[dict], constants: dict, view_fns: dict, view_defs: 
             prob_expr = entry.get("prob", entry.get("probability"))
             if not isinstance(prob_expr, (int, float)):
                 raise UnsupportedShapeError("chance: non-const probability")
-            gen = _Gen(
-                constants, view_fns, view_defs, {"env": "env", "state": "state", "outcome": repr(str(outcome_val))}
-            )
+            # ``$outcome`` 绑定原始值（与解释器 ctx["outcome"]=outcome_val 一致）；
+            # 字符串化会让数值 outcome 的 ``$outcome == 3`` 类 canonicalKey 错配。
+            gen = _Gen(constants, view_fns, view_defs, {"env": "env", "state": "state", "outcome": repr(outcome_val)})
             ck_py = gen.expr(ck_tmpl)
             effect_ref = effect_map.get(str(outcome_val), f"do_{outcome_val}")
             lines.append(
@@ -773,6 +788,7 @@ class RulesCompiler:
                     view_fns,
                     artifacts._view_defs,
                     rules.get("functions", {}),
+                    engine_ref=engine,
                 )
             )
         except UnsupportedShapeError:

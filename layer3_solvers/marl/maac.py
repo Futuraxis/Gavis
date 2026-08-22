@@ -105,7 +105,8 @@ class MAACSolver(SolverBase):
         legal = self.adapter.get_legal_actions(state)
         if not legal:
             return None
-        mask = self._action_space.legal_mask(state)
+        # 复用已求值的 legal（legal_mask 支持传入，避免第二次引擎求值）
+        mask = self._action_space.legal_mask(state, legal)
         with torch.no_grad():
             logits = self._actors[player](
                 torch.as_tensor(self._encoder.encode_obs(state, player), device=self.device).unsqueeze(0)
@@ -135,6 +136,7 @@ class MAACSolver(SolverBase):
                 self._encoder,
                 self._action_space,
                 self._select_train,
+                max_steps=4096,  # 病理局面步数上限（正常对局远低于此）
             )
             for t in traj.transitions:
                 self._buffer.push(t)
@@ -253,10 +255,14 @@ class MAACSolver(SolverBase):
         # ``q_online`` was not detached, so the shared optimizer's actor
         # step updated the critic a second time.  REINFORCE
         # ``∇[log π(a) · (Q − τ·log π(a))]`` fixes both.
-        actor_losses = []
+        # 各 agent 子集按样本数加权（轮次制下不同 agent 的样本数天然不均衡，
+        # 等权平均会让样本少的 agent 权重偏高）。
+        actor_loss_sum = torch.zeros((), device=self.device)
+        actor_total_n = 0
         for i, p in enumerate(self._players):
             sel = batch.player_idx == i
-            if not sel.any():
+            n = int(sel.sum())
+            if n == 0:
                 continue
             logits = self._actors[p](batch.obs[sel])
             masked = logits.masked_fill(batch.masks[sel] == 0, -1e9)
@@ -267,9 +273,10 @@ class MAACSolver(SolverBase):
             new_joint = actions[sel].clone()
             new_joint[:, i] = a_new
             q_online = self._critics[p](obs_slots[sel], new_joint, acting[sel])[:, i]
-            actor_losses.append(-(log_prob * (q_online.detach() - cfg.entropy_temperature * log_prob)).mean())
-        if actor_losses:
-            actor_loss = torch.stack(actor_losses).mean()
+            actor_loss_sum = actor_loss_sum - (log_prob * (q_online.detach() - cfg.entropy_temperature * log_prob)).sum()
+            actor_total_n += n
+        if actor_total_n > 0:
+            actor_loss = actor_loss_sum / actor_total_n
             self._optimizer.zero_grad()
             actor_loss.backward()
             self._optimizer.step()

@@ -21,10 +21,6 @@ from .expr_eval import ExprEvaluator
 
 _TEMPLATE_RE = re.compile(r"\{([^}]+)\}")
 
-# Shared evaluator for derived-view field closures (views only need the
-# pure expression primitives — no rule functions involved).
-_FULL_EVALUATOR = ExprEvaluator()
-
 
 # ── Core data types (shared with SolverAdapter Protocol) ────────────────
 
@@ -107,16 +103,17 @@ def create_initial_state(
 def _eval_length_expr(expr: dict, constants: dict) -> int:
     """Evaluate a simple length expression like {'expr': 'board_size * board_size'}."""
     raw = expr.get("expr", "")
-    context = constants.copy()
-    # Try basic arithmetic: ONLY multiplication and subtraction for security
+    # 常量替换：按名字长度降序 + 词边界匹配，避免短名子串污染长名
+    # （如 "size" 先替换会破坏 "board_size" 内部），结果也不依赖 dict 遍历序。
+    num_consts = {k: v for k, v in constants.items() if isinstance(v, (int, float))}
+    if num_consts:
+        names = sorted(num_consts, key=len, reverse=True)
+        pattern = re.compile(r"\b(" + "|".join(re.escape(n) for n in names) + r")\b")
+        raw = pattern.sub(lambda m: str(num_consts[m.group(1)]), raw)
+    # Simple eval — the input is trusted static rules JSON; this is not a
+    # security sandbox (only the arithmetic surface is intended).
     try:
-        # Replace constants
-        for k, v in context.items():
-            if isinstance(v, (int, float)):
-                raw = raw.replace(k, str(v))
-        # Simple eval — only allow numbers and basic ops
-        result = eval(raw, {"__builtins__": {}}, {})
-        return int(result)
+        return int(eval(raw, {"__builtins__": {}}, {}))
     except Exception:
         return 0
 
@@ -145,25 +142,6 @@ def clone_state(state: dict) -> dict:
     }
 
 
-# ── Expression precompilation ─────────────────────────────────────────
-
-
-def compile_expr(spec: Any) -> Any:
-    """Precompile a static expression spec into a closure over ctx.
-
-    Returns either the literal value (non-dict specs) or ``fn(ctx)`` with
-    semantics identical to the full ``ExprEvaluator`` (v5.1 primitives
-    included).  Compiled closures are used for derived-view field defs,
-    which are evaluated ~700k times per MCTS move.
-
-    Views share a single evaluator instance; rule-level ``functions``
-    aliases are NOT registered here (view fields must stay pure).
-    """
-    if not isinstance(spec, dict):
-        return spec
-    return _FULL_EVALUATOR.compile(spec)
-
-
 # ── Derived View Engine ──────────────────────────────────────────────
 
 
@@ -175,14 +153,22 @@ class DerivedViewEngine:
 
     Design: O(N) materialization on query, no caching between queries.
     Field defs are precompiled into closures at construction.
+
+    Rule ``functions`` aliases are registered on the shared evaluator:
+    they are pure expression definitions, so ``call`` works in view
+    fields instead of raising "Unknown function" at materialization.
     """
 
-    def __init__(self, schema: dict):
+    def __init__(self, schema: dict, functions: dict | None = None):
         self._views: dict = schema.get("derivedViews", {})
+        self._evaluator = ExprEvaluator()
+        self._evaluator.set_functions(functions or {})
         self._compiled_fields: dict[str, list[tuple[str, callable]]] = {}
         for vname, vdef in self._views.items():
             fdefs = vdef.get("fields", {})
-            self._compiled_fields[vname] = [(fname, compile_expr(fdef)) for fname, fdef in fdefs.items()]
+            self._compiled_fields[vname] = [
+                (fname, self._evaluator.compile(fdef)) for fname, fdef in fdefs.items()
+            ]
 
     def materialize(self, state: dict, view_name: str) -> list[dict]:
         """Materialize a derived view from the current ground state."""
