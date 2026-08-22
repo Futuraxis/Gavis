@@ -1,9 +1,9 @@
-"""Template-based translator for known Gavis games.
+"""Deterministic natural-language translator for known Gavis games.
 
-The template translator keeps Layer 1 deterministic: it maps a known
-``game_name`` or simple rule text hint to an existing rules template and
-then validates the generated rules. Future LLM translators can share the
-same ``TranslatorProtocol`` without changing callers.
+The template translator keeps Layer 1 deterministic: it maps natural
+language hints, known ``game_name`` values, or externally collected
+frontend rule payloads to validated ``rules.json``. Future LLM translators
+can share the same ``TranslatorProtocol`` without changing callers.
 """
 
 from __future__ import annotations
@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from .engine_validator import EngineValidator
+from .external_frontend_reader import ExternalFrontendRuleReader
 from .protocol import TranslateRequest, TranslateResponse, ValidationResult
+from .rule_family_builder import RuleFamilyBuilder
 from .rule_parser import TEMPLATE_FILES, ParsedRuleRequest, RuleParser
 from .schema_validator import SchemaValidator
 
@@ -22,7 +24,7 @@ _RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
 
 
 class TemplateTranslator:
-    """Translate known game requests by cloning existing rule templates."""
+    """Translate natural-language rule requests with deterministic templates."""
 
     def __init__(
         self,
@@ -30,18 +32,24 @@ class TemplateTranslator:
         run_engine_validation: bool = True,
         rules_dir: Path | None = None,
         parser: RuleParser | None = None,
+        family_builder: RuleFamilyBuilder | None = None,
+        external_reader: ExternalFrontendRuleReader | None = None,
     ) -> None:
         self.run_engine_validation = run_engine_validation
         self.rules_dir = rules_dir or _RULES_DIR
         self.engine_validator = EngineValidator()
         self.parser = parser or RuleParser()
+        self.family_builder = family_builder or RuleFamilyBuilder(rules_dir=self.rules_dir, parser=self.parser)
+        self.external_reader = external_reader or ExternalFrontendRuleReader()
 
     def translate(self, request: TranslateRequest) -> TranslateResponse:
         """Return a template-derived rules JSON for ``request``."""
+        if request.external_frontend:
+            return self._translate_external_frontend(request)
+
         parsed = self.parser.parse(rule_text=request.rule_text, game_name=request.game_name)
         if parsed is None:
-            validation = ValidationResult(valid=False, errors=["无法识别游戏类型"])
-            return TranslateResponse(rules_json={}, confidence=0.0, validation=validation)
+            return self._translate_rule_family(request)
 
         rules = self._load_template(parsed.game_id)
         warnings = self._apply_parameters(rules, parsed)
@@ -49,6 +57,46 @@ class TemplateTranslator:
         validation = self._validate(rules)
         validation.warnings.extend(warnings)
         confidence = 0.95 if validation.valid else 0.4
+        return TranslateResponse(rules_json=rules, confidence=confidence, validation=validation)
+
+    def _translate_external_frontend(self, request: TranslateRequest) -> TranslateResponse:
+        rule_input = self.external_reader.read(request.external_frontend or {})
+        spec = self.family_builder.parse_external(rule_input)
+        if spec is not None:
+            rules = self.family_builder.build(spec)
+            validation = self._validate(rules)
+            validation.warnings.extend([f"使用外部前端规则族生成: {spec.family_id}", *spec.warnings])
+            confidence = 0.8 if validation.valid else 0.35
+            return TranslateResponse(rules_json=rules, confidence=confidence, validation=validation)
+
+        if rule_input.rule_text:
+            fallback_request = TranslateRequest(
+                rule_text=rule_input.rule_text,
+                source_lang=request.source_lang,
+                game_name=request.game_name or rule_input.game_id,
+            )
+            response = self.translate(fallback_request)
+            if response.validation is not None:
+                response.validation.warnings.extend(rule_input.warnings)
+            return response
+
+        validation = ValidationResult(
+            valid=False,
+            errors=["无法从外部前端读取规则信息"],
+            warnings=rule_input.warnings,
+        )
+        return TranslateResponse(rules_json={}, confidence=0.0, validation=validation)
+
+    def _translate_rule_family(self, request: TranslateRequest) -> TranslateResponse:
+        spec = self.family_builder.parse(rule_text=request.rule_text, game_name=request.game_name)
+        if spec is None:
+            validation = ValidationResult(valid=False, errors=["无法识别游戏类型"])
+            return TranslateResponse(rules_json={}, confidence=0.0, validation=validation)
+
+        rules = self.family_builder.build(spec)
+        validation = self._validate(rules)
+        validation.warnings.extend([f"使用规则族生成: {spec.family_id}", *spec.warnings])
+        confidence = 0.8 if validation.valid else 0.35
         return TranslateResponse(rules_json=rules, confidence=confidence, validation=validation)
 
     def _load_template(self, game_id: str) -> dict[str, Any]:

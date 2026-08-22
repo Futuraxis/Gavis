@@ -206,6 +206,23 @@ class TestBenchmark:
         assert exc.value.code == 400
 
 
+class TestRulesTranslation:
+    def test_translate_rules_api(self, base_url: str):
+        data = _post(
+            base_url + "/api/rules/translate",
+            {
+                "rule_text": "connect4 是一个 7x7 棋盘，四连成线获胜",
+                "run_engine_validation": False,
+            },
+        )
+
+        assert data["ok"] is True
+        assert data["validation"]["valid"] is True
+        assert data["rules_json"]["meta"]["family"] == "board_alignment"
+        assert data["rules_json"]["constants"]["board_size"] == 7
+        assert data["rules_json"]["constants"]["win_length"] == 4
+
+
 class TestStatic:
     def test_unbuilt_frontend_503(self, base_url: str):
         with pytest.raises(urllib.error.HTTPError) as exc:

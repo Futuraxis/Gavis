@@ -11,8 +11,9 @@ class TranslateRequest:
     """Input: a description of a strategy game's rules."""
 
     rule_text: str
-    source_lang: str = "zh"  # language hint for the translator
-    game_name: str | None = None  # optional known game name
+    source_lang: str = "zh"
+    game_name: str | None = None
+    external_frontend: dict[str, Any] | None = None
 
 
 @dataclass

@@ -106,6 +106,14 @@ class RuleParser:
             return self._parse_texas_holdem(text)
         return {}
 
+    def parse_grid_family_parameters(self, text: str) -> dict[str, Any]:
+        """Extract generic square-board alignment parameters.
+
+        This is intentionally broader than template parsing: it is used by
+        rule-family generation after known game names fail to match.
+        """
+        return self._parse_grid_game(text, include_vanish=True)
+
     def _parse_grid_game(
         self,
         text: str,

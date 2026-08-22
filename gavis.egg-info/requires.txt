@@ -5,6 +5,7 @@ opencv-python>=4.8
 pydantic>=2.0
 httpx>=0.25
 torch>=2.0
+transformers>=4.40
 scipy>=1.10
 gymnasium>=0.28
 tqdm>=4.64
@@ -19,6 +20,10 @@ httpx>=0.25
 [dev]
 pytest>=7.0
 ruff>=0.1
+
+[llm]
+torch>=2.0
+transformers>=4.40
 
 [psro]
 scipy>=1.10

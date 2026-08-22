@@ -9,6 +9,9 @@ import pytest
 
 from layer1_translator import (
     EngineValidator,
+    ExternalFrontendRuleReader,
+    LLMRuleTranslator,
+    NaturalLanguageRuleTranslator,
     RuleParser,
     SchemaValidator,
     TemplateTranslator,
@@ -16,6 +19,7 @@ from layer1_translator import (
     TranslateResponse,
     TranslatorProtocol,
     ValidationResult,
+    translate_rules_json,
 )
 
 RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
@@ -163,10 +167,12 @@ class TestTranslateRequest:
             rule_text="完整规则文本",
             source_lang="zh",
             game_name="test_game",
+            external_frontend={"text": "9x9 棋盘，五连获胜"},
         )
         assert req.rule_text == "完整规则文本"
         assert req.source_lang == "zh"
         assert req.game_name == "test_game"
+        assert req.external_frontend == {"text": "9x9 棋盘，五连获胜"}
 
 
 # ── TranslateResponse ─────────────────────────────────────────────
@@ -849,6 +855,34 @@ class TestRuleParser:
         assert parsed.parameters["with_guard"] is False
 
 
+class TestExternalFrontendRuleReader:
+    def test_reads_collected_frontend_payload_without_fetching(self) -> None:
+        payload = {
+            "config": {"gameFamily": "board_alignment", "boardSize": "7"},
+            "attributes": {"data-game-id": "connect_four"},
+            "localStorage": {"rules": "{\"winLength\": 4, \"vanishChance\": \"25%\"}"},
+            "text": "外部前端说明：7x7 棋盘，四连获胜",
+        }
+
+        rule_input = ExternalFrontendRuleReader().read(payload)
+
+        assert rule_input.game_id == "connect_four"
+        assert rule_input.family == "board_alignment"
+        assert rule_input.parameters == {
+            "board_size": 7,
+            "win_length": 4,
+            "vanish_probability": 0.25,
+        }
+        assert rule_input.source == "config"
+        assert rule_input.warnings == []
+
+    def test_invalid_payload_returns_warning(self) -> None:
+        rule_input = ExternalFrontendRuleReader().read({"config": "bad"})
+
+        assert rule_input.parameters == {}
+        assert any("config" in warning for warning in rule_input.warnings)
+
+
 class TestTemplateTranslator:
     def test_translate_known_game_name(self) -> None:
         translator = TemplateTranslator(run_engine_validation=False)
@@ -953,3 +987,114 @@ class TestTemplateTranslator:
 
     def test_template_translator_protocol(self) -> None:
         assert isinstance(TemplateTranslator(run_engine_validation=False), TranslatorProtocol)
+
+    def test_translate_rule_family_from_natural_language(self) -> None:
+        translator = TemplateTranslator(run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="connect4 是一个 7x7 棋盘，四连成线获胜"))
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.confidence == 0.8
+        assert response.rules_json["meta"]["family"] == "board_alignment"
+        assert response.rules_json["constants"]["board_size"] == 7
+        assert response.rules_json["constants"]["win_length"] == 4
+
+    def test_translate_external_frontend_payload_in_layer1(self) -> None:
+        translator = TemplateTranslator(run_engine_validation=False)
+        response = translator.translate(
+            TranslateRequest(
+                rule_text="",
+                external_frontend={
+                    "attributes": {
+                        "data-game-id": "browser_connect",
+                        "data-game-family": "board_alignment",
+                        "data-board-size": "6",
+                        "data-win-length": "4",
+                    },
+                    "sessionStorage": {"vanishProbability": "0.1"},
+                },
+            )
+        )
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["meta"]["gameId"] == "browser_connect"
+        assert response.rules_json["constants"]["board_size"] == 6
+        assert response.rules_json["constants"]["win_length"] == 4
+        assert response.rules_json["constants"]["vanish_probability"] == 0.1
+        assert any("外部前端" in warning for warning in response.validation.warnings)
+
+
+class TestNaturalLanguageRuleTranslator:
+    def test_translator_facade_matches_protocol(self) -> None:
+        translator = NaturalLanguageRuleTranslator(TemplateTranslator(run_engine_validation=False))
+
+        response = translator.translate_text("随机五子棋，9x9，五连获胜")
+
+        assert isinstance(translator, TranslatorProtocol)
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["meta"]["gameId"] == "stochastic_gomoku"
+
+    def test_translate_rules_json_function(self) -> None:
+        response = translate_rules_json(
+            "connect4 是一个 7x7 棋盘，四连成线获胜",
+            run_engine_validation=False,
+        )
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["meta"]["family"] == "board_alignment"
+
+    def test_translate_rules_json_llm_mode_falls_back_without_model(self) -> None:
+        response = translate_rules_json(
+            "随机五子棋，9x9，五连获胜",
+            run_engine_validation=False,
+            use_llm=True,
+            llm_model_path="/tmp/gavis-missing-layer1-llm",
+        )
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["meta"]["gameId"] == "stochastic_gomoku"
+
+
+class TestLLMRuleTranslator:
+    def test_llm_translator_accepts_valid_local_client_output(self, gomoku_rules: dict) -> None:
+        class FakeClient:
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 4096) -> str:
+                return "```json\n" + json.dumps(gomoku_rules, ensure_ascii=False) + "\n```"
+
+        translator = LLMRuleTranslator(FakeClient(), run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="9x9 五子棋"))
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["meta"]["gameId"] == "stochastic_gomoku"
+        assert any("LLM" in warning for warning in response.validation.warnings)
+
+    def test_llm_translator_repairs_invalid_output(self, gomoku_rules: dict) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 4096) -> str:
+                self.calls += 1
+                return "{}" if self.calls == 1 else json.dumps(gomoku_rules, ensure_ascii=False)
+
+        client = FakeClient()
+        translator = LLMRuleTranslator(client, run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="9x9 五子棋"))
+
+        assert client.calls == 2
+        assert response.validation is not None
+        assert response.validation.valid
+
+    def test_llm_translator_falls_back_when_local_model_missing(self) -> None:
+        translator = LLMRuleTranslator(model_path="/tmp/gavis-missing-layer1-llm", run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="随机五子棋，9x9，五连获胜"))
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["meta"]["gameId"] == "stochastic_gomoku"
+        assert any("本地 LLM 不可用" in warning for warning in response.validation.warnings)

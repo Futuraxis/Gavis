@@ -12,6 +12,9 @@ Requires-Dist: pydantic>=2.0; extra == "binding"
 Requires-Dist: httpx>=0.25; extra == "binding"
 Provides-Extra: torch
 Requires-Dist: torch>=2.0; extra == "torch"
+Provides-Extra: llm
+Requires-Dist: torch>=2.0; extra == "llm"
+Requires-Dist: transformers>=4.40; extra == "llm"
 Provides-Extra: psro
 Requires-Dist: scipy>=1.10; extra == "psro"
 Requires-Dist: gymnasium>=0.28; extra == "psro"
@@ -24,6 +27,7 @@ Requires-Dist: opencv-python>=4.8; extra == "all"
 Requires-Dist: pydantic>=2.0; extra == "all"
 Requires-Dist: httpx>=0.25; extra == "all"
 Requires-Dist: torch>=2.0; extra == "all"
+Requires-Dist: transformers>=4.40; extra == "all"
 Requires-Dist: scipy>=1.10; extra == "all"
 Requires-Dist: gymnasium>=0.28; extra == "all"
 Requires-Dist: tqdm>=4.64; extra == "all"

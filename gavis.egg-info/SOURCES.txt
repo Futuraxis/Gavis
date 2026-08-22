@@ -9,6 +9,7 @@ demos/demo_werewolf_llm.py
 demos/marl_report.py
 demos/marl_tournament.py
 demos/train_hybrid.py
+demos/train_layer1_llm.py
 demos/train_marl.py
 gavis.egg-info/PKG-INFO
 gavis.egg-info/SOURCES.txt
@@ -17,7 +18,11 @@ gavis.egg-info/requires.txt
 gavis.egg-info/top_level.txt
 layer1_translator/__init__.py
 layer1_translator/engine_validator.py
+layer1_translator/external_frontend_reader.py
+layer1_translator/llm_translator.py
+layer1_translator/natural_language_translator.py
 layer1_translator/protocol.py
+layer1_translator/rule_family_builder.py
 layer1_translator/rule_parser.py
 layer1_translator/schema_validator.py
 layer1_translator/template_translator.py

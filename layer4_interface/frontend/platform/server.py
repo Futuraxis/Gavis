@@ -18,6 +18,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from layer1_translator import translate_rules_json
 from layer4_interface.frontend.common.http_utils import BodyTooLargeError, read_json_body, send_error_json, send_json
 
 from .benchmark import SOLVER_OPTIONS, BenchmarkRunner
@@ -102,6 +103,8 @@ def make_handler(
                     self._handle_match_state()
                 elif path == "/api/benchmark/start":
                     self._handle_benchmark_start()
+                elif path == "/api/rules/translate":
+                    self._handle_rules_translate()
                 else:
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
             except BodyTooLargeError as exc:
@@ -189,6 +192,29 @@ def make_handler(
                 budget=int(budget) if budget is not None else None,
             )
             send_json(self, HTTPStatus.OK, {"ok": True, "job_id": job.job_id, "job": asdict(job)})
+
+        def _handle_rules_translate(self) -> None:
+            payload = read_json_body(self)
+            response = translate_rules_json(
+                str(payload.get("rule_text", "")),
+                source_lang=str(payload.get("source_lang", "zh")),
+                game_name=payload.get("game_name"),
+                external_frontend=payload.get("external_frontend"),
+                run_engine_validation=bool(payload.get("run_engine_validation", True)),
+                use_llm=bool(payload.get("use_llm", False)),
+                llm_model_path=payload.get("llm_model_path"),
+            )
+            validation = response.validation
+            send_json(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "rules_json": response.rules_json,
+                    "confidence": response.confidence,
+                    "validation": asdict(validation) if validation is not None else None,
+                },
+            )
 
     return PlatformHandler
 
