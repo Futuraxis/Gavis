@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 
 from ...core.engine import GameEngine
 
@@ -44,7 +43,7 @@ class WerewolfAdapter(GameEngine):
         with_witch: bool = True,
         with_hunter: bool = True,
         with_guard: bool = False,
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ):
         extras = [
             r

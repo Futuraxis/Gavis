@@ -6,13 +6,12 @@ import time
 
 import pytest
 
+from demos.solver_provider import RandomSolver, create_solver, default_provider
 from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
 from layer4_interface.frontend.platform.benchmark import (
     BENCHMARK_BUDGETS,
     SOLVER_OPTIONS,
     BenchmarkRunner,
-    RandomSolver,
-    create_solver,
 )
 from layer4_interface.frontend.platform.games import GAMES
 
@@ -64,7 +63,7 @@ class TestRunner:
         assert job.status == "done", job.error
 
     def test_job_lifecycle(self):
-        runner = BenchmarkRunner(seed=42)
+        runner = BenchmarkRunner(provider=default_provider, seed=42)
         job = runner.start("moon_chess", "mcts", "random", 2, budget=200)
         self._wait(job)
         results = job.results
@@ -76,7 +75,7 @@ class TestRunner:
         assert job.progress == 2
 
     def test_concurrent_jobs(self):
-        runner = BenchmarkRunner(seed=42)
+        runner = BenchmarkRunner(provider=default_provider, seed=42)
         job_a = runner.start("moon_chess", "mcts", "random", 1, budget=100)
         job_b = runner.start("moon_chess", "random", "mcts", 1, budget=100)
         assert job_a.job_id != job_b.job_id
@@ -86,10 +85,10 @@ class TestRunner:
         assert runner.status(job_b.job_id).status == "done"
 
     def test_status_unknown_job(self):
-        assert BenchmarkRunner().status("nope0000") is None
+        assert BenchmarkRunner(provider=default_provider).status("nope0000") is None
 
     def test_validation(self):
-        runner = BenchmarkRunner()
+        runner = BenchmarkRunner(provider=default_provider)
         with pytest.raises(ValueError):
             runner.start("moon_chess", "mcts", "mcts", 2)  # identical solvers
         with pytest.raises(ValueError):

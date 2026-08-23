@@ -27,6 +27,12 @@
 | CORS 通配 + 无认证 | Major | 保留 | 平台服务定位为本机开发工具（默认绑定 127.0.0.1）。对外网/局域网暴露前：收紧 CORS 到同源 + 引入鉴权（token 或 session），属 P2 平台工程化 |
 | 阻塞 I/O（LLM 调用） | Major | 保留 | 本地单人演示可接受；对外服务前需线程池/任务队列 + 超时重试（P2） |
 
+## 既定偏差登记（2026-08-22 第二轮审查）
+
+| 条目 | 等级 | 位置 | 决策与前置条件 |
+|------|------|------|----------------|
+| `eval()`/`exec()` 直接使用（与 coding-standards §2.4 明文禁止冲突） | Major | `core/expr_eval.py:1084,1087`（`_eval_arithmetic` 算术串求值）；`core/state_graph.py:116`（`_eval_length_expr`）；`core/rules_compiler.py:479`（`_safe_eval`，noqa S307）、`:808`（`exec(compile(...))` codegen，noqa S102） | **保留**。缓解：输入为受信静态规则 JSON（`rules/` 顶层 + 生成的 v5.1 规则）；`eval` 均剥离 `__builtins__`；codegen 产物经 probe 验证兜底。**前置条件**：Layer 1（LLM 规则翻译，`layer1_translator/`）启用后「受信输入」前提失效——届时必须 (a) 对 Layer 1 产出规则强制 `schema_validator` 校验（已有模块，`layer1_translator/schema_validator.py`），(b) 提供 `GameEngine(rules, allow_codegen=False)` 类开关强制走纯解释器路径（解释器可处理全部 v5.1 表达式，`test_expr_eval.py::_assert_consistent` 已系统验证双路径一致）。长期方向：算术串求值替换为自研 tokenizer/求值器或 `ast` 节点白名单求值，彻底消除 `eval` |
+
 ## 未排期（P2 候选）
 
 - RL 求解器多环境并行（PPO/MARL 的 SubprocVecEnv 式采集）——本轮只做了

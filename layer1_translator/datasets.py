@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,8 @@ from .local_client import format_messages
 from .prompt_builder import RulePromptBuilder
 from .protocol import TranslateRequest
 from .template_translator import TemplateTranslator
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -55,8 +58,14 @@ class RuleJsonDataset:
             max_length=self.max_length,
             add_special_tokens=False,
         )["input_ids"]
-        labels = [-100] * min(len(prompt_ids), len(full_ids)) + full_ids[len(prompt_ids) :]
-        labels = labels[: len(full_ids)]
+        prompt_len = min(len(prompt_ids), len(full_ids))
+        if prompt_len >= len(full_ids):
+            logger.warning(
+                "RuleJsonDataset 样本 %d 的 prompt 已达 max_length=%d，labels 将全为 -100（无监督信号）",
+                index,
+                self.max_length,
+            )
+        labels = [-100] * prompt_len + full_ids[prompt_len:]
         return {"input_ids": full_ids, "labels": labels, "attention_mask": [1] * len(full_ids)}
 
 
@@ -98,6 +107,8 @@ def load_jsonl_examples(path: Path) -> list[RuleExample]:
             if not stripped:
                 continue
             row = json.loads(stripped)
+            if not isinstance(row, dict):
+                raise ValueError(f"{path}:{line_number} 需要 JSON object 行，得到 {type(row).__name__}")
             rules_json = row.get("rules_json")
             if not isinstance(rules_json, dict):
                 raise ValueError(f"{path}:{line_number} 缺少 dict 类型 rules_json")

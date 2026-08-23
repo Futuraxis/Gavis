@@ -12,25 +12,11 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 #: match_id 白名单：仅字母数字、下划线、连字符（审计 3.6 路径遍历修复——
 #: 不含路径分隔符/`..`，杜绝 `../../` 逃逸出 data 目录）。
 _MATCH_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-
-#: Metadata fields embedded under ``meta`` for cheap list queries.
-_META_FIELDS = (
-    "match_id",
-    "game_id",
-    "player_pid",
-    "ai_pid",
-    "difficulty",
-    "winner",
-    "over",
-    "moves",
-    "started_at",
-    "finished_at",
-)
 
 
 class HistoryError(Exception):
@@ -85,7 +71,7 @@ class MatchHistory:
 
     # ── Reading ──────────────────────────────────────────────────
 
-    def list_matches(self, limit: int = 100, game_id: Optional[str] = None) -> list[dict]:
+    def list_matches(self, limit: int = 100, game_id: str | None = None) -> list[dict]:
         """Metadata of finished matches, newest first.
 
         Corrupt or unreadable files are skipped silently.

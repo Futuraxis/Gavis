@@ -110,6 +110,21 @@ class TestCollectionPrimitives:
         assert _assert_consistent(ev, {"at": [{"var": "$table"}, {"const": "m1"}]}, ctx) == 3
         assert _assert_consistent(ev, {"at": [{"var": "$table"}, {"const": "z9"}]}, ctx) is None
 
+    def test_get_path_numeric_segment_bounds(self, ev):
+        """数字段 get 路径：越界/负索引一律 None（解释器与编译两条路径对齐）。
+
+        Regression for review M-4: the interpreter previously raised
+        IndexError on out-of-bounds numeric segments while the compiled
+        closure returned None; in-bounds negative indices wrapped around.
+        """
+        ctx = {"rows": [["a", "b"], ["c", "d"]]}
+        assert _assert_consistent(ev, {"get": ["$rows", "1", "0"]}, ctx) == "c"
+        assert _assert_consistent(ev, {"get": ["$rows", "9"]}, ctx) is None
+        assert _assert_consistent(ev, {"get": ["$rows", "-1"]}, ctx) is None
+        assert _assert_consistent(ev, {"get": ["$rows", "1", "-2"]}, ctx) is None
+        # 解释器路径不抛 IndexError
+        assert ev.eval({"get": ["$rows", "9"]}, ctx) is None
+
 
 # ── choose ────────────────────────────────────────────────────────────
 

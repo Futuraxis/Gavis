@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from demos.solver_provider import default_provider
 from layer4_interface.frontend.platform.games import GAMES, PlayError
 from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.session import PlayManager
@@ -16,7 +17,7 @@ from layer4_interface.frontend.platform.session import PlayManager
 
 @pytest.fixture
 def manager(tmp_path: pytest.TempPathFactory) -> PlayManager:
-    return PlayManager(history=MatchHistory(tmp_path), seed=42)
+    return PlayManager(provider=default_provider, history=MatchHistory(tmp_path), seed=42)
 
 
 def _first_legal_cell(session) -> int:

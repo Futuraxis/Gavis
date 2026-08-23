@@ -28,7 +28,16 @@ class MockBinding:
         self._seq_lock = threading.Lock()
 
     def parse(self, source: str) -> Observation:
-        return self._observation
+        # 防御拷贝：与 parse_image 一致，调用方变异结果不污染内部状态（审查 P2）
+        obs = self._observation
+        return Observation(
+            gameId=obs.gameId,
+            source=obs.source,
+            frameSeq=obs.frameSeq,
+            boardObservation=[row[:] for row in obs.boardObservation],
+            confidence=[row[:] for row in obs.confidence],
+            observedAt=obs.observedAt,
+        )
 
     def parse_image(self, image_path: str, **kwargs) -> Observation:
         with self._seq_lock:

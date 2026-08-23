@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 
 from ...core.engine import GameEngine
 from ...core.state_graph import clone_state
@@ -40,7 +39,7 @@ class TexasHoldemAdapter(GameEngine):
     PLAYER_SB = "p_sb"
     PLAYER_BB = "p_bb"
 
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(self, seed: int | None = None):
         rules_path = Path(__file__).resolve().parent.parent.parent.parent / "rules" / "texas_holdem.json"
         with open(rules_path, "r", encoding="utf-8") as f:
             rules = json.load(f)

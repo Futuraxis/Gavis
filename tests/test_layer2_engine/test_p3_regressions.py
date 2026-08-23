@@ -81,8 +81,16 @@ def test_arith_unresolvable_var_falls_back():
 def test_trigger_cascade_processes_nested_events():
     rules = _player_rules()
     rules["groundState"]["log"] = {"type": "array", "length": {"const": 4}, "mutable": True}
-    rules["actions"] = [{"id": "go", "type": "action", "phases": ["p1"], "effectRef": "emit_a",
-                         "canonicalKey": {"const": "go"}, "legal": {"const": True}}]
+    rules["actions"] = [
+        {
+            "id": "go",
+            "type": "action",
+            "phases": ["p1"],
+            "effectRef": "emit_a",
+            "canonicalKey": {"const": "go"},
+            "legal": {"const": True},
+        }
+    ]
     rules["effectors"] = {
         "emit_a": {"ops": [{"op": "emit", "event": "a", "payload": {}}]},
         "emit_b": {"ops": [{"op": "emit", "event": "b", "payload": {}}]},
@@ -110,8 +118,16 @@ def test_trigger_cascade_processes_nested_events():
 
 def test_branch_missing_then_no_crash():
     rules = _player_rules()
-    rules["actions"] = [{"id": "go", "type": "action", "phases": ["p1"], "effectRef": "br",
-                         "canonicalKey": {"const": "go"}, "legal": {"const": True}}]
+    rules["actions"] = [
+        {
+            "id": "go",
+            "type": "action",
+            "phases": ["p1"],
+            "effectRef": "br",
+            "canonicalKey": {"const": "go"},
+            "legal": {"const": True},
+        }
+    ]
     rules["effectors"] = {"br": {"ops": [{"op": "branch", "if": {"const": True}}]}}
     engine = GameEngine(rules, seed=1)
     from layer2_engine.interfaces.solver_adapter import ActionInstance
@@ -124,8 +140,16 @@ def test_inc_remove_foreach_none_guards():
     rules = _player_rules()
     rules["groundState"]["hand"] = {"type": "array", "length": {"const": 3}, "mutable": False}
     rules["groundState"]["env"]["fields"]["turns"] = {"type": "int", "initial": 0}
-    rules["actions"] = [{"id": "go", "type": "action", "phases": ["p1"], "effectRef": "ops",
-                         "canonicalKey": {"const": "go"}, "legal": {"const": True}}]
+    rules["actions"] = [
+        {
+            "id": "go",
+            "type": "action",
+            "phases": ["p1"],
+            "effectRef": "ops",
+            "canonicalKey": {"const": "go"},
+            "legal": {"const": True},
+        }
+    ]
     rules["effectors"] = {
         "ops": {
             "ops": [
@@ -153,16 +177,32 @@ def test_trim_by_key_non_square_cols():
     rules["groundState"]["board"] = {"type": "array", "length": {"const": 12}, "mutable": False}
     rules["groundState"]["order"] = {"type": "array", "length": {"const": 8}, "mutable": True}
     rules["derivedViews"] = {
-        "cell": {"from": {"type": "grid", "array": "board", "cols": {"const": 4}},
-                 "fields": {"id": {"template": "cell_{$row}_{$col}"}}}
+        "cell": {
+            "from": {"type": "grid", "array": "board", "cols": {"const": 4}},
+            "fields": {"id": {"template": "cell_{$row}_{$col}"}},
+        }
     }
-    rules["actions"] = [{"id": "go", "type": "action", "phases": ["p1"], "effectRef": "do_trim",
-                         "canonicalKey": {"const": "go"}, "legal": {"const": True}}]
+    rules["actions"] = [
+        {
+            "id": "go",
+            "type": "action",
+            "phases": ["p1"],
+            "effectRef": "do_trim",
+            "canonicalKey": {"const": "go"},
+            "legal": {"const": True},
+        }
+    ]
     rules["effectors"] = {
         "do_trim": {
             "ops": [
-                {"op": "trimByKey", "array": "order", "key": "player_id", "value": {"const": "p0"}, "max": {"const": 1},
-                 "onEvict": [{"op": "setIndex", "array": "board", "at": {"var": "evicted_index"}, "value": None}]}
+                {
+                    "op": "trimByKey",
+                    "array": "order",
+                    "key": "player_id",
+                    "value": {"const": "p0"},
+                    "max": {"const": 1},
+                    "onEvict": [{"op": "setIndex", "array": "board", "at": {"var": "evicted_index"}, "value": None}],
+                }
             ]
         }
     }
@@ -196,9 +236,13 @@ def test_compiled_count_accepts_dict():
 
 def test_chance_canonical_key_numeric_outcome():
     rules = _player_rules()
-    rules["chance"] = [{"phases": ["p1"], "probability": {"explicit": [
-        {"outcome": 3, "prob": 0.5}, {"outcome": 4, "prob": 0.5}]},
-        "canonicalKey": {"eq": [{"var": "$outcome"}, {"const": 3}]}}]
+    rules["chance"] = [
+        {
+            "phases": ["p1"],
+            "probability": {"explicit": [{"outcome": 3, "prob": 0.5}, {"outcome": 4, "prob": 0.5}]},
+            "canonicalKey": {"eq": [{"var": "$outcome"}, {"const": 3}]},
+        }
+    ]
     engine = GameEngine(rules, seed=1)
     state = engine.create_initial_state()
     compiled = engine._compiled
@@ -212,12 +256,14 @@ def test_chance_canonical_key_numeric_outcome():
 
 def test_cycle_detection_marks_only_cycle_members():
     ev = ExprEvaluator()
-    ev.set_functions({
-        "d": {"params": ["x"], "expr": {"call": ["c", {"var": "$x"}]}},
-        "c": {"params": ["x"], "expr": {"call": ["b", {"var": "$x"}]}},
-        "b": {"params": ["x"], "expr": {"call": ["a", {"var": "$x"}]}},
-        "a": {"params": ["x"], "expr": {"call": ["b", {"var": "$x"}]}},
-    })
+    ev.set_functions(
+        {
+            "d": {"params": ["x"], "expr": {"call": ["c", {"var": "$x"}]}},
+            "c": {"params": ["x"], "expr": {"call": ["b", {"var": "$x"}]}},
+            "b": {"params": ["x"], "expr": {"call": ["a", {"var": "$x"}]}},
+            "a": {"params": ["x"], "expr": {"call": ["b", {"var": "$x"}]}},
+        }
+    )
     # C→B→A→B：只有 A/B 是环成员；C/D 只是可达环，不应被标记
     assert ev._cyclic == {"a", "b"}
     assert "c" not in ev._cyclic and "d" not in ev._cyclic
@@ -278,8 +324,11 @@ def test_view_cache_hit_and_invalidation():
     first = engine._materialize_view(state, "cell")
     assert engine._materialize_view(state, "cell") is first  # 缓存命中
     # 原地变更数组 → 缓存失效
-    engine._execute_op({"op": "setIndex", "array": "board", "at": {"const": 0}, "value": {"const": "p_black"}},
-                       {"$state": state}, state)
+    engine._execute_op(
+        {"op": "setIndex", "array": "board", "at": {"const": 0}, "value": {"const": "p_black"}},
+        {"$state": state},
+        state,
+    )
     second = engine._materialize_view(state, "cell")
     assert second is not first
     assert second[0]["value"] == "p_black"
@@ -302,9 +351,17 @@ def test_project_observation_partial_info_builds_ctx_once():
 
 def test_compile_without_engine_skips_skipped_templates():
     rules = _player_rules()
-    rules["actions"] = [{"id": "multi", "type": "action", "phases": ["p1"], "effectRef": "do_x",
-                         "params": {"a": {"domain": [1, 2]}, "b": {"domain": [3]}},
-                         "legal": {"const": True}, "canonicalKey": {"template": "m{$a}{$b}"}}]
+    rules["actions"] = [
+        {
+            "id": "multi",
+            "type": "action",
+            "phases": ["p1"],
+            "effectRef": "do_x",
+            "params": {"a": {"domain": [1, 2]}, "b": {"domain": [3]}},
+            "legal": {"const": True},
+            "canonicalKey": {"template": "m{$a}{$b}"},
+        }
+    ]
     artifacts = RulesCompiler().compile(rules)  # engine=None
     assert artifacts.legal_actions is None  # 无法运行时 fallback → 整件禁用
 
@@ -324,8 +381,10 @@ def test_view_field_call_with_alias():
     rules = _player_rules()
     rules["groundState"]["a"] = {"type": "array", "length": {"const": 3}, "mutable": False}
     rules["derivedViews"] = {
-        "nums": {"from": {"type": "enum", "array": "a"},
-                 "fields": {"d": {"call": ["double", {"get": ["$self", "value"]}]}}}
+        "nums": {
+            "from": {"type": "enum", "array": "a"},
+            "fields": {"d": {"call": ["double", {"get": ["$self", "value"]}]}},
+        }
     }
     rules["functions"] = {"double": {"params": ["x"], "expr": {"mul": [{"var": "$x"}, {"const": 2}]}}}
     engine = GameEngine(rules, seed=1)

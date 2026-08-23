@@ -70,10 +70,11 @@ class QwenVisionClient:
             ],
         }
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        # 空 key 不发 Authorization 头（审查 P2：未配置 DASHSCOPE_API_KEY
+        # 时不能带 "Bearer None" 头）；服务端自会返回 401 由调用方上报。
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
         client_kwargs = {"verify": not self.skip_ssl_verify} if self.skip_ssl_verify else {}
         try:
@@ -89,7 +90,12 @@ class QwenVisionClient:
             raise VisionModelResponseError(f"Qwen-VL API call failed: {e}") from e
 
         data = resp.json()
-        content = data["choices"][0]["message"]["content"]
+        # 裸 key 访问（审查：上游响应缺字段时避免 KeyError 穿透）——
+        # VisionModelResponseError 由 vision server 映射为 400。
+        try:
+            content = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as e:
+            raise VisionModelResponseError(f"Qwen-VL 响应缺少内容字段: {e}") from e
 
         # Try to parse structured output from the response
         return self._parse_llm_output(content)

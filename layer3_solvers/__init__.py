@@ -8,6 +8,7 @@ from .base import SolverBase, SolverConfig
 from .cfr.solver import CFR, CFRConfig
 from .hybrid.solver import HybridConfig, HybridSolver
 from .llm.ollama_solver import OllamaConfig, OllamaSolver
+from .mahjong.heuristic import MahjongHeuristicAI
 from .mcts.solver import MCTS, MCTSConfig
 from .werewolf import BayesConfig, BayesSolver
 
@@ -40,8 +41,7 @@ __all__ = [
     "MCTSConfig",
     "CFR",
     "CFRConfig",
-    "PSROSolver",
-    "PSROConfig",
+    "MahjongHeuristicAI",
     "HybridSolver",
     "HybridConfig",
     "OllamaSolver",

@@ -8,8 +8,8 @@ This adapter only adds:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -20,13 +20,13 @@ class MoonChessAdapter(GameEngine):
     """GameEngine subclass adding RL-friendly methods for Moon Chess."""
 
     BOARD_SIZE = 3
-    MAX_PIECES = 3
     ACTION_DIM = 9
     FEATURE_DIM = 38
+    # 步数归一化分母（get_feature_vector 第 38 维）
+    STEP_NORM = 32.0
 
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(self, seed: int | None = None):
         rules_path = Path(__file__).resolve().parent.parent.parent.parent / "rules" / "moon_chess.json"
-        import json
 
         with open(rules_path, "r", encoding="utf-8") as f:
             rules = json.load(f)
@@ -38,7 +38,7 @@ class MoonChessAdapter(GameEngine):
         Instead of raw ground state, return a structured observation with
         board as 2D list, piece order, and metadata.
         """
-        board = state["_arrays"].get("board", [None] * 9)
+        board = state["_arrays"].get("board", [None] * self.BOARD_SIZE * self.BOARD_SIZE)
         board_2d = [[board[r * self.BOARD_SIZE + c] for c in range(self.BOARD_SIZE)] for r in range(self.BOARD_SIZE)]
         env = state.get("env", {})
 
@@ -137,7 +137,7 @@ class MoonChessAdapter(GameEngine):
                 feats.append(float(age_map.get(f"cell_{r}_{c}", 0)))
 
         feats.append(1.0 if cp == perspective_player_id else 0.0)
-        feats.append(min(1.0, sc / 32.0))
+        feats.append(min(1.0, sc / self.STEP_NORM))
         return np.asarray(feats, dtype=np.float32)
 
     def get_action_mask(self, state: dict) -> np.ndarray:
@@ -150,7 +150,7 @@ class MoonChessAdapter(GameEngine):
             cid = cell.get("id", "") if isinstance(cell, dict) else str(cell)
             try:
                 _, r, c = cid.split("_")
-                idx = int(r) * 3 + int(c)
+                idx = int(r) * self.BOARD_SIZE + int(c)
                 if 0 <= idx < self.ACTION_DIM:
                     mask[idx] = 1.0
             except (ValueError, IndexError):

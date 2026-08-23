@@ -1,27 +1,35 @@
 """Werewolf play session — human vs local-LLM players (one web table).
 
-Each session owns one ``WerewolfAdapter`` (v5.1 rules) plus one
-``OllamaSolver`` per AI seat (local ollama, one instance per player so
-each AI sees only its own partial observation).  Chance nodes (dealing,
+Each session owns one ``WerewolfAdapter`` (v5.1 rules) plus one solver
+handle per AI seat (local ollama, one instance per player so each AI
+sees only its own partial observation).  Chance nodes (dealing,
 night/vote settlement) are resolved automatically; AI turns are driven
 until it is the human's turn again (or the game ends).
 
-The human acts through ``human_move`` with the same action vocabulary the
-AIs use (``speak:{intent}+text`` for speeches, ``{kill|check|...}:{target}``
+The human acts through ``human_move`` with the same action vocabulary
+the AIs use (``speak:{intent}+text`` for speeches, ``{kill|check|...}:{target}``
 for night/vote actions) — the frontend renders the legal options.
+
+Layer contract: solvers are injected through a ``SolverProvider``
+(``demos/solver_provider.py``), so this module holds no
+``layer3_solvers`` import.  The small target/text normalization helpers
+(``_target_of`` / ``_sanitize_speech``) are duplicated here deliberately
+— they are action-vocabulary knowledge, and Layer 4 must not reach into
+``OllamaSolver`` privates (review C1).
 
 Usage:  ``python -m layer4_interface.frontend.play_werewolf.server``
 """
 
 from __future__ import annotations
 
-import random
+import re
+import threading
 import uuid
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass, field, replace
 
 from layer2_engine.games.werewolf.werewolf_adapter import WerewolfAdapter
-from layer3_solvers import OllamaConfig, OllamaSolver
+
+from ...solver_provider import SolverHandle, SolverProvider
 
 PHASE_LABEL = {
     "night_wolf": "夜晚·狼人行动",
@@ -39,6 +47,33 @@ PHASE_LABEL = {
 
 ROLE_LABEL = {"wolf": "狼人", "villager": "村民", "seer": "预言家", "witch": "女巫", "hunter": "猎人", "guard": "守卫"}
 
+# 发言清洗：剔除控制字符（含 \x00-\x1f、\x7f）——与 layer3_solvers/llm/
+# ollama_solver.py 保持一致（审计 3.6 prompt 注入修复）。
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _target_of(params: dict) -> object:
+    """Normalize an action param's target value.
+
+    Player-entity params are dicts (``{"id": ...}``); night_witch
+    ``heal``'s target is the raw ``nightKill`` string, which crashed the
+    old ``.get("id")`` calls (审查 P1-15) — same logic as
+    ``OllamaSolver._target_of``, kept local so Layer 4 needs no L3 import.
+    """
+    t = params.get("target")
+    return t.get("id") if isinstance(t, dict) else t
+
+
+def _sanitize_speech(speech, max_len: int = 200) -> str:
+    """发言清洗：长度上限 + 剔除控制字符（审计 3.6 prompt 注入）。"""
+    text = _CONTROL_CHARS_RE.sub("", str(speech or ""))
+    return text[:max_len]
+
+
+def _with_speech(action, text: str):
+    """Attach sanitized free text to a speak action (mirrors OllamaSolver)."""
+    return replace(action, params={**action.params, "text": _sanitize_speech(text)})
+
 
 class PlayError(Exception):
     """Bad play request (unknown game, illegal move, game over, ...)."""
@@ -51,11 +86,12 @@ class GameSession:
     game_id: str
     human_pid: str
     engine: WerewolfAdapter
-    ai_solvers: dict[str, OllamaSolver]
+    ai_solvers: dict[str, SolverHandle]
     model: str
     state: dict = field(init=False)
     ai_steps: int = 0  # 累计 AI 决策步数（本轮）
     ai_think_s: float = 0.0
+    lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
         self.state = self.engine.create_initial_state()
@@ -67,7 +103,7 @@ class GameSession:
         return self.engine.is_terminal(self.state)
 
     @property
-    def current_player(self) -> Optional[str]:
+    def current_player(self) -> str | None:
         return self.engine.get_current_player(self.state)
 
     @property
@@ -75,7 +111,7 @@ class GameSession:
         return not self.over and self.current_player == self.human_pid
 
     @property
-    def my_role(self) -> Optional[str]:
+    def my_role(self) -> str | None:
         obs = self.engine.get_observation(self.state, self.human_pid)
         return obs.get("my_role")
 
@@ -111,19 +147,12 @@ class GameSession:
             if template_id == "speak":
                 intent = p.get("intent", {}).get("id")
                 if intent == params.get("intent"):
-                    return self._with_speech(action, params.get("text", ""))
+                    return _with_speech(action, params.get("text", ""))
                 continue
             # target 归一化：heal 的 target 是 nightKill 字符串，其余是实体 dict
-            if OllamaSolver._target_of(p) == params.get("target"):  # noqa: SLF001
+            if _target_of(p) == params.get("target"):
                 return action
         return None
-
-    @staticmethod
-    def _with_speech(action, text: str):
-        from dataclasses import replace
-
-        # 输入侧清洗：人类发言同样剔除控制字符并限长（审查 P2-6）
-        return replace(action, params={**action.params, "text": OllamaSolver._sanitize_speech(text)})  # noqa: SLF001
 
     def _ai_turns(self) -> None:
         """Drive AI players until the human's turn (or game over)."""
@@ -145,6 +174,8 @@ class GameSession:
             self.ai_think_s += time.time() - t0
             self.ai_steps += 1
             if action is None:
+                import random
+
                 action = random.choice(legal)
             self.state = self.engine.apply_action(self.state, action)
             self._resolve_chance()
@@ -154,7 +185,8 @@ class GameSession:
     def snapshot(self) -> dict:
         env = self.state["env"]
         obs = self.engine.get_observation(self.state, self.human_pid)
-        pids = self.engine._constants.get("player_ids", [])
+        constants = getattr(self.engine, "_constants", None) or {}
+        pids = constants.get("player_ids", [])
         alive_arr = self.state["_arrays"].get("alive", [])
         roles = self.state["_arrays"].get("roles", [])
 
@@ -178,7 +210,7 @@ class GameSession:
                 if action.template_id == "speak":
                     legal.append({"id": action.template_id, "intent": p.get("intent", {}).get("id")})
                 else:
-                    legal.append({"id": action.template_id, "target": OllamaSolver._target_of(p)})  # noqa: SLF001
+                    legal.append({"id": action.template_id, "target": _target_of(p)})
 
         phase = env.get("phase")
         return {
@@ -205,23 +237,47 @@ class GameSession:
 
 
 class PlayManager:
-    """Registry of active werewolf tables (in-memory, single-process)."""
+    """Registry of active werewolf tables (in-memory, single-process).
 
-    def __init__(self, seed: int = 42) -> None:
+    Thread-safe: registry mutations are guarded by one lock; each
+    session owns a per-session lock so concurrent ``move`` calls cannot
+    interleave on the same game.  Finished sessions are reclaimed via
+    :meth:`remove` (or FIFO eviction).
+    """
+
+    def __init__(self, provider: SolverProvider, seed: int = 42, max_sessions: int = 128) -> None:
+        self._provider = provider
         self._sessions: dict[str, GameSession] = {}
         self._seed = seed
+        self._max_sessions = max_sessions
+        self._lock = threading.Lock()
 
     def start(
         self, players: int = 9, wolves: int = 3, model: str = "qwen3:8b", human_pid: str | None = None
     ) -> GameSession:
+        # 参数边界（审查 P1-17）：players=0 时 uuid % players 会 ZeroDivisionError。
+        if players < 3 or players > 12:
+            raise PlayError(f"players 须在 3..12 之间，得到 {players}")
+        if wolves < 1 or wolves >= players:
+            raise PlayError(f"wolves 须在 1..{players - 1} 之间，得到 {wolves}")
+        model = str(model or "").strip()
+        if not model:
+            raise PlayError("model 不能为空")
         if human_pid is None:
             human_pid = f"p{uuid.uuid4().int % players}"
-        engine = WerewolfAdapter(seed=self._seed, players=players, wolves=wolves)
-        pids = engine._constants.get("player_ids", [])
+        try:
+            engine = WerewolfAdapter(seed=self._seed, players=players, wolves=wolves)
+        except ValueError as exc:
+            # 当前生成的 rules/werewolf.json 只含 9 人/3 狼配比
+            raise PlayError(f"狼人杀配比不受支持: {exc}") from exc
+        constants = getattr(engine, "_constants", None) or {}
+        pids = constants.get("player_ids", [])
         if human_pid not in pids:
             raise PlayError(f"unknown seat: {human_pid}")
         ai_solvers = {
-            pid: OllamaSolver(engine, OllamaConfig(model=model), player_id=pid) for pid in pids if pid != human_pid
+            pid: self._provider.create_solver("werewolf", "ollama", engine, self._seed, 0, model=model, player_id=pid)
+            for pid in pids
+            if pid != human_pid
         }
         session = GameSession(
             game_id=uuid.uuid4().hex[:8],
@@ -232,14 +288,26 @@ class PlayManager:
         )
         session._resolve_chance()
         session._ai_turns()
-        self._sessions[session.game_id] = session
+        self._register(session)
         return session
 
     def get(self, game_id: str) -> GameSession:
-        session = self._sessions.get(game_id)
+        with self._lock:
+            session = self._sessions.get(game_id)
         if session is None:
             raise PlayError(f"unknown game: {game_id}")
         return session
 
     def remove(self, game_id: str) -> None:
-        self._sessions.pop(game_id, None)
+        with self._lock:
+            self._sessions.pop(game_id, None)
+
+    # ── Internals ──────────────────────────────────────────────────
+
+    def _register(self, session: GameSession) -> None:
+        """Register under the lock, evicting the oldest unfinished session (FIFO)."""
+        with self._lock:
+            while len(self._sessions) >= self._max_sessions:
+                _, oldest = next(iter(self._sessions.items()))
+                self._sessions.pop(oldest.game_id, None)
+            self._sessions[session.game_id] = session

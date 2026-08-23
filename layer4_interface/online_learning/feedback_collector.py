@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -26,7 +26,7 @@ class OnlineLearningSignal:
     actions_taken: list[dict] = field(default_factory=list)
     solver_suggestions: list[dict | None] = field(default_factory=list)
     final_outcome: float = 0.0  # +1 (win), 0 (draw), -1 (loss)
-    user_rating: Optional[int] = None  # optional user satisfaction (1-5)
+    user_rating: int | None = None  # optional user satisfaction (1-5)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

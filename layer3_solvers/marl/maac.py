@@ -273,7 +273,9 @@ class MAACSolver(SolverBase):
             new_joint = actions[sel].clone()
             new_joint[:, i] = a_new
             q_online = self._critics[p](obs_slots[sel], new_joint, acting[sel])[:, i]
-            actor_loss_sum = actor_loss_sum - (log_prob * (q_online.detach() - cfg.entropy_temperature * log_prob)).sum()
+            actor_loss_sum = (
+                actor_loss_sum - (log_prob * (q_online.detach() - cfg.entropy_temperature * log_prob)).sum()
+            )
             actor_total_n += n
         if actor_total_n > 0:
             actor_loss = actor_loss_sum / actor_total_n

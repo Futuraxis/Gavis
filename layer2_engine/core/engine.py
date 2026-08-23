@@ -15,7 +15,7 @@ import json
 import logging
 import random
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable
 
 from .expr_eval import ExprEvaluator
 from .rules_compiler import RulesCompiler
@@ -45,13 +45,13 @@ class GameEngine:
     all Layer 3 solvers consume the game through this class.
     """
 
-    def __init__(self, rules: dict, seed: Optional[int] = None):
+    def __init__(self, rules: dict, seed: int | None = None):
         self.rules = rules
         self.rng = random.Random(seed)
         self.expr = ExprEvaluator()
         # Compiled query filters, keyed by id() of the filter expr object
         # (rule dicts live for the engine's lifetime, so ids stay stable).
-        self._compiled_filters: dict[int, callable] = {}
+        self._compiled_filters: dict[int, Callable[..., Any]] = {}
         # RulesCompiler artifacts; assigned at the end of __init__ so that
         # probe validation runs against the pure interpreter.
         self._compiled = None
@@ -94,7 +94,10 @@ class GameEngine:
             artifacts.validate(self)
             self.rng.setstate(rng_state)
             self._compiled = artifacts
-        except Exception:
+        except Exception as exc:
+            # Real codegen bugs (not just UnsupportedShapeError) must not be
+            # swallowed silently — log and fall back to the interpreter.
+            logger.warning("规则编译失败，回退纯解释器: %s: %s", type(exc).__name__, exc)
             self._compiled = None
 
     def _expand_missing(self, template_ids: list[str], state: dict) -> list:
@@ -131,7 +134,7 @@ class GameEngine:
             return "player"
         return "terminal"
 
-    def get_current_player(self, state: dict) -> Optional[str]:
+    def get_current_player(self, state: dict) -> str | None:
         """Return the current player ID, or None if not a player node."""
         if self.get_node_type(state) != "player":
             return None
@@ -479,6 +482,10 @@ class GameEngine:
             for entry in prob_expr["explicit"]:
                 outcome_val = entry.get("outcome", entry.get("value"))
                 prob = entry.get("prob", entry.get("probability"))
+                # 与编译路径（_gen_chance）一致：缺失 outcome/prob 的坏条目
+                # 优雅降级跳过，而不是 float(None) 抛 TypeError。
+                if outcome_val is None or prob is None:
+                    continue
                 if isinstance(prob, dict):
                     prob = float(self.expr.eval(prob, ctx))
                 else:
@@ -526,7 +533,7 @@ class GameEngine:
 
     # ── Effector execution ───────────────────────────────────────────
 
-    def _execute_effector(self, effect_name: str, ctx: dict, state: dict):
+    def _execute_effector(self, effect_name: str, ctx: dict, state: dict) -> None:
         """Execute a named effector's op sequence.
 
         An unknown effector is a rules typo (e.g. a bad ``effectRef``) and
@@ -539,7 +546,7 @@ class GameEngine:
         for op in effector.get("ops", []):
             self._execute_op(op, ctx, state)
 
-    def _execute_op(self, op: dict, ctx: dict, state: dict):
+    def _execute_op(self, op: dict, ctx: dict, state: dict) -> None:
         """Execute a single effect operation."""
         op_type = op.get("op")
 
@@ -740,7 +747,7 @@ class GameEngine:
 
     # ── Triggers ──────────────────────────────────────────────────────
 
-    def _run_triggers(self, state: dict):
+    def _run_triggers(self, state: dict) -> None:
         """Process queued events and effects, cascading included.
 
         Trigger effectors may ``emit`` further events / ``enqueueEffect``
@@ -782,7 +789,7 @@ class GameEngine:
 
     # ── Context building ──────────────────────────────────────────────
 
-    def _build_context(self, state: dict, action: Optional[ActionInstance] = None) -> dict:
+    def _build_context(self, state: dict, action: ActionInstance | None = None) -> dict:
         """Build expression evaluation context from state."""
         constants = self._constants
         ctx: dict[str, Any] = {
@@ -834,7 +841,7 @@ class GameEngine:
             return filtered
         return entities
 
-    def _get_compiled_filter(self, filter_expr: dict) -> callable:
+    def _get_compiled_filter(self, filter_expr: dict) -> Callable[..., Any]:
         """Return a compiled closure for ``filter_expr`` (cached by id)."""
         fid = id(filter_expr)
         fn = self._compiled_filters.get(fid)

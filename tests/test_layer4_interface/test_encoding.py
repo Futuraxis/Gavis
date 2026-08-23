@@ -101,8 +101,30 @@ class TestMoonStateEncoder:
         with pytest.raises(ValueError):
             action_index_to_cell_id(9)
 
+    def test_encode_real_engine_state(self, encoder: MoonStateEncoder):
+        """M-5 回归：真实 v5.0 引擎状态（_arrays 扁平 board + pieceOrder list）。
+
+        encode() 必须支持 v4.1 手工 dict 与真实引擎状态两种形状——旧实现
+        对 ``_arrays.pieceOrder`` 调用 ``.values()`` 直接 AttributeError。
+        """
+        from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
+
+        engine = MoonChessAdapter(seed=1)
+        state = engine.create_initial_state()
+        vec = encoder.encode(state, "p_black")
+        assert vec.shape == (38,)
+        assert vec.dtype == np.float32
+        assert np.all(vec[27:36] == 0.0)  # 空盘无年龄
+
+        acts = engine.get_legal_actions(state)
+        state = engine.apply_action(state, acts[0])  # p_black 落子 cell_0_0
+        vec = encoder.encode(state, "p_black")
+        assert vec[1] == 1.0  # cell_0_0 是 p_black 自己的棋子（扁平 board 解析）
+        assert vec[27] == 1.0  # cell_0_0 年龄 = p_black 第 1 次落子
+        assert vec[36] == 0.0  # 轮到 p_white，非视角玩家
+
     def test_age_map(self, encoder: MoonStateEncoder):
-        """Verify age encoding: newest piece has age 1, oldest has highest age."""
+        """Verify age encoding: age = the player's k-th placement (1 = oldest … N = latest)."""
         state = {
             "board": [["X", None, None], [None, "O", "X"], [None, None, None]],
             "currentPlayerId": "player_o",

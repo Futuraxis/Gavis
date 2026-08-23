@@ -1,24 +1,30 @@
 """Game session management for the Texas Hold'em play app.
 
-Each session owns a ``TexasHoldemAdapter`` (v5.0 rules) and a
-``HybridSolver`` running opponent-model search over sampled worlds
+Each session owns a ``TexasHoldemAdapter`` (v5.0 rules) and a solver
+handle running opponent-model search over sampled worlds
 (``sample_hidden`` + uniform opponent model — imperfect-information
 play without leaking the opponent's hole cards into the search).
 Chance nodes (hole/community dealing, showdown) are resolved
 automatically; the human and the AI only ever see player nodes.
+
+Seat constants and hand/payoff lookups come from the adapter / engine
+protocol (``TexasHoldemAdapter.PLAYER_SB/PLAYER_BB``, ``hand_name``,
+``get_utility``) — no ``layer2_engine.core.poker_utils`` (the module
+never existed).  Solvers are injected through a ``SolverProvider``, so
+Layer 4 holds no ``layer3_solvers`` import.
 """
 
 from __future__ import annotations
 
 import random
+import threading
 import uuid
 from dataclasses import dataclass, field
-from typing import Literal, Optional
-
-from layer2_engine.core.poker_utils import PLAYER_BB, PLAYER_SB, poker_hand_name, poker_payoff
+from typing import Literal
 
 from layer2_engine.games.texas_holdem import TexasHoldemAdapter
-from layer3_solvers import HybridConfig, HybridSolver
+
+from ...solver_provider import SolverHandle, SolverProvider
 
 Seat = Literal["p_sb", "p_bb"]
 Difficulty = Literal["easy", "normal", "hard"]
@@ -44,19 +50,24 @@ class GameSession:
     player_pid: Seat
     difficulty: Difficulty
     engine: TexasHoldemAdapter
-    solver: HybridSolver
+    solver: SolverHandle
     state: dict = field(init=False)
-    last_ai_action: Optional[str] = None
+    last_ai_action: str | None = None
+    lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
         self.state = self.engine.create_initial_state()
 
     @property
     def ai_pid(self) -> Seat:
-        return PLAYER_BB if self.player_pid == PLAYER_SB else PLAYER_SB
+        return (
+            TexasHoldemAdapter.PLAYER_BB
+            if self.player_pid == TexasHoldemAdapter.PLAYER_SB
+            else TexasHoldemAdapter.PLAYER_SB
+        )
 
     @property
-    def winner(self) -> Optional[str]:
+    def winner(self) -> str | None:
         return self.state["env"].get("winner")
 
     @property
@@ -64,15 +75,15 @@ class GameSession:
         return self.engine.is_terminal(self.state)
 
     @property
-    def current_player(self) -> Optional[str]:
+    def current_player(self) -> str | None:
         return self.engine.get_current_player(self.state)
 
     # ── Play actions ────────────────────────────────────────────────
 
-    def _env(self, pid: str, field: str):
+    def _env(self, pid: str, field: str) -> object:
         return self.state["env"].get(f"{pid[2:]}_{field}")
 
-    def human_move(self, choice: str, amount: Optional[int] = None) -> str:
+    def human_move(self, choice: str, amount: int | None = None) -> str:
         """Apply the human's action, then let the AI reply."""
         if self.over:
             raise PlayError("本局已结束")
@@ -99,7 +110,7 @@ class GameSession:
             self.state = self.engine.apply_action(self.state, action)
             self.state = self.engine.resolve_chance(self.state)
 
-    def _find_action(self, choice: str, amount: Optional[int]) -> Optional[object]:
+    def _find_action(self, choice: str, amount: int | None) -> object | None:
         for action in self.engine.get_legal_actions(self.state):
             if action.params.get("choice") != choice:
                 continue
@@ -123,9 +134,9 @@ class GameSession:
         def _cards(pid: str) -> list:
             return list(arrs.get(f"{pid[2:]}_hole", []))
 
-        def _hand_name(pid: str) -> Optional[str]:
+        def _hand_name(pid: str) -> str | None:
             cards = [*_cards(pid), *arrs.get("community", [])]
-            return poker_hand_name(cards) if over else None
+            return self.engine.hand_name(cards) if over else None
 
         return {
             "game_id": self.game_id,
@@ -155,38 +166,44 @@ class GameSession:
             "call_to": int(env.get("last_call_to", 0)),
             "my_hand_name": _hand_name(self.player_pid),
             "ai_hand_name": _hand_name(self.ai_pid),
-            "payoff": poker_payoff(self.state, self.player_pid) if over else None,
+            "payoff": self.engine.get_utility(self.state, self.player_pid) if over else None,
             "legal": legal,
             "raise_amounts": raise_amts,
         }
 
 
 class PlayManager:
-    """Registry of active game sessions (in-memory, single-process)."""
+    """Registry of active game sessions (in-memory, single-process).
 
-    def __init__(self, seed: int = 42) -> None:
+    Thread-safe: registry mutations are guarded by one lock; each
+    session owns a per-session lock so concurrent ``move`` calls cannot
+    interleave on the same game.  Finished sessions are reclaimed via
+    :meth:`remove` (or FIFO eviction).
+    """
+
+    def __init__(self, provider: SolverProvider, seed: int = 42, max_sessions: int = 128) -> None:
+        self._provider = provider
         self._sessions: dict[str, GameSession] = {}
         self._seed = seed
+        self._max_sessions = max_sessions
+        self._lock = threading.Lock()
 
     def start(self, player_color: str, difficulty: str) -> GameSession:
         if player_color == "random":
-            player_color = PLAYER_SB if uuid.uuid4().int % 2 == 0 else PLAYER_BB
-        if player_color not in (PLAYER_SB, PLAYER_BB):
+            player_color = TexasHoldemAdapter.PLAYER_SB if uuid.uuid4().int % 2 == 0 else TexasHoldemAdapter.PLAYER_BB
+        if player_color not in (TexasHoldemAdapter.PLAYER_SB, TexasHoldemAdapter.PLAYER_BB):
             raise PlayError(f"unknown seat: {player_color}")
         if difficulty not in DIFFICULTY_BUDGETS:
             raise PlayError(f"unknown difficulty: {difficulty}")
 
         game_id = uuid.uuid4().hex[:8]
         engine = TexasHoldemAdapter(seed=self._seed)
-        solver = HybridSolver(
+        solver = self._provider.create_solver(
+            "texas_holdem",
+            "hybrid",
             engine,
-            HybridConfig(
-                seed=self._seed,
-                mode="search",
-                imperfect_information=True,
-                mcts_budget=DIFFICULTY_BUDGETS[difficulty],
-                opponent_model="uniform",
-            ),
+            self._seed,
+            DIFFICULTY_BUDGETS[difficulty],
         )
 
         session = GameSession(
@@ -200,14 +217,26 @@ class PlayManager:
         # if the human sits in the big blind (SB acts first preflop).
         session.state = engine.resolve_chance(session.state)
         session._ai_turn()
-        self._sessions[game_id] = session
+        self._register(session)
         return session
 
     def get(self, game_id: str) -> GameSession:
-        session = self._sessions.get(game_id)
+        with self._lock:
+            session = self._sessions.get(game_id)
         if session is None:
             raise PlayError(f"unknown game: {game_id}")
         return session
 
     def remove(self, game_id: str) -> None:
-        self._sessions.pop(game_id, None)
+        with self._lock:
+            self._sessions.pop(game_id, None)
+
+    # ── Internals ──────────────────────────────────────────────────
+
+    def _register(self, session: GameSession) -> None:
+        """Register under the lock, evicting the oldest unfinished session (FIFO)."""
+        with self._lock:
+            while len(self._sessions) >= self._max_sessions:
+                _, oldest = next(iter(self._sessions.items()))
+                self._sessions.pop(oldest.game_id, None)
+            self._sessions[session.game_id] = session

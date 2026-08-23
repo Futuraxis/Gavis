@@ -7,11 +7,13 @@ from pathlib import Path
 
 import pytest
 
+import layer2_engine
 from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import (
     clone_state,
     create_initial_state,
 )
+from layer2_engine.interfaces.solver_adapter import ActionInstance
 
 RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
 
@@ -79,6 +81,16 @@ class TestStateBasics:
 
 
 class TestActions:
+    def test_action_instance_single_source(self, engine: GameEngine) -> None:
+        """Review M-2: engine-produced actions are the SAME class as the
+        Layer 2↔3 contract type (solver_adapter) — isinstance must hold."""
+        state = engine.create_initial_state()
+        action = engine.get_legal_actions(state)[0]
+
+        assert isinstance(action, layer2_engine.ActionInstance)
+        assert isinstance(action, ActionInstance)
+        assert type(action) is ActionInstance
+
     def test_apply_action_returns_new_state(self, engine: GameEngine):
         state = engine.create_initial_state()
         actions = engine.get_legal_actions(state)

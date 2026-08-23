@@ -14,12 +14,10 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
-from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter
-from layer3_solvers import CFR, MCTS, CFRConfig, HybridConfig, HybridSolver, MCTSConfig, SolverBase, SolverConfig
-from layer3_solvers.base import SolverMetrics, State
+from layer2_engine.interfaces.solver_adapter import SolverAdapter
 
+from ...solver_provider import SolverHandle, SolverProvider
 from .games import GAMES
 
 #: Solver compatibility matrix — the single source of truth for both the
@@ -56,49 +54,6 @@ SOLVER_LABELS: dict[str, str] = {
 MAX_JOBS = 500
 
 
-class RandomSolver(SolverBase):
-    """Uniform random policy — the baseline for benchmark comparisons."""
-
-    def __init__(self, adapter: SolverAdapter, seed: Optional[int] = None) -> None:
-        super().__init__(adapter, SolverConfig(seed=seed))
-        self._rng = random.Random(seed)
-
-    def select_action(self, state: State) -> Optional[ActionInstance]:
-        legal = self.adapter.get_legal_actions(state)
-        return self._rng.choice(legal) if legal else None
-
-    def train(self, episodes: int, **kwargs) -> SolverMetrics:
-        return SolverMetrics(episodes=episodes)
-
-
-def create_solver(game_id: str, name: str, engine: SolverAdapter, seed: int, budget: int) -> SolverBase:
-    """Instantiate a benchmark solver by name; raises ValueError on mismatch."""
-    if name == "mcts":
-        return MCTS(engine, MCTSConfig(seed=seed, budget=budget))
-    if name == "cfr":
-        if game_id == "texas_holdem":
-            raise ValueError("CFR 不适用于德州扑克（不完全信息）")
-        return CFR(engine, CFRConfig(seed=seed, iterations=1000, depth_limit=8))
-    if name == "hybrid":
-        return HybridSolver(
-            engine,
-            HybridConfig(
-                seed=seed,
-                mode="search",
-                imperfect_information=(game_id == "texas_holdem"),
-                mcts_budget=budget,
-                opponent_model="uniform",
-            ),
-        )
-    if name == "random":
-        return RandomSolver(engine, seed)
-    if name == "mahjong":
-        from layer3_solvers.mahjong.heuristic import MahjongHeuristicAI
-
-        return MahjongHeuristicAI(engine, SolverConfig(seed=seed))
-    raise ValueError(f"未知求解器: {name}")
-
-
 @dataclass
 class BenchmarkJob:
     """State of one benchmark run, serialized to the frontend."""
@@ -110,10 +65,10 @@ class BenchmarkJob:
     iterations: int
     status: str = "pending"  # pending | running | done | error
     progress: int = 0
-    error: Optional[str] = None
-    results: Optional[dict] = None
-    started_at: Optional[str] = None
-    ended_at: Optional[str] = None
+    error: str | None = None
+    results: dict | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
 
 
 def _now_iso() -> str:
@@ -123,7 +78,8 @@ def _now_iso() -> str:
 class BenchmarkRunner:
     """Runs benchmark jobs in background threads; results are polled."""
 
-    def __init__(self, seed: int = 42, max_iters: int = 200) -> None:
+    def __init__(self, provider: SolverProvider, seed: int = 42, max_iters: int = 200) -> None:
+        self._provider = provider
         self._seed = seed
         self._max_iters = max_iters
         self._jobs: dict[str, BenchmarkJob] = {}
@@ -132,7 +88,7 @@ class BenchmarkRunner:
     # ── Job API ──────────────────────────────────────────────────
 
     def start(
-        self, game_id: str, solver_a: str, solver_b: str, iterations: int, budget: Optional[int] = None
+        self, game_id: str, solver_a: str, solver_b: str, iterations: int, budget: int | None = None
     ) -> BenchmarkJob:
         """Validate and launch a new job; returns the job."""
         if game_id not in GAMES:
@@ -170,7 +126,7 @@ class BenchmarkRunner:
         for jid in finished:
             self._jobs.pop(jid, None)
 
-    def status(self, job_id: str) -> Optional[BenchmarkJob]:
+    def status(self, job_id: str) -> BenchmarkJob | None:
         with self._lock:
             return self._jobs.get(job_id)
 
@@ -182,7 +138,7 @@ class BenchmarkRunner:
 
     # ── Job execution ────────────────────────────────────────────
 
-    def _run(self, job: BenchmarkJob, budget: Optional[int]) -> None:
+    def _run(self, job: BenchmarkJob, budget: int | None) -> None:
         with self._lock:
             job.status = "running"
             job.started_at = _now_iso()
@@ -198,7 +154,7 @@ class BenchmarkRunner:
                 job.status = "error"
                 job.ended_at = _now_iso()
 
-    def _execute(self, job: BenchmarkJob, budget: Optional[int]) -> dict:
+    def _execute(self, job: BenchmarkJob, budget: int | None) -> dict:
         spec = GAMES[job.game_id]
         search_budget = budget if budget is not None else BENCHMARK_BUDGETS[job.game_id]
         # One engine + solver pair PER SOLVER (M-10): a shared engine with
@@ -209,8 +165,8 @@ class BenchmarkRunner:
         seed_a, seed_b = seed, seed + 1_000_003
         engine_a = spec.create_engine(seed_a)
         engine_b = spec.create_engine(seed_b)
-        solver_a = create_solver(job.game_id, job.solver_a, engine_a, seed_a, search_budget)
-        solver_b = create_solver(job.game_id, job.solver_b, engine_b, seed_b, search_budget)
+        solver_a = self._provider.create_solver(job.game_id, job.solver_a, engine_a, seed_a, search_budget)
+        solver_b = self._provider.create_solver(job.game_id, job.solver_b, engine_b, seed_b, search_budget)
         for solver, name, engine in (
             (solver_a, job.solver_a, engine_a),
             (solver_b, job.solver_b, engine_b),
@@ -244,14 +200,18 @@ class BenchmarkRunner:
                 job.progress = i + 1
 
         total = job.iterations
+        valid = total - errors  # 出错迭代不计入胜率分母（审查 P2-15）
+        a_win_rate = round(a_wins / valid, 4) if valid else 0.0
+        b_win_rate = round(b_wins / valid, 4) if valid else 0.0
+        draw_rate = round(draws / valid, 4) if valid else 0.0
         return {
             "iterations": total,
             "a_wins": a_wins,
             "b_wins": b_wins,
             "draws": draws,
-            "a_win_rate": round(a_wins / total, 4),
-            "b_win_rate": round(b_wins / total, 4),
-            "draw_rate": round(draws / total, 4),
+            "a_win_rate": a_win_rate,
+            "b_win_rate": b_win_rate,
+            "draw_rate": draw_rate,
             "avg_moves": round(total_moves / max(1, total), 2),
             "avg_seconds_per_move": round(total_seconds / max(1, total_moves), 4),
             "errors": errors,
@@ -262,12 +222,12 @@ class BenchmarkRunner:
     def _play_one(
         engine_a: SolverAdapter,
         engine_b: SolverAdapter,
-        solver_a: SolverBase,
-        solver_b: SolverBase,
+        solver_a: SolverHandle,
+        solver_b: SolverHandle,
         spec,
         a_first: bool,
         rng_seed: int,
-    ) -> tuple[Optional[str], int, float]:
+    ) -> tuple[str | None, int, float]:
         """Play one full match; returns (winner_tag, moves, seconds).
 
         The state is driven by the engine belonging to the currently

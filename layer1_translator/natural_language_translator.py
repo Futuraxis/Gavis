@@ -7,12 +7,15 @@ and receive executable ``rules.json``.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from .llm_translator import LLMRuleTranslator, RuleLLMClient
 from .protocol import TranslateRequest, TranslateResponse, TranslatorProtocol
 from .template_translator import TemplateTranslator
+
+logger = logging.getLogger(__name__)
 
 
 class NaturalLanguageRuleTranslator:
@@ -55,7 +58,13 @@ def translate_rules_json(
     llm_client: RuleLLMClient | None = None,
     llm_model_path: str | Path | None = None,
 ) -> TranslateResponse:
-    """Translate natural-language rule input into a ``rules.json`` response."""
+    """Translate natural-language rule input into a ``rules.json`` response.
+
+    When ``use_llm`` is False, ``llm_client`` and ``llm_model_path`` are
+    ignored; a log warning is emitted so callers are not silently misled.
+    """
+    if not use_llm and (llm_client is not None or llm_model_path is not None):
+        logger.warning("translate_rules_json: use_llm=False，忽略传入的 llm_client/llm_model_path")
     if use_llm:
         translator = NaturalLanguageRuleTranslator(
             LLMRuleTranslator(

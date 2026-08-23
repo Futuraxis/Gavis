@@ -10,10 +10,18 @@ from __future__ import annotations
 import random
 
 import numpy as np
+import pytest
 
 from layer2_engine.core.state_graph import clone_state
 from layer2_engine.interfaces.solver_adapter import ActionInstance
 from layer3_solvers.cfr import CFR, CFRConfig
+
+try:
+    import torch  # noqa: F401 — 仅探测可用性
+
+    _HAS_TORCH = True
+except ImportError:
+    _HAS_TORCH = False
 
 # ── 最小双步双人游戏（CFR 测试用，与 test_audit_bugfix_regressions 同构） ──
 
@@ -91,6 +99,7 @@ def test_cfr_train_avg_return_is_win_minus_loss():
 # ── MARL P3: 异常/截断 episode 全 transition 打 done 标记 ────────────
 
 
+@pytest.mark.skipif(not _HAS_TORCH, reason="requires torch (MARL)")
 def test_run_episode_truncation_marks_all_done():
     from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
     from layer3_solvers.marl.action_space import ActionSpace
@@ -105,14 +114,49 @@ def test_run_episode_truncation_marks_all_done():
     def _pick(pid: int, state: dict, mask: np.ndarray) -> tuple[int, dict]:
         return int(np.flatnonzero(mask)[0]), {}
 
-    traj = run_episode(
-        adapter, players, random.Random(1), encoder, action_space, _pick, max_steps=2
-    )
+    traj = run_episode(adapter, players, random.Random(1), encoder, action_space, _pick, max_steps=2)
     assert traj.transitions
     # 截断：全部 transition 关闭（HAPPO/MAAC 不再对未终结子序列 bootstrap）
     assert all(t.done for t in traj.transitions)
     assert all(t.reward == 0.0 for t in traj.transitions)
     assert traj.payoffs == {p: 0.0 for p in players}
+
+
+# ── MARL P3: 变种 tile 数布局（M-1）────────────────────────────────
+
+
+@pytest.mark.skipif(not _HAS_TORCH, reason="requires torch (MARL)")
+def test_mahjong_encoder_variant_tile_count():
+    """M-1: 六个 tile 块互不重叠、不越界，last_drawn 拥有独立块。
+
+    旧布局 `last_drawn` 硬编码在 `6*n-34` 偏移——n=34 时恰好与
+    last_discard 块 [5n,6n) 完全重叠（同槽位互相覆盖），且对任意非 34
+    的变种 tile 集都会错位/越界。新布局按 n 划块，测试钉住该布局。
+    """
+    from layer2_engine.games.mahjong.mahjong_adapter import MahjongAdapter
+    from layer3_solvers.marl.encoders import GameEncoder
+    from layer3_solvers.marl.env import resolve_players
+
+    adapter = MahjongAdapter(variant="hongzhong", player_count=2, seed=42)
+    players = resolve_players(adapter)
+    encoder = GameEncoder.build_from_adapter(adapter, players)
+    n = len(encoder._tiles)  # noqa: SLF001
+    dim = encoder.obs_dim
+    assert dim == 7 * n + 3 + 1 + 6 + len(players)
+    # 七个 tile 块互不重叠且全部落在 wall 之前（布局不越界的关键）
+    assert 7 * n <= dim - (3 + 1 + 6 + len(players))
+    # 真实开局状态编码不崩溃，且 last_discard/last_drawn 位置正确
+    state = adapter.create_initial_state()
+    vec = encoder.encode_obs(state, players[0])
+    assert vec.shape == (dim,)
+    assert np.all(vec[6 * n : 6 * n + n] == 0.0)  # 开局无 last_drawn
+    assert np.all(vec[7 * n + 7 : 7 * n + 7 + len(players)] == 0.0)  # 开局无人行动，turn 一热全 0
+    # 打出一张后：last_discard 置位在 [5n,6n)，last_drawn 不置位
+    env = state.get("env", {})
+    env["last_discard"] = encoder._tiles[0]  # noqa: SLF001
+    vec2 = encoder.encode_obs(state, players[0])
+    assert vec2[5 * n] == 1.0
+    assert np.all(vec2[6 * n : 6 * n + n] == 0.0)
 
 
 # ── LLM P3-2 / P3-6 ─────────────────────────────────────────────────

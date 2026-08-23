@@ -4,6 +4,8 @@ Connects the real world (screenshots, live streams, game apps) to the
 Engine (Layer 2) and Solvers (Layer 3).
 """
 
+from __future__ import annotations
+
 from .binding import (
     BaseBinding,
     ImageBinding,

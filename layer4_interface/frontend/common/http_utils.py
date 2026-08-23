@@ -15,12 +15,16 @@ MAX_BODY_BYTES = 10 * 1024 * 1024
 
 
 def send_json(handler: BaseHTTPRequestHandler, status: HTTPStatus, payload: dict) -> None:
-    """Write a JSON response with CORS headers."""
+    """Write a JSON response body.
+
+    CORS headers are the handler's responsibility (each server overrides
+    ``end_headers`` once — review P2: 双重 CORS 头移除, send_json 不再
+    与 end_headers 各发一次 Access-Control-Allow-*).
+    """
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
-    handler._send_cors_headers()
     handler.end_headers()
     handler.wfile.write(body)
 

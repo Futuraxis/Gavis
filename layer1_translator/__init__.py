@@ -10,11 +10,22 @@ families. Future LLM translators can implement the same protocol.
 
 from __future__ import annotations
 
-from .datasets import RuleExample, RuleJsonDataset, build_synthetic_examples, dump_examples_json, load_jsonl_examples
+from .datasets import (
+    RuleExample,
+    RuleJsonDataset,
+    build_synthetic_examples,
+    dump_examples_json,
+    load_jsonl_examples,
+)
 from .engine_validator import EngineValidator
 from .external_frontend_reader import ExternalFrontendRuleReader, ExternalRuleInput
 from .llm_translator import LLMRuleTranslator
-from .local_client import LocalTransformersRuleClient, OpenAICompatibleRuleClient, RuleLLMClient
+from .local_client import (
+    LLMTranslatorError,
+    LocalTransformersRuleClient,
+    OpenAICompatibleRuleClient,
+    RuleLLMClient,
+)
 from .natural_language_translator import NaturalLanguageRuleTranslator, translate_rules_json
 from .prompt_builder import RulePromptBuilder
 from .protocol import (
@@ -38,6 +49,7 @@ __all__ = [
     "ExternalRuleInput",
     "NaturalLanguageRuleTranslator",
     "LLMRuleTranslator",
+    "LLMTranslatorError",
     "RulePromptBuilder",
     "LocalTransformersRuleClient",
     "OpenAICompatibleRuleClient",

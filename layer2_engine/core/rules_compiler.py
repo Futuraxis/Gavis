@@ -25,9 +25,12 @@ Anything outside these shapes stays on the interpreter path.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from .state_graph import ActionInstance, ChanceOutcome
+
+if TYPE_CHECKING:
+    from .engine import GameEngine
 
 _TEMPLATE_RE = re.compile(r"\{([^}]+)\}")
 # Single-pass token matcher for arithmetic strings: ``$``-prefixed paths
@@ -686,11 +689,11 @@ class CompiledArtifacts:
     __slots__ = ("materialize", "is_terminal", "legal_actions", "chance_outcomes", "_views", "_view_defs")
 
     def __init__(self) -> None:
-        self.materialize: callable | None = None
-        self.is_terminal: callable | None = None
-        self.legal_actions: callable | None = None
-        self.chance_outcomes: callable | None = None
-        self._views: dict[str, callable] = {}
+        self.materialize: Callable[..., Any] | None = None
+        self.is_terminal: Callable[..., Any] | None = None
+        self.legal_actions: Callable[..., Any] | None = None
+        self.chance_outcomes: Callable[..., Any] | None = None
+        self._views: dict[str, Callable[..., Any]] = {}
         self._view_defs: dict[str, dict] = {}
 
     def validate(self, engine) -> None:
@@ -758,7 +761,7 @@ class CompiledArtifacts:
 class RulesCompiler:
     """Compiles a rules dict into probe-validated native functions."""
 
-    def compile(self, rules: dict, engine=None) -> CompiledArtifacts:
+    def compile(self, rules: dict, engine: GameEngine | None = None) -> CompiledArtifacts:
         constants = rules.get("constants", {})
         artifacts = CompiledArtifacts()
         src_parts = ['def _s(x):\n    return "" if x is None else str(x)\n']

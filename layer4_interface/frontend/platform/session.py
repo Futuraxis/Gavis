@@ -12,11 +12,10 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
 
 from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter
-from layer3_solvers import SolverBase
 
+from ...solver_provider import SolverHandle, SolverProvider
 from .games import GAMES, GameSpec, PlayError
 from .history import MatchHistory
 
@@ -34,7 +33,7 @@ class GameSession:
     player_pid: str
     difficulty: str
     engine: SolverAdapter
-    solver: SolverBase
+    solver: SolverHandle
     state: dict = field(init=False)
     last_ai_info: dict = field(default_factory=dict)  # {'move'|'vanish'|'action': ...} per game
     log: list[dict] = field(default_factory=list)  # move entries for history/replay
@@ -53,11 +52,11 @@ class GameSession:
         return self.engine.is_terminal(self.state)
 
     @property
-    def winner(self) -> Optional[str]:
+    def winner(self) -> str | None:
         return self.state["env"].get("winner")
 
     @property
-    def current_player(self) -> Optional[str]:
+    def current_player(self) -> str | None:
         return self.engine.get_current_player(self.state)
 
     # ── Play ─────────────────────────────────────────────────────
@@ -95,7 +94,14 @@ class PlayManager:
     concurrent ``move`` calls cannot interleave on the same game.
     """
 
-    def __init__(self, history: Optional[MatchHistory] = None, seed: int = 42, max_sessions: int = 128) -> None:
+    def __init__(
+        self,
+        provider: SolverProvider,
+        history: MatchHistory | None = None,
+        seed: int = 42,
+        max_sessions: int = 128,
+    ) -> None:
+        self._provider = provider
         self._history = history
         self._seed = seed
         self._max_sessions = max_sessions
@@ -121,7 +127,7 @@ class PlayManager:
             engine = spec.create_engine(self._seed, player_count=player_count)
         else:
             engine = spec.create_engine(self._seed)
-        solver = spec.create_solver(engine, self._seed, spec.difficulty_budgets[difficulty])
+        solver = spec.create_solver(self._provider, engine, self._seed, spec.difficulty_budgets[difficulty])
         session = GameSession(
             game_id=session_id,
             spec=spec,

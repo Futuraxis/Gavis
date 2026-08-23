@@ -26,9 +26,10 @@ STATIC_DIR = ROOT_DIR / "static"
 
 class TexasHoldemHandler(SimpleHTTPRequestHandler):
     server_version = "GavisTexasHoldem/0.1"
-    manager = PlayManager()
+    # PlayManager 由 main() 注入（SolverProvider 装配在应用层 demos/）
+    manager: PlayManager | None = None
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
 
     # ── CORS ────────────────────────────────────────────────────────
@@ -45,7 +46,6 @@ class TexasHoldemHandler(SimpleHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         if self.path.startswith("/api/"):
             self.send_response(HTTPStatus.NO_CONTENT)
-            self._send_cors_headers()
             self.end_headers()
             return
         self.send_error(HTTPStatus.NOT_FOUND)
@@ -69,6 +69,9 @@ class TexasHoldemHandler(SimpleHTTPRequestHandler):
             send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
         except KeyError as exc:
             send_error_json(self, HTTPStatus.BAD_REQUEST, f"Missing field: {exc.args[0]}")
+        except (ValueError, UnicodeDecodeError) as exc:
+            # 畸形 JSON / 非法 int 与 platform 语义一致（审查 M3）
+            send_error_json(self, HTTPStatus.BAD_REQUEST, f"参数错误: {exc}")
         except Exception as exc:
             send_error_json(self, HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
@@ -82,7 +85,10 @@ class TexasHoldemHandler(SimpleHTTPRequestHandler):
     def _handle_move(self, payload: dict) -> None:
         session = self.manager.get(str(payload["gameId"]))
         amount = payload.get("amount")
-        session.human_move(str(payload["choice"]), None if amount is None else int(amount))
+        with session.lock:
+            session.human_move(str(payload["choice"]), None if amount is None else int(amount))
+        if session.over:
+            self.manager.remove(session.game_id)
         send_json(self, HTTPStatus.OK, {"ok": True, "session": session.snapshot()})
 
     def _handle_state(self, payload: dict) -> None:
@@ -96,6 +102,10 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8768)
     args = parser.parse_args()
 
+    # 求解器由应用层装配（SolverProvider 注入，L4 不 import L3）
+    from demos.solver_provider import default_provider
+
+    TexasHoldemHandler.manager = PlayManager(provider=default_provider)
     server = ThreadingHTTPServer((args.host, args.port), TexasHoldemHandler)
     print(f"Texas Hold'em app running at http://{args.host}:{args.port}/")
     try:

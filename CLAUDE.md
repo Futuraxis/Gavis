@@ -8,12 +8,12 @@
 
 ```
 rules/                 游戏规则 JSON (v5.1, 零 BUILTIN: texas_holdem / mahjong / werewolf 纯 alias)
-layer1_translator/    LLM 规则翻译层 (预留)
+layer1_translator/    LLM 规则翻译层 (已实现: 模板 + LLM 编排 + schema 校验)
 layer2_engine/        游戏引擎 (GameEngine + SolverAdapter)
 layer3_solvers/       求解器 (MCTS/CFR/PPO/PSRO + mahjong/heuristic + marl/(QMix/HAPPO/MAAC))
 layer4_interface/     交互界面 (Binding/Encoding/Frontend 按应用分目录)
-demos/                演示入口 + 统一基准
-tests/                测试 (551 cases)
+demos/                演示入口 + 求解器装配 (solver_provider.py) + 统一基准
+tests/                测试 (558 cases)
 platform-frontend/    平台前端 (React + Vite + TS, 构建产物 dist/ 已 gitignore)
 data/                 运行时数据 (对局记录 data/matches/, 已 gitignore)
 archive/              原始旧代码只读存档

@@ -1,22 +1,25 @@
 """Game session management for the Stochastic Gomoku play app.
 
-Each session owns a ``GameEngine`` (v5.0 rules) and an ``MCTS`` solver.
+Each session owns a ``GameEngine`` (v5.0 rules) and a solver handle.
 Unlike Moon Chess, every placement is followed by a chance node (50%
 vanish), so both the human and the AI move resolve the chance step and
-report whether the stone vanished.
+report whether the stone vanished.  The solver is injected through a
+``SolverProvider`` (see ``demos/solver_provider.py``), keeping Layer 4
+free of ``layer3_solvers`` imports.
 """
 
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 from layer2_engine.core.engine import GameEngine
-from layer3_solvers.base import SolverConfig
-from layer3_solvers.mcts import MCTS
+
+from ...solver_provider import SolverHandle, SolverProvider
 
 PlayerColor = Literal["p_black", "p_white"]
 Difficulty = Literal["easy", "normal", "hard"]
@@ -36,9 +39,9 @@ class PlayError(Exception):
     """Bad play request (unknown game, illegal move, game over, ...)."""
 
 
-def _resolve_chance(engine: GameEngine, state: dict) -> tuple[dict, Optional[int]]:
+def _resolve_chance(engine: GameEngine, state: dict) -> tuple[dict, int | None]:
     """Resolve all pending chance nodes; returns (state, vanished_cell)."""
-    vanished: Optional[int] = None
+    vanished: int | None = None
     while engine.get_node_type(state) == "chance":
         outcome, state = engine.sample_chance(state)
         if outcome.key == "vanish":
@@ -46,7 +49,7 @@ def _resolve_chance(engine: GameEngine, state: dict) -> tuple[dict, Optional[int
     return state, vanished
 
 
-def _find_vanished(engine: GameEngine, state: dict) -> Optional[int]:
+def _find_vanished(engine: GameEngine, state: dict) -> int | None:
     """Locate the cell that vanished (lastActor's most recent piece gone)."""
     board = state["_arrays"]["board"]
     last_actor = state["env"].get("lastActor")
@@ -69,10 +72,11 @@ class GameSession:
     player_color: PlayerColor
     difficulty: Difficulty
     engine: GameEngine
-    solver: MCTS
+    solver: SolverHandle
     state: dict = field(init=False)
-    last_ai_move: Optional[int] = None
-    last_vanish: Optional[int] = None  # cell that vanished on the latest move
+    last_ai_move: int | None = None
+    last_vanish: int | None = None  # cell that vanished on the latest move
+    lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
         self.state = self.engine.create_initial_state()
@@ -86,7 +90,7 @@ class GameSession:
         return self.state["_arrays"]["board"]
 
     @property
-    def winner(self) -> Optional[str]:
+    def winner(self) -> str | None:
         return self.state["env"].get("winner")
 
     @property
@@ -94,13 +98,13 @@ class GameSession:
         return self.engine.is_terminal(self.state)
 
     @property
-    def current_player(self) -> Optional[str]:
+    def current_player(self) -> str | None:
         return self.engine.get_current_player(self.state)
 
     # ── Play actions ────────────────────────────────────────────────
 
-    def ai_move(self) -> Optional[int]:
-        """AI places a stone and resolves the vanish chance."""
+    def ai_move(self) -> int | None:
+        """AI places a stone and resolves the vanish."""
         if self.over or self.current_player != self.ai_color:
             return None
         action = self.solver.select_action(self.state)
@@ -123,7 +127,7 @@ class GameSession:
         self.state = self.engine.apply_action(self.state, action)
         self.state, self.last_vanish = _resolve_chance(self.engine, self.state)
 
-    def _find_action(self, cell_index: int) -> Optional[object]:
+    def _find_action(self, cell_index: int):
         for action in self.engine.get_legal_actions(self.state):
             if self._cell_index(action) == cell_index:
                 return action
@@ -152,11 +156,20 @@ class GameSession:
 
 
 class PlayManager:
-    """Registry of active game sessions (in-memory, single-process)."""
+    """Registry of active game sessions (in-memory, single-process).
 
-    def __init__(self, seed: int = 42) -> None:
+    Thread-safe: registry mutations are guarded by one lock; each
+    session owns a per-session lock so concurrent ``move`` calls cannot
+    interleave on the same game.  Finished sessions are reclaimed via
+    :meth:`remove` (or FIFO eviction).
+    """
+
+    def __init__(self, provider: SolverProvider, seed: int = 42, max_sessions: int = 128) -> None:
+        self._provider = provider
         self._sessions: dict[str, GameSession] = {}
         self._seed = seed
+        self._max_sessions = max_sessions
+        self._lock = threading.Lock()
 
     def start(self, player_color: PlayerColor | str, difficulty: Difficulty) -> GameSession:
         if player_color == "random":
@@ -170,8 +183,9 @@ class PlayManager:
             rules = json.load(f)
         game_id = uuid.uuid4().hex[:8]
         engine = GameEngine(rules, seed=self._seed)
-        solver = MCTS(engine, SolverConfig(seed=self._seed))
-        solver.budget = DIFFICULTY_BUDGETS[difficulty]
+        solver = self._provider.create_solver(
+            "stochastic_gomoku", "mcts", engine, self._seed, DIFFICULTY_BUDGETS[difficulty]
+        )
 
         session = GameSession(
             game_id=game_id,
@@ -182,14 +196,26 @@ class PlayManager:
         )
         if session.player_color == "p_white":
             session.ai_move()
-        self._sessions[game_id] = session
+        self._register(session)
         return session
 
     def get(self, game_id: str) -> GameSession:
-        session = self._sessions.get(game_id)
+        with self._lock:
+            session = self._sessions.get(game_id)
         if session is None:
             raise PlayError(f"unknown game: {game_id}")
         return session
 
     def remove(self, game_id: str) -> None:
-        self._sessions.pop(game_id, None)
+        with self._lock:
+            self._sessions.pop(game_id, None)
+
+    # ── Internals ──────────────────────────────────────────────────
+
+    def _register(self, session: GameSession) -> None:
+        """Register under the lock, evicting the oldest unfinished session (FIFO)."""
+        with self._lock:
+            while len(self._sessions) >= self._max_sessions:
+                _, oldest = next(iter(self._sessions.items()))
+                self._sessions.pop(oldest.game_id, None)
+            self._sessions[session.game_id] = session

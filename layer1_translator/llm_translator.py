@@ -14,7 +14,7 @@ from .local_client import (
     OpenAICompatibleRuleClient,
     RuleLLMClient,
 )
-from .prompt_builder import CONTROL_CHARS_RE, RulePromptBuilder, system_prompt
+from .prompt_builder import CONTROL_CHARS_RE, RulePromptBuilder
 from .protocol import TranslateRequest, TranslateResponse, ValidationResult
 from .schema_validator import SchemaValidator
 from .template_translator import TemplateTranslator
@@ -52,25 +52,23 @@ class LLMRuleTranslator:
         warnings: list[str] = []
         try:
             client = self.client or LocalTransformersRuleClient(model_path=self.model_path)
-        except LLMTranslatorError as exc:
+        except Exception as exc:  # noqa: BLE001 — LLM 基础设施异常（torch 缺失/加载失败等）统一走模板兜底
             warnings.append("本地 LLM 不可用，已使用模板兜底")
             return self._fallback_or_error(request, ValidationResult(valid=False, errors=[str(exc)]), warnings)
 
         messages = self.prompt_builder.build_initial_messages(request)
         attempts = self.max_repair_attempts + 1
-        last_rules: dict[str, Any] = {}
         last_validation = ValidationResult(valid=False, errors=["LLM 未返回可验证的 rules JSON"])
 
         for attempt in range(attempts):
             try:
                 raw = client.complete(messages, max_tokens=self.max_tokens)
                 rules = self._parse_rules(raw)
-            except LLMTranslatorError as exc:
+            except Exception as exc:  # noqa: BLE001 — 网络/推理异常同样进入兜底（P2-13：此前仅 LLMTranslatorError）
                 last_validation = ValidationResult(valid=False, errors=[str(exc)])
                 warnings.append("LLM 生成失败，尝试模板兜底")
                 break
 
-            last_rules = rules
             last_validation = self._validate(rules)
             if last_validation.valid:
                 last_validation.warnings.extend(warnings)
@@ -86,16 +84,43 @@ class LLMRuleTranslator:
         fallback_response = self._fallback_or_error(request, last_validation, warnings)
         if fallback_response.rules_json:
             return fallback_response
-        return TranslateResponse(
-            rules_json=last_rules,
-            confidence=0.2 if last_rules else fallback_response.confidence,
-            validation=fallback_response.validation,
-        )
+        merged = self._merged_failure_validation(last_validation, fallback_response, warnings)
+        return TranslateResponse(rules_json={}, confidence=0.0, validation=merged)
 
     @staticmethod
-    def _system_prompt() -> str:
-        """Compatibility wrapper for training code and older callers."""
-        return system_prompt()
+    def _merged_failure_validation(
+        last_validation: ValidationResult,
+        fallback_response: TranslateResponse,
+        warnings: list[str],
+    ) -> ValidationResult:
+        """Merge LLM and template failure explanations into one result.
+
+        The returned ``rules_json`` is empty, so the validation describes
+        exactly that artifact. Previously the last invalid LLM output was
+        paired with template-failure validation — a mismatch between
+        ``rules_json`` and ``validation``.
+        """
+        errors = LLMRuleTranslator._unique(
+            list(last_validation.errors)
+            + (list(fallback_response.validation.errors) if fallback_response.validation is not None else [])
+        )
+        warns = LLMRuleTranslator._unique(
+            list(warnings)
+            + list(last_validation.warnings)
+            + (list(fallback_response.validation.warnings) if fallback_response.validation is not None else [])
+        )
+        return ValidationResult(valid=False, errors=errors, warnings=warns)
+
+    @staticmethod
+    def _unique(items: list[str]) -> list[str]:
+        """Return ``items`` in order with duplicates removed."""
+        seen: set[str] = set()
+        out: list[str] = []
+        for item in items:
+            if item not in seen:
+                seen.add(item)
+                out.append(item)
+        return out
 
     @classmethod
     def _parse_rules(cls, raw: str) -> dict[str, Any]:

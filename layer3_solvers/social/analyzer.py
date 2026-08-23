@@ -114,7 +114,9 @@ class SocialSituationAnalyzer:
     def _derive_team_beliefs(belief: SocialBeliefState) -> None:
         for player, post in belief.role_beliefs.items():
             wolf_prob = sum(prob for role, prob in post.items() if any(marker in role for marker in ("wolf", "狼")))
-            good_prob = sum(prob for role, prob in post.items() if role in _GOOD_ROLES or role not in {"wolf"})
+            # 仅规范好人角色计入 good 侧（review M-4）：别名/中文狼角色
+            # （如 "狼人"）不再因 `role not in {"wolf"}` 被同时计入两侧。
+            good_prob = sum(prob for role, prob in post.items() if role in _GOOD_ROLES)
             total = wolf_prob + good_prob
             if total <= 0:
                 belief.team_beliefs[player] = {"wolf": 0.0, "good": 0.0}

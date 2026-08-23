@@ -35,8 +35,13 @@ class ExprEvaluator:
         self._cyclic: set[str] = set()
         self._call_depth = 0
 
-    def register_function(self, name: str, fn: Callable):
-        """Register a plain callable that expressions can call."""
+    def register_function(self, name: str, fn: Callable) -> None:
+        """Register a plain callable that expressions can call (预留 API).
+
+        Currently unused: with v5.1 zero-BUILTIN the engine registers only
+        rules ``functions`` aliases via :meth:`set_functions`; kept for
+        engine-internal or future use.
+        """
         self._functions[name] = fn
 
     def set_functions(self, defs: dict) -> None:
@@ -111,7 +116,7 @@ class ExprEvaluator:
         finally:
             self._call_depth -= 1
 
-    def compile(self, spec: Any) -> callable:
+    def compile(self, spec: Any) -> Callable[..., Any]:
         """Precompile a static expression tree into ``fn(ctx)``.
 
         Hot expression types (const/var/get/template/switch/eq/neq/gt/
@@ -206,8 +211,8 @@ class ExprEvaluator:
             def _switch(
                 ctx: dict,
                 cases: list = cases,
-                default_fn: callable | None = default_fn,
-                input_fn: callable = input_fn,
+                default_fn: Callable[..., Any] | None = default_fn,
+                input_fn: Callable[..., Any] = input_fn,
             ) -> Any:
                 value = input_fn(ctx)
                 for case_val, then_fn in cases:
@@ -612,7 +617,7 @@ class ExprEvaluator:
 
         return _choose
 
-    def _compile_path(self, path: str | list) -> callable:
+    def _compile_path(self, path: str | list) -> Callable[..., Any]:
         """Compile a ``var``/``get`` path spec into a ctx closure."""
         if isinstance(path, list):
             raw = path[0]
@@ -629,7 +634,8 @@ class ExprEvaluator:
                         obj = obj.get(p)
                     elif isinstance(obj, (list, tuple)) and p.lstrip("-").isdigit():
                         idx = int(p)
-                        obj = obj[idx] if -len(obj) <= idx < len(obj) else None
+                        # 边界安全语义（对齐解释器与 v5.1 at）：负索引/越界一律 None
+                        obj = obj[idx] if 0 <= idx < len(obj) else None
                     else:
                         return None
                 return obj
@@ -649,7 +655,8 @@ class ExprEvaluator:
                         return None
                 elif isinstance(obj, (list, tuple)) and p.lstrip("-").isdigit():
                     idx = int(p)
-                    obj = obj[idx] if -len(obj) <= idx < len(obj) else None
+                    # 边界安全语义（对齐解释器与 v5.1 at）：负索引/越界一律 None
+                    obj = obj[idx] if 0 <= idx < len(obj) else None
                 else:
                     return None
             return obj
@@ -1042,7 +1049,9 @@ class ExprEvaluator:
             if isinstance(obj, dict):
                 obj = obj.get(part)
             elif isinstance(obj, (list, tuple)) and isinstance(part, str) and part.lstrip("-").isdigit():
-                obj = obj[int(part)]
+                idx = int(part)
+                # 边界安全语义（对齐编译路径与 v5.1 at）：负索引/越界一律 None
+                obj = obj[idx] if 0 <= idx < len(obj) else None
             else:
                 return None
         return obj

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from layer2_engine.interfaces.api_key import resolve_api_key
-
 DEFAULT_LOCAL_MODEL_DIR = Path(__file__).resolve().parent.parent / "models" / "layer1-rule-llm"
+_MAX_LLM_RESPONSE_BYTES = 4 * 1024 * 1024
+
+logger = logging.getLogger(__name__)
 
 
 class RuleLLMClient(Protocol):
@@ -25,6 +28,23 @@ class LLMTranslatorError(Exception):
     """LLM translation failed before a valid candidate could be validated."""
 
 
+# Inline copy of ``resolve_api_key`` (Layer 2 helper): Layer 1 keeps a
+# single authorized L1→L2 channel (engine smoke validation only), so this
+# pure convenience cascade lives here instead of importing Layer 2.
+def _resolve_api_key(param: str | None, env_var: str, default: str = "") -> str:
+    """Resolve an API key: explicit parameter > env var > default.
+
+    Empty/whitespace values are treated as unset, so callers receive a
+    clean ``""`` when nothing is configured.
+    """
+    if param and param.strip():
+        return param
+    env_value = os.environ.get(env_var, "").strip()
+    if env_value:
+        return env_value
+    return default
+
+
 @dataclass
 class LocalTransformersRuleClient:
     """Local Hugging Face causal-LM client for trainable Layer 1 translation."""
@@ -33,6 +53,10 @@ class LocalTransformersRuleClient:
     device: str | None = None
     max_new_tokens: int = 8192
     temperature: float = 0.2
+    _torch: Any = field(init=False, default=None, repr=False)
+    _tokenizer: Any = field(init=False, default=None, repr=False)
+    _model: Any = field(init=False, default=None, repr=False)
+    _device: Any = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         try:
@@ -54,19 +78,30 @@ class LocalTransformersRuleClient:
         self._model.eval()
 
     def complete(self, messages: list[dict[str, str]], max_tokens: int = 8192) -> str:
-        """Generate a completion with a local model checkpoint."""
-        prompt = format_messages(messages, self._tokenizer)
-        inputs = self._tokenizer(prompt, return_tensors="pt").to(self._device)
-        with self._torch.no_grad():
-            output = self._model.generate(
-                **inputs,
-                max_new_tokens=min(max_tokens, self.max_new_tokens),
-                do_sample=self.temperature > 0,
-                temperature=max(self.temperature, 1e-5),
-                pad_token_id=self._tokenizer.eos_token_id,
-            )
-        generated = output[0][inputs["input_ids"].shape[-1] :]
-        return self._tokenizer.decode(generated, skip_special_tokens=True).strip()
+        """Generate a completion with a local model checkpoint.
+
+        Any runtime failure (CUDA OOM, tokenizer error, context overflow)
+        is wrapped as ``LLMTranslatorError`` so the orchestrator's
+        template-fallback contract holds; ``KeyboardInterrupt`` passes
+        through.
+        """
+        try:
+            prompt = format_messages(messages, self._tokenizer)
+            inputs = self._tokenizer(prompt, return_tensors="pt").to(self._device)
+            with self._torch.no_grad():
+                output = self._model.generate(
+                    **inputs,
+                    max_new_tokens=min(max_tokens, self.max_new_tokens),
+                    do_sample=self.temperature > 0,
+                    temperature=max(self.temperature, 1e-5),
+                    pad_token_id=self._tokenizer.eos_token_id,
+                )
+            generated = output[0][inputs["input_ids"].shape[-1] :]
+            return self._tokenizer.decode(generated, skip_special_tokens=True).strip()
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            raise LLMTranslatorError(f"本地 LLM 生成失败: {type(exc).__name__}: {exc}") from exc
 
     @staticmethod
     def format_messages(messages: list[dict[str, str]], tokenizer: Any | None = None) -> str:
@@ -85,10 +120,15 @@ class OpenAICompatibleRuleClient:
     temperature: float = 0.2
 
     def __post_init__(self) -> None:
-        self.api_key = resolve_api_key(self.api_key, "LLM_API_KEY", default="ollama")
+        self.api_key = _resolve_api_key(self.api_key, "LLM_API_KEY", default="ollama")
 
     def complete(self, messages: list[dict[str, str]], max_tokens: int = 8192) -> str:
-        """Call an OpenAI-compatible chat-completions endpoint."""
+        """Call an OpenAI-compatible chat-completions endpoint.
+
+        Transport/parse failures are wrapped as ``LLMTranslatorError``;
+        the response body is read with a size cap so an unexpected or
+        malicious endpoint cannot balloon memory.
+        """
         payload = {
             "model": self.model,
             "messages": messages,
@@ -105,8 +145,13 @@ class OpenAICompatibleRuleClient:
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                raw = resp.read(_MAX_LLM_RESPONSE_BYTES + 1)
+                if len(raw) > _MAX_LLM_RESPONSE_BYTES:
+                    raise LLMTranslatorError(f"LLM 响应超过 {_MAX_LLM_RESPONSE_BYTES} 字节上限")
+                body = json.loads(raw.decode("utf-8"))
+        except LLMTranslatorError:
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise LLMTranslatorError(f"LLM request failed: {exc}") from exc
         try:
             return str(body["choices"][0]["message"]["content"]).strip()
@@ -119,8 +164,8 @@ def format_messages(messages: list[dict[str, str]], tokenizer: Any | None = None
     if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
         try:
             return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        except Exception:
-            pass
+        except Exception as exc:  # graceful fallback to the manual format
+            logger.debug("apply_chat_template 回退到手动格式: %s", exc)
     lines: list[str] = []
     for message in messages:
         role = message.get("role", "user")

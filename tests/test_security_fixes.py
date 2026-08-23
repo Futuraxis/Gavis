@@ -207,9 +207,10 @@ class TestPSROParallel:
 
 class TestBenchmarkJobPruning:
     def test_prune_drops_finished_jobs_only(self):
+        from demos.solver_provider import default_provider
         from layer4_interface.frontend.platform.benchmark import MAX_JOBS, BenchmarkJob, BenchmarkRunner
 
-        runner = BenchmarkRunner(seed=1)
+        runner = BenchmarkRunner(provider=default_provider, seed=1)
         # 直接填充注册表：1 个运行中 + MAX_JOBS 个已完成
         with runner._lock:  # noqa: SLF001
             for i in range(MAX_JOBS + 1):

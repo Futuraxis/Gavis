@@ -19,8 +19,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from layer1_translator import translate_rules_json
-from layer4_interface.frontend.common.http_utils import BodyTooLargeError, read_json_body, send_error_json, send_json
 
+from ..common.http_utils import BodyTooLargeError, read_json_body, send_error_json, send_json
 from .benchmark import SOLVER_OPTIONS, BenchmarkRunner
 from .games import GAMES, PlayError
 from .history import HistoryError, MatchHistory
@@ -58,28 +58,51 @@ def make_handler(
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
+        # CORS 只由 end_headers 统一发出一遍（审查 P2：双重 CORS 头移除）
+        def end_headers(self) -> None:
+            self._send_cors_headers()
+            super().end_headers()
+
         def do_OPTIONS(self) -> None:
             self.send_response(HTTPStatus.NO_CONTENT)
-            self._send_cors_headers()
             self.end_headers()
 
         # ── Routing ───────────────────────────────────────────────
 
         def do_GET(self) -> None:
             path = urllib.parse.urlsplit(self.path).path
-            if path == "/api/games":
-                self._handle_games()
-            elif path == "/api/history":
-                self._handle_history_list()
-            elif path.startswith("/api/history/"):
-                self._handle_history_get(path[len("/api/history/") :])
-            elif path == "/api/benchmark":
-                self._handle_benchmark_list()
-            elif path == "/api/benchmark/status":
-                self._handle_benchmark_status()
-            elif path.startswith("/api/"):
-                send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
-            else:
+            try:
+                if path == "/api/games":
+                    self._handle_games()
+                elif path == "/api/history":
+                    self._handle_history_list()
+                elif path.startswith("/api/history/"):
+                    self._handle_history_get(path[len("/api/history/") :])
+                elif path == "/api/benchmark":
+                    self._handle_benchmark_list()
+                elif path == "/api/benchmark/status":
+                    self._handle_benchmark_status()
+                elif path.startswith("/api/"):
+                    send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
+                else:
+                    if not dist_dir.is_dir():
+                        send_json(
+                            self,
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "ok": False,
+                                "error": "前端未构建，请先运行: cd platform-frontend && npm run build",
+                            },
+                        )
+                        return
+                    super().do_GET()
+            except (PlayError, HistoryError) as exc:
+                send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
+            except (KeyError, TypeError, ValueError) as exc:
+                send_error_json(self, HTTPStatus.BAD_REQUEST, f"参数错误: {exc}")
+            except Exception as exc:  # noqa: BLE001 - last-resort envelope for the client
+                self.log_error("internal error: %s", exc)
+                send_error_json(self, HTTPStatus.INTERNAL_SERVER_ERROR, "服务器内部错误")
                 if not dist_dir.is_dir():
                     send_json(
                         self,
@@ -226,9 +249,12 @@ def main() -> None:
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     args = parser.parse_args()
 
+    # 求解器由应用层装配（SolverProvider 注入，L4 不 import L3）
+    from demos.solver_provider import default_provider
+
     history = MatchHistory(args.data_dir)
-    manager = PlayManager(history=history, seed=42)
-    benchmark = BenchmarkRunner(seed=42)
+    manager = PlayManager(provider=default_provider, history=history, seed=42)
+    benchmark = BenchmarkRunner(provider=default_provider, seed=42)
     handler = make_handler(manager, history, benchmark)
     httpd = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Gavis 平台服务: http://{args.host}:{args.port}  (API 前缀 /api, 静态目录 {DIST_DIR})")

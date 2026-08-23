@@ -15,13 +15,12 @@ the solver never guesses.
 from __future__ import annotations
 
 import random
-from typing import Optional
 
 from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter
-from layer3_solvers.base import SolverBase, SolverConfig, SolverMetrics
+
+from ..base import SolverBase, SolverConfig, SolverMetrics
 
 _SUITS = "mpsz"
-_HONOR_RANK = {"z1": 0, "z2": 1, "z3": 2, "z4": 3, "z5": 4, "z6": 5, "z7": 6}
 
 
 class MahjongHeuristicAI(SolverBase):
@@ -35,7 +34,7 @@ class MahjongHeuristicAI(SolverBase):
     def name(self) -> str:
         return "mahjong_heuristic"
 
-    def select_action(self, state: dict) -> Optional[ActionInstance]:
+    def select_action(self, state: dict) -> ActionInstance | None:
         legal = self.adapter.get_legal_actions(state)
         if not legal:
             return None
@@ -90,7 +89,7 @@ class MahjongHeuristicAI(SolverBase):
         return best
 
     @staticmethod
-    def _tile_value(tile: str, counts: dict[str, int], hand: list[str]) -> int:
+    def _tile_value(tile: str, counts: dict[str, int], hand: list[str]) -> float:
         """Lower = better to discard. Pairs/triplets/runs score negative."""
         if not tile or not isinstance(tile, str):
             return 0

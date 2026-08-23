@@ -18,15 +18,15 @@ import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Literal, Optional
+from typing import TYPE_CHECKING, Callable, Literal
 
 from layer2_engine.core.engine import GameEngine
 from layer2_engine.games.mahjong.mahjong_adapter import MahjongAdapter
 from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
 from layer2_engine.games.texas_holdem.texas_env_adapter import TexasHoldemAdapter
 from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter
-from layer3_solvers import MCTS, HybridConfig, HybridSolver, SolverBase, SolverConfig
-from layer3_solvers.mahjong.heuristic import MahjongHeuristicAI
+
+from ...solver_provider import SolverHandle, SolverProvider
 
 if TYPE_CHECKING:
     from .session import GameSession
@@ -48,17 +48,17 @@ class GameSpec:
     display_name: str
     description: str
     kind: Literal["board", "poker", "mahjong"]
-    board_size: Optional[int]
+    board_size: int | None
     seat_options: tuple[str, ...]
     seat_label: str  # '颜色' for board games, '座位' for poker
     difficulty_budgets: dict[Difficulty, int]
     create_engine: Callable[..., SolverAdapter]  # (seed, player_count=2)
-    create_solver: Callable[[SolverAdapter, int, int], SolverBase]  # (engine, seed, budget)
+    create_solver: Callable[[SolverProvider, SolverAdapter, int, int], SolverHandle]  # (provider, engine, seed, budget)
     resolve_start: Callable[[GameSession], None]  # start chance nodes (dealing)
     ai_opens: Callable[[GameSession], bool]  # AI moves before the human's first move
     parse_human_action: Callable[[GameSession, dict], ActionInstance]
     apply_human: Callable[[GameSession, ActionInstance], None]  # apply + chance resolution
-    run_ai: Callable[[GameSession, Optional[Callable[[ActionInstance], None]]], None]
+    run_ai: Callable[[GameSession, Callable[[ActionInstance], None] | None], None]
     build_snapshot: Callable[[GameSession], dict]
     describe_action: Callable[[ActionInstance], str]  # history log caption
     player_counts: tuple[int, ...] = (2,)  # mahjong seat count options
@@ -71,10 +71,8 @@ def _moon_create_engine(seed: int) -> SolverAdapter:
     return MoonChessAdapter(seed=seed)
 
 
-def _moon_create_solver(engine: SolverAdapter, seed: int, budget: int) -> SolverBase:
-    solver = MCTS(engine, SolverConfig(seed=seed))
-    solver.budget = budget
-    return solver
+def _moon_create_solver(provider: SolverProvider, engine: SolverAdapter, seed: int, budget: int) -> SolverHandle:
+    return provider.create_solver("moon_chess", "mcts", engine, seed, budget)
 
 
 def _moon_cell_index(action: ActionInstance) -> int:
@@ -103,7 +101,7 @@ def _moon_apply_human(session: GameSession, action: ActionInstance) -> None:
     session.state = session.engine.apply_action(session.state, action)
 
 
-def _moon_run_ai(session: GameSession, on_ai_action: Optional[Callable[[ActionInstance], None]] = None) -> None:
+def _moon_run_ai(session: GameSession, on_ai_action: Callable[[ActionInstance], None] | None = None) -> None:
     if session.over or session.current_player != session.ai_pid:
         return
     action = session.solver.select_action(session.state)
@@ -151,10 +149,8 @@ def _gomoku_create_engine(seed: int) -> SolverAdapter:
     return GameEngine(rules, seed=seed)
 
 
-def _gomoku_create_solver(engine: SolverAdapter, seed: int, budget: int) -> SolverBase:
-    solver = MCTS(engine, SolverConfig(seed=seed))
-    solver.budget = budget
-    return solver
+def _gomoku_create_solver(provider: SolverProvider, engine: SolverAdapter, seed: int, budget: int) -> SolverHandle:
+    return provider.create_solver("stochastic_gomoku", "mcts", engine, seed, budget)
 
 
 def _gomoku_cell_index(action: ActionInstance) -> int:
@@ -162,7 +158,7 @@ def _gomoku_cell_index(action: ActionInstance) -> int:
     return int(cell.get("_index", -1)) if isinstance(cell, dict) else -1
 
 
-def _gomoku_find_vanished(session: GameSession, state: dict) -> tuple[Optional[int], Optional[str]]:
+def _gomoku_find_vanished(session: GameSession, state: dict) -> tuple[int | None, str | None]:
     """Locate the cell that vanished; returns (cell, vanished piece color)."""
     board = state["_arrays"]["board"]
     last_actor = state["env"].get("lastActor")
@@ -179,10 +175,10 @@ def _gomoku_find_vanished(session: GameSession, state: dict) -> tuple[Optional[i
     return (vanished, last_actor) if vanished is not None else (None, None)
 
 
-def _gomoku_resolve_chance(session: GameSession, state: dict) -> tuple[dict, Optional[int], Optional[str]]:
+def _gomoku_resolve_chance(session: GameSession, state: dict) -> tuple[dict, int | None, str | None]:
     """Resolve all pending chance nodes; returns (state, vanished_cell, vanished_color)."""
-    vanished: Optional[int] = None
-    color: Optional[str] = None
+    vanished: int | None = None
+    color: str | None = None
     while session.engine.get_node_type(state) == "chance":
         outcome, state = session.engine.sample_chance(state)
         if outcome.key == "vanish":
@@ -213,7 +209,7 @@ def _gomoku_apply_human(session: GameSession, action: ActionInstance) -> None:
     session.last_ai_info["vanish_color"] = color
 
 
-def _gomoku_run_ai(session: GameSession, on_ai_action: Optional[Callable[[ActionInstance], None]] = None) -> None:
+def _gomoku_run_ai(session: GameSession, on_ai_action: Callable[[ActionInstance], None] | None = None) -> None:
     if session.over or session.current_player != session.ai_pid:
         return
     action = session.solver.select_action(session.state)
@@ -257,17 +253,8 @@ def _poker_create_engine(seed: int) -> SolverAdapter:
     return TexasHoldemAdapter(seed=seed)
 
 
-def _poker_create_solver(engine: SolverAdapter, seed: int, budget: int) -> SolverBase:
-    return HybridSolver(
-        engine,
-        HybridConfig(
-            seed=seed,
-            mode="search",
-            imperfect_information=True,
-            mcts_budget=budget,
-            opponent_model="uniform",
-        ),
-    )
+def _poker_create_solver(provider: SolverProvider, engine: SolverAdapter, seed: int, budget: int) -> SolverHandle:
+    return provider.create_solver("texas_holdem", "hybrid", engine, seed, budget)
 
 
 def _poker_resolve_start(session: GameSession) -> None:
@@ -295,7 +282,7 @@ def _poker_apply_human(session: GameSession, action: ActionInstance) -> None:
     session.state = session.engine.resolve_chance(session.state)
 
 
-def _poker_run_ai(session: GameSession, on_ai_action: Optional[Callable[[ActionInstance], None]] = None) -> None:
+def _poker_run_ai(session: GameSession, on_ai_action: Callable[[ActionInstance], None] | None = None) -> None:
     """Let the AI act while it is its turn (multi-action rounds)."""
     while not session.over and session.current_player == session.ai_pid:
         action = session.solver.select_action(session.state)
@@ -325,7 +312,7 @@ def _poker_snapshot(session: GameSession) -> dict:
     def _cards(pid: str) -> list:
         return list(arrs.get(f"{pid[2:]}_hole", []))
 
-    def _hand_name(pid: str) -> Optional[str]:
+    def _hand_name(pid: str) -> str | None:
         cards = [*_cards(pid), *arrs.get("community", [])]
         return session.engine.hand_name(cards) if over else None
 
@@ -377,8 +364,8 @@ def _make_mahjong_engine(variant: str) -> Callable[..., SolverAdapter]:
     return _create
 
 
-def _mahjong_create_solver(engine: SolverAdapter, seed: int, budget: int) -> SolverBase:
-    return MahjongHeuristicAI(engine, SolverConfig(seed=seed))
+def _mahjong_create_solver(provider: SolverProvider, engine: SolverAdapter, seed: int, budget: int) -> SolverHandle:
+    return provider.create_solver("mahjong", "mahjong", engine, seed, budget)
 
 
 def _mahjong_resolve_start(session: GameSession) -> None:
@@ -410,7 +397,7 @@ def _mahjong_apply_human(session: GameSession, action: ActionInstance) -> None:
         _, session.state = session.engine.sample_chance(session.state)
 
 
-def _mahjong_run_ai(session: GameSession, on_ai_action: Optional[Callable[[ActionInstance], None]] = None) -> None:
+def _mahjong_run_ai(session: GameSession, on_ai_action: Callable[[ActionInstance], None] | None = None) -> None:
     """Drive every non-human seat (2-player: the single AI; 4-player:
     both AI seats) through their draw/claim/discard turns."""
     while not session.over and session.current_player is not None and session.current_player != session.player_pid:
@@ -586,6 +573,7 @@ GAMES: dict[str, GameSpec] = {
         seat_options=("p0", "p1", "p2", "p3"),
         seat_label="座位",
         player_counts=(2, 4),
+        # 启发式求解器与搜索预算无关，难度档仅作展示（审查 Minor 12）
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("guangdong"),
         create_solver=_mahjong_create_solver,

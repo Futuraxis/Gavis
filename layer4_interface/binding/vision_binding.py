@@ -7,6 +7,7 @@ identify the board and its pieces in one step.
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Protocol
 
@@ -62,6 +63,8 @@ class VisionLLMBinding:
         self.source_name = source_name
         self.prompt = prompt
         self._last_frame_seq = -1
+        # 帧序号自增是读-改-写，并发下需加锁（对照 image_binding 的 _seq_lock）
+        self._seq_lock = threading.Lock()
 
     def parse(self, source: str) -> Observation:
         with open(source, "rb") as f:
@@ -95,8 +98,9 @@ class VisionLLMBinding:
             raise VisionModelResponseError("Vision model response missing boardObservation or confidence.")
 
         if frame_seq is None:
-            self._last_frame_seq += 1
-            frame_seq = self._last_frame_seq
+            with self._seq_lock:
+                self._last_frame_seq += 1
+                frame_seq = self._last_frame_seq
 
         return Observation(
             gameId=self.game_id,

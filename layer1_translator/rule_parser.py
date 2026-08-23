@@ -148,9 +148,21 @@ class RuleParser:
         wolves = self._extract_count_before(text, ("狼", "狼人"), ("狼", "狼人"))
         seers = self._extract_count_before(text, ("预言家", "预"), ("预言家", "预"))
         villagers = self._extract_count_before(text, ("村民", "民"), ("村民", "民"))
-        with_witch = self._flag_from_text(text, positive=("女巫", "witch"), negative=("无女巫", "没有女巫"))
-        with_hunter = self._flag_from_text(text, positive=("猎人", "hunter"), negative=("无猎人", "没有猎人"))
-        with_guard = self._flag_from_text(text, positive=("守卫", "guard"), negative=("无守卫", "没有守卫"))
+        with_witch = self._flag_from_text(
+            text,
+            positive=("女巫", "witch"),
+            negative=("无女巫", "没有女巫", "禁用女巫", "关闭女巫", "关掉女巫", "no witch"),
+        )
+        with_hunter = self._flag_from_text(
+            text,
+            positive=("猎人", "hunter"),
+            negative=("无猎人", "没有猎人", "禁用猎人", "关闭猎人", "关掉猎人", "no hunter"),
+        )
+        with_guard = self._flag_from_text(
+            text,
+            positive=("守卫", "guard"),
+            negative=("无守卫", "没有守卫", "禁用守卫", "关闭守卫", "关掉守卫", "no guard"),
+        )
 
         if players is not None:
             params["players"] = players

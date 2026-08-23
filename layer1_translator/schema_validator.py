@@ -52,7 +52,10 @@ class SchemaValidator:
 
         effect_key = "effectors" if dialect == "v5" else "effects"
         effectors = rules.get(effect_key, {})
-        if effectors is not None and not isinstance(effectors, dict):
+        if effectors is None:
+            errors.append(f"{effect_key} 必须是对象，不能为 None")
+            effectors = {}
+        elif not isinstance(effectors, dict):
             errors.append(f"{effect_key} 必须是对象")
             effectors = {}
         SchemaValidator._validate_action_effect_refs(actions, effectors or {}, effect_key, errors)
@@ -112,7 +115,7 @@ class SchemaValidator:
                 errors.append(f"{key} 必须是对象")
 
     @staticmethod
-    def _validate_actions(actions: list[Any], errors: list[str]) -> set[str]:
+    def _validate_actions(actions: list[Any], errors: list[str]) -> None:
         action_ids: set[str] = set()
         for i, act in enumerate(actions):
             if not isinstance(act, dict):
@@ -127,7 +130,6 @@ class SchemaValidator:
                 action_ids.add(str(aid))
             if "effectRef" not in act:
                 errors.append(f"action '{aid}' 缺少 'effectRef'")
-        return action_ids
 
     @staticmethod
     def _validate_action_effect_refs(

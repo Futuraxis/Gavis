@@ -12,7 +12,8 @@ class MoonStateEncoder:
 
     Feature layout (FEATURE_DIM = 38):
         0-26:    9 cells × 3 one-hot (empty / self / opponent)
-        27-35:   9 cells × age encoding (1=latest … 3=oldest)
+        27-35:   9 cells × stack age (1=oldest … 3=latest, 0=empty —
+                 FIFO-eviction order, matching the adapter's docstring)
         36:      whose turn (1 = perspective player)
         37:      normalized step count
     """
@@ -80,26 +81,65 @@ class MoonStateEncoder:
                 mask[index] = 1.0
         return mask
 
-    def _build_age_map(self, piece_order: dict[str, list[dict]]) -> dict[str, int]:
+    def _build_age_map(self, piece_order) -> dict[str, int]:
+        """Per-cell piece age (1 = the player's first/oldest placement … N = latest).
+
+        与 L2 ``MoonChessAdapter.get_feature_vector`` 的年龄语义一致（审查
+        Minor 1 / M5）：年龄 = 该玩家自己的第 k 次落子（1-based，list 顺序
+        即落子顺序），按 cell 记录、后写覆盖——一个 cell 反复落子后其年龄
+        为该玩家最近一次落子的序号。``piece_order`` 来自
+        ``GameStateAdapter.get_piece_order``：v5.0 下是 ``_arrays.pieceOrder``
+        的扁平 record 列表（``{"cell_id", "player_id"}``，旧实现对其调用
+        ``.values()`` 会 AttributeError），v4.1 下是按玩家分的 dict
+        （``{"player_x": ["cell_0_0", ...]}`` 或 ``{"player_x":
+        [{"cellId": ..., "placedSeq": ...}]}``）。
+        """
+        per_player: dict[str, list] = {}
+        if isinstance(piece_order, dict):
+            for pid, cells in piece_order.items():
+                for cell in cells:
+                    if isinstance(cell, str):
+                        per_player.setdefault(pid, []).append(cell)
+                    else:
+                        cell_id = cell.get("cell_id") or cell.get("cellId")
+                        if cell_id:
+                            per_player.setdefault(pid, []).append(cell_id)
+        else:
+            for entry in piece_order or []:
+                pid = entry.get("player_id", "")
+                cell_id = entry.get("cell_id") or entry.get("cellId")
+                if pid and cell_id:
+                    per_player.setdefault(pid, []).append(cell_id)
         age_map: dict[str, int] = {}
-        for entries in piece_order.values():
-            sorted_entries = sorted(entries, key=lambda item: item["placedSeq"])
-            for age, entry in enumerate(sorted_entries, start=1):
-                age_map[entry["cellId"]] = age
+        for cells in per_player.values():
+            for age, cid in enumerate(cells, start=1):
+                if cid:
+                    age_map[cid] = age
         return age_map
 
     @staticmethod
     def _owner_from_symbol(state: dict, symbol: str) -> str:
+        # v5.0 引擎的 _arrays.board 直接存 player id（p_black/p_white，实测
+        # 审查 M-5）；v4.1 存符号（X/O）并配 playerSymbols 映射。
+        if symbol in ("p_black", "p_white", "player_x", "player_o"):
+            return symbol
         player_symbols = state.get("playerSymbols")
         if player_symbols:
-            return player_symbols.get(symbol, "player_x" if symbol == "X" else "player_o")
-        return "player_x" if symbol == "X" else "player_o"
+            return player_symbols.get(symbol, symbol)
+        return "player_x" if symbol == "X" else ("player_o" if symbol == "O" else symbol)
 
     @staticmethod
     def _get_cell(board, r, c):
         if isinstance(board, list):
-            if r < len(board) and c < len(board[r]):
-                return board[r][c]
+            if board and isinstance(board[0], list):
+                # v4.1 二维布局
+                if r < len(board) and c < len(board[r]):
+                    return board[r][c]
+            else:
+                # v5.0 扁平数组（_arrays.board，row-major 9 元素）
+                idx = r * 3 + c
+                if 0 <= idx < len(board):
+                    return board[idx]
         return None
 
 

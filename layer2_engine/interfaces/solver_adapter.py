@@ -100,9 +100,7 @@ class SolverAdapter(Protocol):
         MUST NOT rely on this method — they must sample via
         ``get_chance_outcomes`` + ``apply_chance`` (C-06).
         """
-        raise NotImplementedError(
-            "sample_chance is optional; sample via get_chance_outcomes + apply_chance instead"
-        )
+        raise NotImplementedError("sample_chance is optional; sample via get_chance_outcomes + apply_chance instead")
 
     def is_terminal(self, state: State) -> bool:
         """Return True if the state is terminal."""

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 
 from ...core.engine import GameEngine
 
@@ -30,7 +29,7 @@ TILE_NAMES = {
 class MahjongAdapter(GameEngine):
     """GameEngine subclass for mahjong (variant × player count)."""
 
-    def __init__(self, variant: str = "guangdong", player_count: int = 2, seed: Optional[int] = None):
+    def __init__(self, variant: str = "guangdong", player_count: int = 2, seed: int | None = None):
         if variant not in VARIANTS:
             raise ValueError(f"Unknown mahjong variant: {variant!r}")
         if player_count not in (2, 4):
@@ -51,7 +50,7 @@ class MahjongAdapter(GameEngine):
 
     # ── Current player ────────────────────────────────────────────────
 
-    def get_current_player(self, state: dict) -> Optional[str]:
+    def get_current_player(self, state: dict) -> str | None:
         """During a claim the actor is the queue head, not ``env.turn``
         (which still names the discarder)."""
         env = state.get("env", {})

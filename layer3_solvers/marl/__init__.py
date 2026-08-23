@@ -1,7 +1,9 @@
 """MARL — Multi-Agent Reinforcement Learning solvers (QMix / HAPPO / MAAC).
 
-Requires torch. If torch is not installed, importing this module will
-fail gracefully (the solvers will not be available).
+Requires torch. If torch is not installed, importing this module raises
+``ImportError`` (re-raised from the optional-import guard, review M-2):
+consumers detect availability with ``except ImportError`` instead of
+receiving silently-None symbols.
 """
 
 try:
@@ -23,6 +25,5 @@ try:
         "resolve_players",
     ]
 except ImportError:
-    QMixSolver = HAPPOSolver = MAACSolver = None  # type: ignore
-    QMixConfig = HAPPOConfig = MAACConfig = None  # type: ignore
     __all__ = []
+    raise

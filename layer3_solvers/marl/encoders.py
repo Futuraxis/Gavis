@@ -7,9 +7,9 @@ the QMix mixing network and the HAPPO critic.
 
 --- Layouts ---
 
-- mahjong (214+N): 34-tile counts × (hand, meld, own discard, opp discard,
-  last_discard one-hot, last_drawn one-hot), meld type counts, wall/136,
-  phase one-hot, turn one-hot
+- mahjong (245+N): 34-tile counts × (hand, meld, own discard, opp discard,
+  last_discard one-hot, last_drawn one-hot — 七个独立 tile 块, M-1), meld
+  type counts, wall/136, phase one-hot, turn one-hot
 - texas_holdem (383): hole + community one-hots, street/phase, stacks,
   committed, folded, call_to, last_action, pot
 - moon_chess (38): delegates to ``adapter.get_feature_vector``
@@ -117,8 +117,10 @@ class _MahjongEncoder(GameEncoder):
 
     @property
     def obs_dim(self) -> int:
-        # 6 × 34 tiles + 3 meld types + wall + 6 phases + N-player turn
-        return 6 * len(self._tiles) + 3 + 1 + len(MAHJONG_PHASES) + self._n_players
+        # 7 tile 块（hand/meld/own discard/opp discard/last_discard/last_drawn
+        # 六个整块 + meld types 3 格）+ wall + 6 phases + N-player turn。
+        # last_drawn 拥有独立块（M-1 修复：旧布局 `6*n-34` 与 last_discard 重叠）。
+        return 7 * len(self._tiles) + 3 + 1 + len(MAHJONG_PHASES) + self._n_players
 
     def encode_obs(self, state: State, player: str) -> np.ndarray:
         # 直读状态数组，绕开 get_observation（其 legal 部分会触发完整的
@@ -166,23 +168,23 @@ class _MahjongEncoder(GameEncoder):
                 if idx is not None:
                     opp[idx] = min(opp[idx] + 1.0, 8.0)
         vec[4 * n_tiles : 5 * n_tiles] = opp / 8.0
-        # Last discard / last drawn one-hots
-        for slot, key in ((5 * n_tiles, "last_discard"), (6 * n_tiles - 34, "last_drawn")):
+        # Last discard / last drawn one-hots（独立块，M-1 修复）
+        for slot, key in ((5 * n_tiles, "last_discard"), (6 * n_tiles, "last_drawn")):
             tile = env.get(key)
             idx = self._tile_index.get(tile) if tile else None
             if idx is not None:
                 vec[slot + idx] = 1.0
         # Wall
         wall = int(env.get("wall_count", 0) or 0)
-        vec[6 * n_tiles] = wall / 136.0
+        vec[7 * n_tiles] = wall / 136.0
         # Phase one-hot
         phase = str(env.get("phase", ""))
         pidx = MAHJONG_PHASES.index(phase) if phase in MAHJONG_PHASES else 0
-        vec[6 * n_tiles + 1 + pidx] = 1.0
+        vec[7 * n_tiles + 1 + pidx] = 1.0
         # Turn one-hot
         turn = env.get("turn")
         if turn in self._players:
-            vec[6 * n_tiles + 1 + len(MAHJONG_PHASES) + self._players.index(turn)] = 1.0
+            vec[7 * n_tiles + 1 + len(MAHJONG_PHASES) + self._players.index(turn)] = 1.0
         return vec
 
 

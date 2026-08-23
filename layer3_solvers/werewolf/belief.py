@@ -81,9 +81,15 @@ class BeliefTracker:
 
     @classmethod
     def from_adapter(cls, adapter, player_id: str, seed: int | None = None) -> "BeliefTracker":
-        """Build from a WerewolfAdapter (players / role pool / own role)."""
-        pids = list(adapter._constants.get("player_ids", []))
-        pool = list(adapter._constants.get("role_pool", []))
+        """Build from a WerewolfAdapter (players / role pool / own role).
+
+        Reads the role pool through ``getattr`` with an empty fallback —
+        solver code must not reach into adapter privates (review M-3);
+        when ``_constants`` is absent the prior degenerates to empty.
+        """
+        constants = getattr(adapter, "_constants", None) or {}
+        pids = list(constants.get("player_ids", []))
+        pool = list(constants.get("role_pool", []))
         obs = adapter.get_observation(adapter.create_initial_state(), player_id)
         return cls(pids, pool, str(obs.get("my_role")), rng=random.Random(seed))
 

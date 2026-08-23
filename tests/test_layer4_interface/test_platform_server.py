@@ -15,6 +15,7 @@ from typing import Generator
 
 import pytest
 
+from demos.solver_provider import default_provider
 from layer4_interface.frontend.platform.benchmark import BenchmarkRunner
 from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.server import make_handler
@@ -26,8 +27,8 @@ _NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 @pytest.fixture
 def base_url(tmp_path: pytest.TempPathFactory) -> Generator[str, None, None]:
     history = MatchHistory(tmp_path / "matches")
-    manager = PlayManager(history=history, seed=42)
-    benchmark = BenchmarkRunner(seed=42)
+    manager = PlayManager(provider=default_provider, history=history, seed=42)
+    benchmark = BenchmarkRunner(provider=default_provider, seed=42)
     # dist_dir points at a missing directory → the 503 path is testable
     httpd = ThreadingHTTPServer(
         ("127.0.0.1", 0),

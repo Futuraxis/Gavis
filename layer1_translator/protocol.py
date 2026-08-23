@@ -24,7 +24,7 @@ class ValidationResult:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
-    def extend(self, other: "ValidationResult") -> None:
+    def extend(self, other: ValidationResult) -> None:
         """Merge another validation result into this one."""
         self.valid = self.valid and other.valid
         self.errors.extend(other.errors)

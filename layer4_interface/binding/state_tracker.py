@@ -37,7 +37,6 @@ class StateTracker:
 
     def __init__(self):
         self._last_board: list[list[str | None]] | None = None
-        self._last_seq: int = -1
         self._history: list[Observation] = []
         # ThreadingHTTPServer 下多请求并发访问共享状态（审计 3.6 竞态）。
         self._lock = threading.Lock()
@@ -68,7 +67,6 @@ class StateTracker:
                                 change.removed.append((r, c))
 
             self._last_board = [row[:] for row in current]
-            self._last_seq = obs.frameSeq
             self._history.append(obs)
 
             # Keep only last 100 frames
@@ -86,8 +84,12 @@ class StateTracker:
         ``placedSeq`` (C-05 — the old "first appearance ever" heuristic
         ignored re-placements and never saw the new piece).
 
-        Returns a dict like ``{'player_x': [{'cellId': str, 'placedSeq': int}, ...]}``
-        usable by ``MoonChessAdapter.load_state()``.
+        Returns a dict like ``{'player_x': [{'cellId': str, 'placedSeq': int}, ...]}``.
+
+        注意（审查 Minor 2）：该形状与 ``MoonChessAdapter.load_state()``
+        期望的 v4.1 格式（``{pid: [cell_id, ...]}``）不同，且 key 沿用遗留
+        命名 ``player_x/player_o``——输出主要用于调试与回放，如需导入引擎
+        请先按 load_state 的 v4.1/v5.0 形状转换。
         """
         with self._lock:
             piece_order: dict[str, list[dict]] = {controlled_player: []}
@@ -123,5 +125,4 @@ class StateTracker:
         """Clear all tracked state."""
         with self._lock:
             self._last_board = None
-            self._last_seq = -1
             self._history.clear()
