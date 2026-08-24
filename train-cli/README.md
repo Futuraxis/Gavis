@@ -46,7 +46,8 @@ python -m train_cli --game all --solver cfr
 | `--seed` | `42` | 全链路种子 |
 | `--device` | `auto` | `auto`/`cpu`/`cuda` |
 | `--out-dir` | `models/train` | 产物根目录（每个游戏一个子目录） |
-| `--eval-episodes` | 注册表默认 | 评估局数（vs 均匀随机，座位轮换） |
+| `--eval-episodes` | 注册表默认 | 每个评估对手的局数（座位轮换） |
+| `--eval-opponents` | 注册表 `eval_opponents` | 评估对手（逗号分隔：`random`/`self` 或任何已登记 `runtime_solvers` 名字，如 `mcts,mahjong`；未登记时该列自动跳过） |
 | `--skip-eval` | — | 跳过评估 |
 | `--list` | — | 打印注册表一览并退出 |
 | `--verbose` | — | 训练过程详细输出 |
@@ -88,7 +89,14 @@ GAMES: dict[str, GameSpec] = {
   该游戏输出目录（如 `cfr_table_path="$OUTDIR/cfr_table.json"`）。
 - `save` — 产物文件名（写入 `<out-dir>/<game>/`；未实现 `save()` 或未声明则跳过）。
 - `per_player` — `True` → 每个座位一个实例（`player_id=座位`，贝叶斯狼人杀用）。
-- `eval` — 训练后是否运行 vs 均匀随机评估。
+- `eval` — 训练后是否运行评估（对手由 `eval_opponents` 数据驱动声明）。
+- `eval_opponents`（GameSpec）— 评估对手列，数据驱动：
+  - `random` 均匀随机（内置下限基准）
+  - `self` 自博弈镜像（内置；per_player 时各座位用自身实例互博）
+  - 其余任意名字 = 必须在该游戏 `runtime_solvers` 里已登记（如 `mcts` 搜索基线、
+    `mahjong` 启发式基线、`ollama`），经 `create_solver` 通用装配（预算统一
+    `EVAL_MCTS_BUDGET=300` 规模）；**未登记则该列自动跳过并提示**——接入新
+    基线只需在注册表登记，评估代码零改动
 
 ## 已登记游戏（7）
 

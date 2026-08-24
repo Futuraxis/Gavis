@@ -10,7 +10,9 @@
   - ``entry="train"`` → ``solver.train(episodes=...)``（Hybrid/MARL/PPO/PSRO）
   - ``entry="solve"``  → ``solver.solve(initial_state)``（CFR 等效训练）
   - ``per_player=True`` → 每个座位建一个实例（player_id=座位，如贝叶斯狼人杀）
-训练后按注册表 ``eval`` 设置运行 vs 均匀随机的通用评估（座位轮换）。
+训练后按注册表 ``eval`` 设置运行通用评估（座位轮换；对手由注册表
+``eval_opponents`` 数据驱动：random 均匀随机 / self 自博弈镜像 / 或任何
+已登记运行时求解器（如 mcts 搜索基线、mahjong 启发式基线））。
 
 产物（``<out-dir>/<game>/``）：
   - ``{save 名}``         各求解器产物（如 qmix.pt / cfr 表由 $OUTDIR 路径落盘）
@@ -44,13 +46,17 @@ for _p in (_ROOT, _SCRIPT_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from games import GAMES, SOLVER_FACTORY, GameSpec, SolverPipeline  # noqa: E402
+from games import GAMES, SOLVER_FACTORY, GameSpec, SolverPipeline, create_solver  # noqa: E402
 
 from layer2_engine.core.engine import GameEngine  # noqa: E402
 from layer3_solvers.base import SolverBase, SolverMetrics  # noqa: E402
 
 #: 评估对局最大步数护栏（超出按当前效用截断，防死循环）。
 MAX_EVAL_STEPS = 600
+
+#: 评估对手 —— MCTS 基线的通用搜索预算（与 Hybrid 自身 mcts_budget 同量级，
+#: 使“vs 基线”与“vs 自己”的对比在同一规模下进行）。
+EVAL_MCTS_BUDGET = 300
 
 
 # ── 引擎 ───────────────────────────────────────────────────────────
@@ -174,11 +180,16 @@ def play_episode(
         current = engine.get_current_player(state)
         solver = owners.get(current)
         legal = engine.get_legal_actions(state)
-        if not legal or solver is None:
+        if not legal:
             break
-        action = solver.select_action(state)
-        if action is None:
+        # own 座位用求解器；其余座位（owners 中为 None）按均匀随机落子——
+        # 这是评估协议“vs 均匀随机”的语义，不能把 None 当成“无代理→中止”。
+        if solver is None:
             action = rng.choice(legal)
+        else:
+            action = solver.select_action(state)
+            if action is None:
+                action = rng.choice(legal)
         state = engine.apply_action(state, action)
         steps += 1
     payoffs = {p: float(engine.get_utility(state, p)) for p in owners}
@@ -192,37 +203,64 @@ def evaluate(
     per_player_instances: list[SolverBase] | None,
     episodes: int,
     base_seed: int,
+    opponents: tuple[str, ...] = ("random",),
 ) -> dict[str, Any]:
-    """通用评估：每局只有一个"own 座位"由被评求解器执掌（顺次轮换），其余均匀随机。
+    """通用评估：每局只有一个"own 座位"由被评求解器执掌（顺次轮换），其余座位按对手类型落子。
+
+    返回 ``{对手类型: 结果}``。对手类型（**数据驱动**，注册表 ``eval_opponents`` 声明）：
+
+    - ``random`` — 均匀随机（内置基准下限）。
+    - ``self``   — 自己镜像（内置；per_player 时各座位用自身实例互博）。
+    - 其余名字  — 必须是该游戏 ``runtime_solvers`` 里已登记的求解器（如
+      ``mahjong`` 启发式 / ``mcts`` / ``ollama``），经 ``create_solver`` 通用装配
+      （预算统一用 ``EVAL_MCTS_BUDGET`` 规模）；未登记则该列自动跳过并提示。
 
     - ``solver`` != None（普通管线）→ own 座位用该实例。
     - ``per_player_instances`` != None → own 座位用对应座位的实例（player_id 绑定）。
     """
-    t0 = time.perf_counter()
-    utils: list[float] = []
-    for ep in range(episodes):
-        rng = random.Random(base_seed + ep * 31 + 7)
-        owned = ep % len(spec.players)
-        owners: dict[str, SolverBase | None] = {}
-        for i, seat in enumerate(spec.players):
-            if per_player_instances is not None:
-                owners[seat] = per_player_instances[i] if i == owned else None
-            else:
-                owners[seat] = solver if i == owned else None
-        _, payoffs = play_episode(engine, owners, rng)
-        utils.append(payoffs.get(spec.players[owned], 0.0))
-    elapsed = time.perf_counter() - t0
-    wins = sum(u > 0 for u in utils)
-    draws = sum(u == 0 for u in utils)
-    return {
-        "episodes": episodes,
-        "wins": wins,
-        "draws": draws,
-        "losses": episodes - wins - draws,
-        "win_rate": round(wins / episodes, 4),
-        "avg_utility": round(sum(utils) / episodes, 4),
-        "seconds": round(elapsed, 2),
-    }
+    baselines: dict[str, SolverBase] = {}
+    for opp in opponents:
+        if opp in ("random", "self"):
+            continue
+        if opp in spec.runtime_solvers:
+            baselines[opp] = create_solver(spec.game_id, opp, engine, base_seed, budget=EVAL_MCTS_BUDGET)
+        else:
+            print(f"  [提示] {spec.game_id} 未登记 '{opp}' 运行时求解器，跳过该评估列")
+
+    results: dict[str, Any] = {}
+    for opponent in opponents:
+        if opponent not in ("random", "self") and opponent not in baselines:
+            continue
+        t0 = time.perf_counter()
+        utils: list[float] = []
+        for ep in range(episodes):
+            rng = random.Random(base_seed + ep * 31 + 7)
+            owned = ep % len(spec.players)
+            owners: dict[str, SolverBase | None] = {}
+            for i, seat in enumerate(spec.players):
+                owned_solver = per_player_instances[i] if per_player_instances is not None else solver
+                if opponent == "random":
+                    owners[seat] = owned_solver if i == owned else None
+                elif opponent == "self":
+                    owners[seat] = owned_solver
+                else:
+                    owners[seat] = owned_solver if i == owned else baselines[opponent]
+            _, payoffs = play_episode(engine, owners, rng)
+            utils.append(payoffs.get(spec.players[owned], 0.0))
+        elapsed = time.perf_counter() - t0
+        wins = sum(u > 0 for u in utils)
+        draws = sum(u == 0 for u in utils)
+        results[opponent] = {
+            "opponent": opponent,
+            "episodes": episodes,
+            "wins": wins,
+            "draws": draws,
+            "losses": episodes - wins - draws,
+            "win_rate": round(wins / episodes, 4),
+            "avg_utility": round(sum(utils) / episodes, 4),
+            "seconds": round(elapsed, 2),
+        }
+    return results
 
 
 # ── 单游戏训练 ─────────────────────────────────────────────────────
@@ -273,14 +311,13 @@ def train_one(
 
     if pipeline.eval and not args.skip_eval:
         n = args.eval_episodes or spec.eval_episodes
+        opponents: tuple[str, ...] = args.eval_opponents or spec.eval_opponents
         if pipeline.per_player:
-            record["eval"] = evaluate(engine, spec, None, instances, n, args.seed)
+            record["eval"] = evaluate(engine, spec, None, instances, n, args.seed, opponents)
         else:
-            record["eval"] = evaluate(engine, spec, solver, None, n, args.seed)
-        print(
-            f"  评估 vs 随机: win_rate={record['eval']['win_rate']:.3f}  "
-            f"avg_utility={record['eval']['avg_utility']:+.3f}"
-        )
+            record["eval"] = evaluate(engine, spec, solver, None, n, args.seed, opponents)
+        for opp, res in record["eval"].items():
+            print(f"  评估 vs {opp}: win_rate={res['win_rate']:.3f}  avg_utility={res['avg_utility']:+.3f}")
     print(f"  训练完成: {record['train_seconds']}s")
     return record
 
@@ -344,7 +381,8 @@ def print_summary(summaries: list[dict[str, Any]]) -> None:
         parts = []
         for name in solvers:
             rec = summary[name]
-            wr = rec.get("eval", {}).get("win_rate")
+            eval_ = rec.get("eval")
+            wr = next(iter(eval_.values()), {}).get("win_rate") if eval_ else None
             parts.append(f"{name}={wr if wr is not None else '-'}")
         print(f"  {summary['game']:24s}  {'  '.join(parts)}")
 
@@ -394,10 +432,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--out-dir", type=str, default="models/train")
     parser.add_argument("--eval-episodes", type=int, default=0, help="覆盖评估局数（0=注册表默认）")
-    parser.add_argument("--skip-eval", action="store_true", help="跳过 vs 随机评估")
+    parser.add_argument(
+        "--eval-opponents",
+        type=str,
+        default=None,
+        help="评估对手（逗号分隔: random,self 或任何已登记 runtime_solvers 名字，如 mahjong,mcts；默认用注册表 eval_opponents）",
+    )
+    parser.add_argument("--skip-eval", action="store_true", help="跳过训练后评估")
     parser.add_argument("--list", action="store_true", help="打印注册表一览并退出")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
+    if args.eval_opponents:
+        args.eval_opponents = tuple(o.strip() for o in args.eval_opponents.split(",") if o.strip())
 
     if args.list:
         _print_registry()

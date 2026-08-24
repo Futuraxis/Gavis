@@ -33,7 +33,7 @@ from games import (  # noqa: E402
     registered_game_ids,
     registered_solver_names,
 )
-from train import MAX_EVAL_STEPS, build_engine, evaluate, play_episode  # noqa: E402
+from train import EVAL_MCTS_BUDGET, MAX_EVAL_STEPS, build_engine, evaluate, play_episode  # noqa: E402
 
 __all__ = [
     "GAMES",
@@ -51,6 +51,7 @@ __all__ = [
     "evaluate",
     "play_episode",
     "MAX_EVAL_STEPS",
+    "EVAL_MCTS_BUDGET",
 ]
 
 

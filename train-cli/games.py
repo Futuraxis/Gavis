@@ -164,7 +164,10 @@ class GameSpec:
     engine: EngineSpec
     players: tuple[str, ...]  # 座位顺序（先手在前），评估轮换使用
     solvers: Mapping[str, SolverPipeline]  # 可训练求解器管线
-    eval_episodes: int = 20  # 训练后 vs 随机的默认评估局数
+    eval_episodes: int = 20  # 训练后每个评估对手的默认局数
+    eval_opponents: tuple[str, ...] = ("random",)  # 评估对手：random|self|mcts
+    #   random → 均匀随机；self → 自己镜像（自博弈）；mcts → MCTS 基线
+    #   （mcts 未在 runtime_solvers 登记时该列自动跳过）。
     runtime_solvers: tuple[str, ...] = ()  # 运行时可用求解器（数据驱动装配）
     runtime_configs: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)  # 运行时配置覆盖
 
@@ -191,6 +194,7 @@ def _mahjong_spec(game_id: str, display_name: str, variant: str) -> GameSpec:
         engine=EngineSpec(rules="mahjong.json", variant=variant, player_count=2),
         players=("p0", "p1"),
         eval_episodes=8,
+        eval_opponents=("random", "mahjong"),  # 麻将启发式基线（已登记 runtime_solvers）
         solvers=_MAHJONG_SOLVERS,
         runtime_solvers=("mahjong", "random"),
     )
@@ -222,10 +226,11 @@ GAMES: dict[str, GameSpec] = {
             "psro": SolverPipeline(
                 "psro", episodes=5, config={"num_iters": 5, "num_steps_per_iter": 2000}, save="psro_pool.npz"
             ),
-            "qmix": SolverPipeline("qmix", episodes=600, save="qmix.pt"),
-            "happo": SolverPipeline("happo", episodes=600, save="happo.pt"),
-            "maac": SolverPipeline("maac", episodes=600, save="maac.pt"),
+            "qmix": SolverPipeline("qmix", episodes=2000, save="qmix.pt"),
+            "happo": SolverPipeline("happo", episodes=2000, save="happo.pt"),
+            "maac": SolverPipeline("maac", episodes=2000, save="maac.pt"),
         },
+        eval_opponents=("random", "mcts", "self"),
         runtime_solvers=("mcts", "cfr", "hybrid", "random"),
     ),
     "stochastic_gomoku": GameSpec(
@@ -248,6 +253,7 @@ GAMES: dict[str, GameSpec] = {
             ),
             "cfr": SolverPipeline("cfr", entry="solve", config={"iterations": 50, "depth_limit": 5}),
         },
+        eval_opponents=("random", "mcts"),
         runtime_solvers=("mcts", "cfr", "hybrid", "random"),
     ),
     "texas_holdem": GameSpec(
@@ -269,10 +275,16 @@ GAMES: dict[str, GameSpec] = {
                     "cfr_table_path": "$OUTDIR/cfr_table.json",
                 },
             ),
-            "qmix": SolverPipeline("qmix", episodes=400, save="qmix.pt"),
-            "happo": SolverPipeline("happo", episodes=400, save="happo.pt"),
-            "maac": SolverPipeline("maac", episodes=400, save="maac.pt"),
+            "qmix": SolverPipeline(
+                "qmix",
+                episodes=6000,
+                config={"epsilon_decay_steps": 20000},
+                save="qmix.pt",
+            ),
+            "happo": SolverPipeline("happo", episodes=6000, save="happo.pt"),
+            "maac": SolverPipeline("maac", episodes=6000, save="maac.pt"),
         },
+        eval_opponents=("random", "mcts", "self"),
         runtime_solvers=("mcts", "hybrid", "random"),  # 德州运行时禁用 CFR（不完全信息）
         runtime_configs={"hybrid": {"imperfect_information": True}},
     ),
@@ -290,6 +302,7 @@ GAMES: dict[str, GameSpec] = {
             # per_player → 每个座位一个实例（player_id=座位）。
             "bayes": SolverPipeline("bayes", episodes=1, per_player=True),
         },
+        eval_opponents=("random", "self"),
         runtime_solvers=("ollama", "random"),
     ),
 }

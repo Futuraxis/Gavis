@@ -155,7 +155,55 @@ def test_evaluate_loop_runs_end_to_end() -> None:
     spec = GAMES["moon_chess"]
     engine = build_engine(spec, seed=42)
     result = evaluate(engine, spec, None, None, episodes=4, base_seed=1)
-    assert result["episodes"] == 4
-    assert result["wins"] + result["draws"] + result["losses"] == 4
-    assert 0.0 <= result["win_rate"] <= 1.0
-    assert result["seconds"] >= 0.0
+    # 默认返回按对手的 dict（random 列是下限基准）。
+    assert set(result) == {"random"}
+    r = result["random"]
+    assert r["episodes"] == 4
+    assert r["wins"] + r["draws"] + r["losses"] == 4
+    assert 0.0 <= r["win_rate"] <= 1.0
+    assert r["seconds"] >= 0.0
+
+
+def test_evaluate_opponent_seats_play_random_not_stop() -> None:
+    """回归：评估时非 own 座位（owners 中 None）必须均匀随机落子而非中止。
+
+    曾是 play_episode 的 bug：``solver is None → break`` 使对手回合立即截断，
+    月亮棋评估出现"全平"（utility 恒 0）。own 座位是 RandomSolver、对手 None 时，
+    月亮棋每局必须分出胜负（wins+losses==episodes），不允许 0 胜负全平。
+    """
+    from train_cli import RandomSolver
+
+    spec = GAMES["moon_chess"]
+    engine = build_engine(spec, seed=42)
+    result = evaluate(engine, spec, RandomSolver(engine, seed=7), None, episodes=6, base_seed=1)
+    r = result["random"]
+    assert r["episodes"] == 6
+    assert r["wins"] + r["losses"] == 6, f"对手座位未参与对局: {result}"
+
+
+def test_evaluate_self_and_mcts_columns() -> None:
+    """多对手评估：self（自博弈镜像）与 mcts（基线）列必须真实对局（月亮棋均分出胜负）。"""
+    from train_cli import EVAL_MCTS_BUDGET, RandomSolver
+
+    spec = GAMES["moon_chess"]
+    engine = build_engine(spec, seed=42)
+    solver = RandomSolver(engine, seed=7)
+    result = evaluate(engine, spec, solver, None, episodes=4, base_seed=1, opponents=("random", "self", "mcts"))
+    assert set(result) == {"random", "self", "mcts"}
+    for opp, r in result.items():
+        assert r["episodes"] == 4
+        assert r["wins"] + r["losses"] == 4, f"{opp} 列未到达终局: {result}"
+    assert EVAL_MCTS_BUDGET == 300  # 基线预算与 Hybrid 自身 mcts_budget 同量级
+
+
+def test_evaluate_mcts_column_skipped_when_unavailable() -> None:
+    """数据驱动：游戏未登记 mcts 运行时求解器时，mcts 评估列自动跳过（狼人杀）。"""
+    from train_cli import RandomSolver
+
+    spec = GAMES["werewolf"]
+    engine = build_engine(spec, seed=42)
+    result = evaluate(
+        engine, spec, RandomSolver(engine, seed=7), None, episodes=2, base_seed=1, opponents=("random", "mcts")
+    )
+    assert set(result) == {"random"}  # mcts 不在 werewolf.runtime_solvers → 跳过
+    assert result["random"]["episodes"] == 2
