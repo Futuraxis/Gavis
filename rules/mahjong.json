@@ -1,8 +1,8 @@
 {
   "meta": {
     "gameId": "mahjong",
-    "version": "5.1.0",
-    "description": "Mahjong — guangdong jihu / hongzhong wild / blood variants × 2-4 players. Variant and player_count are injected into constants by MahjongAdapter. Pure-expression aliases (zero builtins)."
+    "version": "5.2.0",
+    "description": "Mahjong — guangdong jihu / hongzhong wild / blood variants × 2-4 players. The JSON's ``variants`` section declares every option (v5.2); the engine selects a variant and player count without any adapter injection. Pure-expression aliases (zero builtins)."
   },
   "players": [
     "p0",
@@ -10,14 +10,57 @@
     "p2",
     "p3"
   ],
-  "constants": {
+  "variants": {
     "variant": "guangdong",
     "player_count": 2,
-    "deal_target": 27,
-    "player_ids": [
-      "p0",
-      "p1"
-    ],
+    "options": {
+      "guangdong": {},
+      "hongzhong": {
+        "constants": {
+          "wild_tile": "z5"
+        }
+      },
+      "blood": {}
+    },
+    "player_ids": {
+      "map": {
+        "list": {
+          "range": {
+            "from": {
+              "const": 0
+            },
+            "to": {
+              "var": "$player_count"
+            }
+          }
+        },
+        "as": "$node",
+        "expr": {
+          "template": "p{$node}"
+        }
+      }
+    },
+    "deal_target": {
+      "add": [
+        {
+          "mul": [
+            {
+              "const": 13
+            },
+            {
+              "var": "$player_count"
+            }
+          ]
+        },
+        {
+          "const": 1
+        }
+      ]
+    },
+    "trim_players": true,
+    "trim_utility": true
+  },
+  "constants": {
     "tile_ids": [
       "m1",
       "m1",
@@ -1633,6 +1676,20 @@
         },
         {
           "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "at": [
+              {
+                "var": "$env.claim_queue"
+              },
+              {
+                "var": "$env.claim_index"
+              }
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
           "key": "last_action",
           "value": {
             "const": "discard"
@@ -1717,6 +1774,20 @@
               "key": "last_action",
               "value": {
                 "const": "pass"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "at": [
+                  {
+                    "var": "$env.claim_queue"
+                  },
+                  {
+                    "var": "$env.claim_index"
+                  }
+                ]
               }
             }
           ]

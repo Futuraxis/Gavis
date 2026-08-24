@@ -3,13 +3,22 @@ sampling and posterior-driven decisions (no network)."""
 
 from __future__ import annotations
 
+import json
 import random
+from pathlib import Path
 
 import pytest
 
-from layer2_engine.games.werewolf.werewolf_adapter import WerewolfAdapter
+from layer2_engine.core.engine import GameEngine
 from layer3_solvers import BayesConfig, BayesSolver
-from layer3_solvers.werewolf.belief import BeliefTracker
+from layer3_solvers.werewolf.belief import BeliefTracker, belief_obs
+
+RULES_PATH = Path(__file__).resolve().parent.parent.parent / "rules" / "werewolf.json"
+
+
+def _engine(seed: int) -> GameEngine:
+    with open(RULES_PATH, "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed)
 
 
 def _tracker(seed: int = 1) -> BeliefTracker:
@@ -118,7 +127,7 @@ def test_solver_vote_targets_most_suspicious():
     """投票决策：后验狼概率最高者被投。"""
     from dataclasses import replace
 
-    adapter = WerewolfAdapter(seed=3)
+    adapter = _engine(3)
     solver = BayesSolver(adapter, BayesConfig(seed=1), player_id="p0")
     # 推进到投票阶段
     rng = random.Random(1)
@@ -145,7 +154,7 @@ def test_solver_vote_targets_most_suspicious():
     legal = adapter.get_legal_actions(state)
     assert any(a.template_id == "vote" for a in legal)
     # 注入"p3 是狼"的强烈指控信号
-    obs = adapter.get_observation(state, "p0")
+    obs = belief_obs(adapter.project_observation(state, "p0"), "p0")
     obs["speech_log"] = list(obs["speech_log"]) + [
         {"speaker": "p1", "intent": "accuse", "text": "p3 是狼", "round": 1},
         {"speaker": "p2", "intent": "accuse", "text": "p3 是狼", "round": 1},
@@ -163,7 +172,7 @@ def test_solver_plays_full_game_randomly():
     """贝叶斯玩家在完整对局中动作合法、不卡死（与随机玩家对抗）。"""
     from dataclasses import replace
 
-    adapter = WerewolfAdapter(seed=5)
+    adapter = _engine(5)
     solver = BayesSolver(adapter, BayesConfig(seed=5), player_id="p0")
     rng = random.Random(5)
     state = adapter.create_initial_state()

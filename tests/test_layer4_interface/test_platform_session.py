@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from demos.solver_provider import default_provider
+from train_cli import default_provider
 from layer4_interface.frontend.platform.games import GAMES, PlayError
 from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.session import PlayManager

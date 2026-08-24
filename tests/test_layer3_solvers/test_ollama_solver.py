@@ -4,14 +4,21 @@ werewolf engine is exercised for real (no network needed)."""
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-from layer2_engine.games.werewolf.werewolf_adapter import WerewolfAdapter
+from layer2_engine.core.engine import GameEngine
 from layer3_solvers import OllamaConfig, OllamaSolver
 
+RULES_PATH = Path(__file__).resolve().parent.parent.parent / "rules" / "werewolf.json"
 
-def _adapter(seed: int = 7) -> WerewolfAdapter:
-    return WerewolfAdapter(seed=seed)
+
+def _adapter(seed: int = 7) -> GameEngine:
+    """Bare engine — werewolf.json 声明配比/部分可观测（v5.2），无适配器。"""
+    with open(RULES_PATH, "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed)
 
 
 def _advance(adapter, phase_target: str, max_steps: int = 200):

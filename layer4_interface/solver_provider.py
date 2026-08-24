@@ -3,8 +3,9 @@
 Architecture §12.1: Layer 4 never imports Layer 3.  The play apps and
 the platform consume solvers through the minimal :class:`SolverHandle`
 protocol, and receive a :class:`SolverProvider` at assembly time from
-the application layer (``demos/solver_provider.py``).  Only that
-concrete provider is allowed to import ``layer3_solvers`` on behalf of
+the application layer (``train-cli/games.py``, via the ``train_cli``
+import bridge).  Only that concrete provider is allowed to import
+``layer3_solvers`` on behalf of
 the frontend — grep for ``layer3_solvers`` under ``layer4_interface/``
 finds nothing by construction.
 

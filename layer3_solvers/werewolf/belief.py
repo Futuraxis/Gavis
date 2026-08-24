@@ -42,6 +42,49 @@ LIKELIHOOD = {
 ROLE_KEY = "role"  # 观察里的角色字段（'my_role'）
 
 
+def belief_obs(obs: dict, viewer: str | None = None) -> dict:
+    """把 v5.2+ 视图形状的引擎观察转换为 BeliefTracker 的扁平形状。
+
+    视图行承载在 ``obs["<view_name>"]``（list of row dicts），env 字段
+    承载在 ``obs["env"]``；转换后保持旧适配器观察的语义键：
+    ``my_role`` / ``alive`` / ``dead_roles`` / ``speech_log`` /
+    ``vote_log`` / ``deaths_arr`` / ``phase`` / ``round`` /
+    ``seer_result`` / ``witch_save_used`` / ``witch_poison_used`` /
+    ``my_alive``（viewer 提供时按 player_ids 索引）。``dead_roles``
+    由 ``dead_roles`` 视图行（_index → pid）还原为 dict。
+    """
+    env = obs.get("env") or {}
+    rows = obs.get("my_role") or []
+    my_role = str(rows[0].get(ROLE_KEY)) if rows else ""
+    alive = [r.get("alive") for r in (obs.get("alive") or [])]
+    dead_roles = {f"p{r.get('_index')}": r.get(ROLE_KEY) for r in (obs.get("dead_roles") or []) if r.get("_index") is not None}
+    return {
+        "my_role": my_role,
+        "alive": alive,
+        "dead_roles": dead_roles,
+        "speech_log": [r.get("entry") for r in (obs.get("speech_log") or [])],
+        "vote_log": [r.get("entry") for r in (obs.get("vote_log") or [])],
+        "deaths_arr": [r.get("entry") for r in (obs.get("deaths_arr") or [])],
+        "phase": str(env.get("phase") or obs.get("phase") or ""),
+        "round": int(env.get("round") or obs.get("round") or 0),
+        "seer_result": env.get("seerResult"),
+        "witch_save_used": env.get("witchSaveUsed"),
+        "witch_poison_used": env.get("witchPoisonUsed"),
+        "guard_last_target": env.get("guardLastTarget"),
+        "my_alive": _viewer_alive(alive, obs, viewer),
+    }
+
+
+def _viewer_alive(alive: list, obs: dict, viewer: str | None) -> bool | None:
+    """alive 数组里 viewer 的存活位（viewer 提供时，经 player 视图取索引）。"""
+    if not alive or not viewer:
+        return None
+    idx = next((r.get("_index") for r in (obs.get("player") or []) if r.get("id") == viewer), None)
+    if idx is None or idx >= len(alive):
+        return None
+    return bool(alive[idx])
+
+
 @dataclass
 class BeliefTracker:
     """Per-player posterior role distributions + joint sampling."""
@@ -80,18 +123,20 @@ class BeliefTracker:
     # ── 先验 ────────────────────────────────────────────────────────
 
     @classmethod
-    def from_adapter(cls, adapter, player_id: str, seed: int | None = None) -> "BeliefTracker":
-        """Build from a WerewolfAdapter (players / role pool / own role).
+    def from_engine(cls, engine, player_id: str, seed: int | None = None) -> "BeliefTracker":
+        """Build from the engine (players / role pool / own role).
 
         Reads the role pool through ``getattr`` with an empty fallback —
-        solver code must not reach into adapter privates (review M-3);
+        solver code must not reach into engine privates (review M-3);
         when ``_constants`` is absent the prior degenerates to empty.
         """
-        constants = getattr(adapter, "_constants", None) or {}
+        constants = getattr(engine, "_constants", None) or {}
         pids = list(constants.get("player_ids", []))
         pool = list(constants.get("role_pool", []))
-        obs = adapter.get_observation(adapter.create_initial_state(), player_id)
-        return cls(pids, pool, str(obs.get("my_role")), rng=random.Random(seed))
+        obs = engine.get_observation(engine.create_initial_state(), player_id)
+        rows = obs.get("my_role") or []
+        my_role = str(rows[0].get(ROLE_KEY)) if rows else ""
+        return cls(pids, pool, my_role, rng=random.Random(seed))
 
     # ── 观察与更新 ──────────────────────────────────────────────────
 

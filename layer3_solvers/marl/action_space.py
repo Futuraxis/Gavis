@@ -24,11 +24,8 @@ from typing import Callable
 
 import numpy as np
 
-from layer2_engine.interfaces.solver_adapter import (
-    ActionInstance,
-    SolverAdapter,
-    State,
-)
+from layer2_engine.core.state_graph import ActionInstance, State
+from layer2_engine.core.engine import GameEngine
 
 # ── Game constants (mirror rules/*.json canonicalKey templates) ─────
 
@@ -74,7 +71,7 @@ class ActionSpace:
     parser : Callable[[ActionInstance], int | None]
         Maps an action's canonical key to its prototype index (or None).
     legal_getter : Callable[[State], list[ActionInstance]], optional
-        Returns the legal actions of a state; defaults to ``adapter.get_legal_actions``.
+        Returns the legal actions of a state; defaults to ``engine.get_legal_actions``.
     """
 
     def __init__(
@@ -140,24 +137,21 @@ class ActionSpace:
     # ── Factory ──────────────────────────────────────────────────────
 
     @classmethod
-    def build_from_adapter(cls, adapter: SolverAdapter) -> "ActionSpace":
-        """Build an action space for ``adapter`` by dispatching on its class."""
-        from layer2_engine.games.mahjong.mahjong_adapter import MahjongAdapter
-        from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
-        from layer2_engine.games.texas_holdem.texas_env_adapter import TexasHoldemAdapter
-
-        if isinstance(adapter, MoonChessAdapter):
-            return cls._build_moon_chess(adapter)
-        if isinstance(adapter, MahjongAdapter):
-            return cls._build_mahjong(adapter)
-        if isinstance(adapter, TexasHoldemAdapter):
-            return cls._build_texas(adapter)
-        return cls._build_generic(adapter)
+    def build_from_adapter(cls, engine: GameEngine) -> "ActionSpace":
+        """Build an action space for ``engine`` by rules meta gameId (pure data)."""
+        game_id = (getattr(engine, "rules", {}) or {}).get("meta", {}).get("gameId", "")
+        if game_id == "moon_chess":
+            return cls._build_moon_chess(engine)
+        if game_id == "mahjong":
+            return cls._build_mahjong(engine)
+        if game_id == "texas_holdem":
+            return cls._build_texas(engine)
+        return cls._build_generic(engine)
 
     # ── Per-game builders ────────────────────────────────────────────
 
     @classmethod
-    def _build_moon_chess(cls, adapter: SolverAdapter) -> "ActionSpace":
+    def _build_moon_chess(cls, engine: GameEngine) -> "ActionSpace":
         def parser(action: ActionInstance) -> int | None:
             m = re.match(r"^place:(\d+),(\d+)$", action.canonical_key)
             if m is None:
@@ -172,11 +166,11 @@ class ActionSpace:
             for y in range(MOON_CHESS_SIZE)
             for x in range(MOON_CHESS_SIZE)
         ]
-        return cls(prototypes, parser, adapter.get_legal_actions)
+        return cls(prototypes, parser, engine.get_legal_actions)
 
     @classmethod
-    def _build_mahjong(cls, adapter: SolverAdapter) -> "ActionSpace":
-        constants = getattr(adapter, "_constants", {})
+    def _build_mahjong(cls, engine: GameEngine) -> "ActionSpace":
+        constants = getattr(engine, "_constants", {})
         tile_ids = constants.get("tile_ids") or []
         seen: list[str] = []
         for t in tile_ids:
@@ -244,10 +238,10 @@ class ActionSpace:
             PrototypeAction("claim_pass", _MAHJONG_PASS_IDX),
             PrototypeAction("win_self", _MAHJONG_WIN_SELF_IDX),
         ]
-        return cls(prototypes, parser, adapter.get_legal_actions)
+        return cls(prototypes, parser, engine.get_legal_actions)
 
     @classmethod
-    def _build_texas(cls, adapter: SolverAdapter) -> "ActionSpace":
+    def _build_texas(cls, engine: GameEngine) -> "ActionSpace":
         amount_index = {amount: i for i, amount in enumerate(TEXAS_AMOUNTS)}
         choice_index = {choice: i for i, choice in enumerate(TEXAS_CHOICES)}
 
@@ -266,12 +260,12 @@ class ActionSpace:
             for ci in range(len(TEXAS_CHOICES))
             for ai in range(len(TEXAS_AMOUNTS))
         ]
-        return cls(prototypes, parser, adapter.get_legal_actions)
+        return cls(prototypes, parser, engine.get_legal_actions)
 
     @classmethod
-    def _build_generic(cls, adapter: SolverAdapter) -> "ActionSpace":
+    def _build_generic(cls, engine: GameEngine) -> "ActionSpace":
         """Fallback: one slot per distinct template_id observed."""
-        template_ids = _probe_template_ids(adapter)
+        template_ids = _probe_template_ids(engine)
         by_template = {tid: i for i, tid in enumerate(template_ids)}
 
         def parser(action: ActionInstance) -> int | None:
@@ -280,26 +274,26 @@ class ActionSpace:
         return cls(
             [PrototypeAction(tid, i) for i, tid in enumerate(template_ids)],
             parser,
-            adapter.get_legal_actions,
+            engine.get_legal_actions,
         )
 
 
-def _probe_template_ids(adapter: SolverAdapter) -> list[str]:
+def _probe_template_ids(engine: GameEngine) -> list[str]:
     """Walk from the initial state until a player node, collecting template_ids."""
-    state = adapter.create_initial_state()
+    state = engine.create_initial_state()
     seen: list[str] = []
     for _ in range(64):
-        legal = adapter.get_legal_actions(state)
+        legal = engine.get_legal_actions(state)
         if legal:
             for a in legal:
                 if a.template_id not in seen:
                     seen.append(a.template_id)
             return seen
-        if adapter.get_node_type(state) == "chance":
-            outcomes = adapter.get_chance_outcomes(state)
+        if engine.get_node_type(state) == "chance":
+            outcomes = engine.get_chance_outcomes(state)
             if not outcomes:
                 return seen
-            state = adapter.apply_chance(state, outcomes[0])
+            state = engine.apply_chance(state, outcomes[0])
             continue
         break
     return seen

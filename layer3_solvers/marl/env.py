@@ -1,6 +1,6 @@
 """MARLEnv — shared multi-agent episode runner for the MARL solvers.
 
-``run_episode`` drives one full episode through the ``SolverAdapter``:
+``run_episode`` drives one full episode through the ``GameEngine``:
 chance nodes are resolved automatically (weighted by probability), and
 every decision made by the acting player is recorded as a
 ``Transition``.  Solvers only supply a per-decision policy callback;
@@ -33,10 +33,8 @@ from typing import Callable
 import numpy as np
 import torch
 
-from layer2_engine.interfaces.solver_adapter import (
-    SolverAdapter,
-    State,
-)
+from layer2_engine.core.state_graph import State
+from layer2_engine.core.engine import GameEngine
 
 from .action_space import ActionSpace
 from .encoders import GameEncoder
@@ -78,13 +76,13 @@ class EpisodeTrajectory:
     payoffs: dict[str, float] = field(default_factory=dict)
 
 
-def resolve_players(adapter: SolverAdapter) -> list[str]:
+def resolve_players(engine: GameEngine) -> list[str]:
     """Agent ids in fixed order (``rules['players']``, or env scalars)."""
-    rules = getattr(adapter, "rules", {})
+    rules = getattr(engine, "rules", {})
     players = rules.get("players") if isinstance(rules, dict) else None
     if players:
         return [str(p) for p in players]
-    state = adapter.create_initial_state()
+    state = engine.create_initial_state()
     env = state.get("env", {})
     players = env.get("player_ids")
     if players:
@@ -115,7 +113,7 @@ def weighted_choice(outcomes: list, rng: random.Random):
 
 
 def run_episode(
-    adapter: SolverAdapter,
+    engine: GameEngine,
     players: list[str],
     rng: random.Random,
     encoder: GameEncoder,
@@ -128,7 +126,7 @@ def run_episode(
 
     Parameters
     ----------
-    adapter : SolverAdapter
+    engine : GameEngine
     players : list[str]
         Agent ids in fixed order.
     rng : random.Random
@@ -145,7 +143,7 @@ def run_episode(
     max_steps : int
         Step guard (0 = unlimited) against pathological loops.
     """
-    state = adapter.create_initial_state()
+    state = engine.create_initial_state()
     player_idx = {p: i for i, p in enumerate(players)}
     traj = EpisodeTrajectory()
     last_by_player: dict[int, Transition] = {}
@@ -162,22 +160,22 @@ def run_episode(
             _abort()
             break
         steps += 1
-        node = adapter.get_node_type(state)
+        node = engine.get_node_type(state)
         if node == "chance":
-            outcomes = adapter.get_chance_outcomes(state)
+            outcomes = engine.get_chance_outcomes(state)
             if not outcomes:
                 _abort()
                 break
-            state = adapter.apply_chance(state, weighted_choice(outcomes, rng))
+            state = engine.apply_chance(state, weighted_choice(outcomes, rng))
             continue
         if node != "player":
             break  # terminal — normal end, payoffs settled below
-        current = adapter.get_current_player(state)
+        current = engine.get_current_player(state)
         if current is None or current not in player_idx:
             _abort()
             break
         pid = player_idx[current]
-        legal = adapter.get_legal_actions(state)
+        legal = engine.get_legal_actions(state)
         if not legal:
             _abort()
             break
@@ -188,7 +186,7 @@ def run_episode(
             _abort()
             break
         try:
-            next_state = adapter.apply_action(state, action)
+            next_state = engine.apply_action(state, action)
         except Exception:
             # Engine/rules edge case (e.g. mahjong degenerate chi chains
             # crashing payoff evaluation): end the episode as a draw.
@@ -201,14 +199,14 @@ def run_episode(
         # (mahjong claim_pass → draw, texas bet → deal).  An all-zero
         # ``next_mask`` collapsed the QMix/MAAC bootstrap (targets ≈ −1e9).
         forced_end = False
-        while adapter.get_node_type(next_state) == "chance":
-            outcomes = adapter.get_chance_outcomes(next_state)
+        while engine.get_node_type(next_state) == "chance":
+            outcomes = engine.get_chance_outcomes(next_state)
             if not outcomes:
                 # Dead chance node: the successor is not a decision state —
                 # abort rather than record a bootstrap-free transition.
                 forced_end = True
                 break
-            next_state = adapter.apply_chance(next_state, weighted_choice(outcomes, rng))
+            next_state = engine.apply_chance(next_state, weighted_choice(outcomes, rng))
             steps += 1
             if max_steps and steps >= max_steps:
                 # Pathological chance→chance loop: hard stop without recording.
@@ -218,14 +216,14 @@ def run_episode(
             _abort()
             break
 
-        done = adapter.is_terminal(next_state)
+        done = engine.is_terminal(next_state)
         if not done and next_value_fn is not None:
             info["next_value"] = float(next_value_fn(next_state, pid))
         reward = 0.0
         if done:
-            reward = float(adapter.get_utility(next_state, current))
+            reward = float(engine.get_utility(next_state, current))
             for p in players:
-                traj.payoffs[p] = float(adapter.get_utility(next_state, p))
+                traj.payoffs[p] = float(engine.get_utility(next_state, p))
 
         transition = Transition(
             player_idx=pid,
@@ -257,9 +255,9 @@ def run_episode(
         return traj
 
     # Terminal utility only reaches each player's own final decision.
-    if adapter.is_terminal(state):
+    if engine.is_terminal(state):
         for p in players:
-            payoff = float(adapter.get_utility(state, p))
+            payoff = float(engine.get_utility(state, p))
             traj.payoffs[p] = payoff
             last = last_by_player.get(player_idx[p])
             if last is not None:

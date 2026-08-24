@@ -88,20 +88,21 @@ persuade}`（有限槽位，动作空间紧凑，MARL 也能吃）。LLM 玩家�
 
 ### Layer 2 — 引擎
 
-- `rules/werewolf.json`（v5.1，默认 9 人局：4 狼 4 民 1 预言家）
-  - `constants`: 角色池 / 玩家数 / 夜晚顺序 / 各角色数量（人数由
-    `WerewolfAdapter` 注入，同 mahjong 模式）
+- `rules/werewolf.json`（v5.2，默认 9 人局：3 狼 3 民 1 预言家 + 女巫 + 猎人，
+  配比在 `variants` 节声明，引擎纯数据解析）
+  - `variants`: 配比声明（`player_ids` 由 `role_pool` 计数派生 + trim）
+  - `constants`: 角色池 / 夜晚顺序 / 各角色数量（无注入 API）
   - `chance`: 角色分配（deal）、夜晚结果结算
   - `actions`: 夜晚 `kill:{target}` / `check:{target}` / `save` / `poison:{target}`，
     白天 `vote:{target}` / `speak:{intent}`
   - `phases`: deal → night → day(发言环) → vote → night → … → game_over
   - `utility`: 狼全出局 → 好人胜；狼人数 ≥ 好人 → 狼胜（按 Gavis
     收益归一 ±1）
-- `layer2_engine/games/werewolf/werewolf_adapter.py`（`SolverAdapter`）
-  - 部分可观测：**adapter 层按玩家过滤**，同 texas 隐藏对手底牌的既有模式
-    （身份 / 夜晚行动他人不可见；发言日志全部可见）
+- 无 per-game 适配器（2026-08 已删除，见 reports/layer2-adapter-cancellability.md）
+  - 部分可观测由 `visibility` 声明：`my_role`（只留 viewer 行）、`dead_roles`
+    （保留死者行）、`env` 字段投影（`seerResult` 仅预言家可见）
   - 夜晚按顺序逐人决策（轮次制，天然适配现有 MARL runner）
-  - 发言日志容量控制（环形裁剪）可在 adapter 或规则 effector 中处理
+  - 发言日志容量控制（环形裁剪）由规则 effector 处理
 
 ### Layer 3 — 求解器
 
@@ -131,7 +132,7 @@ persuade}`（有限槽位，动作空间紧凑，MARL 也能吃）。LLM 玩家�
 
 | 阶段 | 内容 | 验收 |
 |------|------|------|
-| P1 | `rules/werewolf.json` + `WerewolfAdapter`（先随机玩家） | 自对弈可跑通、胜负判定正确、引擎测试 |
+| P1 | `rules/werewolf.json`（v5.2 全声明式）+ 裸 `GameEngine` | 自对弈可跑通、胜负判定正确、引擎测试 |
 | P2 | `OllamaSolver` + `demo_werewolf.py` | 9 人局 LLM 自对弈，JSON 决策稳定 |
 | P3 | 循环赛扩展：LLM vs LLM vs 随机/模板基线（复用 `run_episode` 玩家分派） | 阵营胜率统计 + 发言质量抽样 |
 | P4 | Layer 1 translator 实战 + 人机对弈界面 | 规则文本 → 可执行 rules.json |

@@ -1,16 +1,22 @@
-"""Tests for Encoding layer (Layer 4)."""
+﻿"""Tests for Encoding layer (Layer 4)."""
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+from layer2_engine.core.engine import GameEngine
 from layer4_interface.encoding.game_state_adapter import GameStateAdapter
 from layer4_interface.encoding.moon_state_encoder import (
     MoonStateEncoder,
     action_index_to_cell_id,
     cell_id_to_action_index,
 )
+
+RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
 
 
 class TestGameStateAdapter:
@@ -107,9 +113,8 @@ class TestMoonStateEncoder:
         encode() 必须支持 v4.1 手工 dict 与真实引擎状态两种形状——旧实现
         对 ``_arrays.pieceOrder`` 调用 ``.values()`` 直接 AttributeError。
         """
-        from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
-
-        engine = MoonChessAdapter(seed=1)
+        with open(RULES_DIR / "moon_chess.json", "r", encoding="utf-8") as f:
+            engine = GameEngine(json.load(f), seed=1)
         state = engine.create_initial_state()
         vec = encoder.encode(state, "p_black")
         assert vec.shape == (38,)

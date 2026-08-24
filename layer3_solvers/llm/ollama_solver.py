@@ -2,7 +2,7 @@
 
 Each instance is bound to one ``player_id`` and talks to a local ollama
 server (``qwen3:8b`` by default).  ``select_action`` builds a Chinese
-prompt from the adapter's observation (role / alive / speech log / votes)
+prompt from the engine's observation (role / alive / speech log / votes)
 with a strict JSON output contract, parses the model's reply, and maps it
 to an engine ``ActionInstance``:
 
@@ -16,7 +16,7 @@ REST API is called via stdlib ``urllib``.
 
 Usage::
 
-    solver = OllamaSolver(adapter, OllamaConfig(model='qwen3:8b'), player_id='p3')
+    solver = OllamaSolver(engine, OllamaConfig(model='qwen3:8b'), player_id='p3')
     action = solver.select_action(state)
 """
 
@@ -30,9 +30,11 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
-from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter, State
+from layer2_engine.core.state_graph import ActionInstance, State
+from layer2_engine.core.engine import GameEngine
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
+from ..werewolf.belief import belief_obs
 
 # 角色策略提示：每个身份一段简短行为指南（8B 模型的推理上限内的实用策略）。
 # 注意：guard 不在 ROLE_GUIDE 中 — 当前生成的 rules/werewolf.json 没有
@@ -77,9 +79,9 @@ class OllamaConfig(SolverConfig):
 class OllamaSolver(SolverBase):
     """LLM player for one ``player_id`` via a local ollama model."""
 
-    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None, player_id: str | None = None):
-        super().__init__(adapter, config or OllamaConfig())
-        self.player_id = player_id or self._default_player(adapter)
+    def __init__(self, engine: GameEngine, config: SolverConfig | None = None, player_id: str | None = None):
+        super().__init__(engine, config or OllamaConfig())
+        self.player_id = player_id or self._default_player(engine)
         # 单一 seed 旋钮：优先 SolverConfig.seed，fallback_seed 保留兼容
         # （审查 P3-5：双 seed 曾导致复现性混乱）。
         cfg = self.config
@@ -89,9 +91,9 @@ class OllamaSolver(SolverBase):
         self._rng = random.Random(seed)
 
     @staticmethod
-    def _default_player(adapter: SolverAdapter) -> str:
+    def _default_player(engine: GameEngine) -> str:
         """首个玩家的便宜推导（不展开初始状态 — 8 个 AI 席位曾重复 8 次发牌）。"""
-        rules = getattr(adapter, "rules", None)
+        rules = getattr(engine, "rules", None)
         players = rules.get("players") if isinstance(rules, dict) else None
         if players:
             first = players[0]
@@ -105,12 +107,13 @@ class OllamaSolver(SolverBase):
     # ── SolverBase ──────────────────────────────────────────────────
 
     def select_action(self, state: State) -> ActionInstance | None:
-        legal = self.adapter.get_legal_actions(state)
+        legal = self.engine.get_legal_actions(state)
         if not legal:
             return None
-        obs = self.adapter.get_observation(state, self.player_id)
+        obs = self.engine.get_observation(state, self.player_id)
+        flat = belief_obs(obs, self.player_id)
         try:
-            reply = self._ask_model(self._build_prompt(obs, legal))
+            reply = self._ask_model(self._build_prompt(flat, legal))
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
             # 网络/响应质量问题才随机回退；编程错误（如规则形状不匹配）
             # 不再被吞掉，上浮以便修复（审查 P1-15 曾被裸 except 掩盖）。
@@ -126,6 +129,9 @@ class OllamaSolver(SolverBase):
 
     def _build_prompt(self, obs: dict, legal: list[ActionInstance]) -> str:
         cfg = self.config
+        if "env" in obs:
+            # v5.2 view-shaped engine observation → 扁平（prompt 契约）
+            obs = belief_obs(obs, self.player_id)
         phase = str(obs.get("phase"))
         # 存活玩家 id 列表（obs['alive'] 是 [0/1] 数组，玩家命名 p0..pN-1）
         alive = [f"p{i}" for i, v in enumerate(obs.get("alive") or []) if v == 1]

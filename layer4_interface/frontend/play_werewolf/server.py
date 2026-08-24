@@ -30,7 +30,7 @@ STATIC_DIR = ROOT_DIR / "static"
 
 class WerewolfHandler(SimpleHTTPRequestHandler):
     server_version = "GavisWerewolf/0.1"
-    # PlayManager 由 main() 注入（SolverProvider 装配在应用层 demos/）
+    # PlayManager 由 main() 注入（SolverProvider 装配在 train-cli/games.py）
     manager: PlayManager | None = None
 
     def __init__(self, *args, **kwargs) -> None:
@@ -113,8 +113,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8771)
     args = parser.parse_args()
 
-    # 求解器由应用层装配（SolverProvider 注入，L4 不 import L3）
-    from demos.solver_provider import default_provider
+    # 求解器由注册表装配（SolverProvider 注入，L4 不 import L3）
+    from train_cli import default_provider
 
     WerewolfHandler.manager = PlayManager(provider=default_provider)
     server = ThreadingHTTPServer((args.host, args.port), WerewolfHandler)

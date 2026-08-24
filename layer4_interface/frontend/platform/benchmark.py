@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from layer2_engine.interfaces.solver_adapter import SolverAdapter
+from layer2_engine.core.engine import GameEngine
 
 from ...solver_provider import SolverHandle, SolverProvider
 from .games import GAMES
@@ -220,8 +220,8 @@ class BenchmarkRunner:
 
     @staticmethod
     def _play_one(
-        engine_a: SolverAdapter,
-        engine_b: SolverAdapter,
+        engine_a: GameEngine,
+        engine_b: GameEngine,
         solver_a: SolverHandle,
         solver_b: SolverHandle,
         spec,

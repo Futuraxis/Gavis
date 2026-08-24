@@ -12,9 +12,32 @@ import random
 import numpy as np
 import pytest
 
-from layer2_engine.games.mahjong.mahjong_adapter import MahjongAdapter
-from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
-from layer2_engine.games.texas_holdem.texas_env_adapter import TexasHoldemAdapter
+import json
+from pathlib import Path
+
+from layer2_engine.core.engine import GameEngine
+
+RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
+
+
+def _moon(seed: int = 42) -> GameEngine:
+    with open(RULES_DIR / "moon_chess.json", "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed)
+
+
+def _texas(seed: int = 42) -> GameEngine:
+    with open(RULES_DIR / "texas_holdem.json", "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed)
+
+
+def _mahjong_gd(seed: int = 42) -> GameEngine:
+    with open(RULES_DIR / "mahjong.json", "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed, variant="guangdong", player_count=2)
+
+
+def _mahjong_hz(seed: int = 42) -> GameEngine:
+    with open(RULES_DIR / "mahjong.json", "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed, variant="hongzhong", player_count=2)
 
 try:
     from layer3_solvers.marl import (
@@ -44,18 +67,18 @@ SMALL_M = dict(start_learning=8, batch_size=16, buffer_capacity=1024)
 
 
 @pytest.fixture
-def moon_adapter() -> MoonChessAdapter:
-    return MoonChessAdapter(seed=42)
+def moon_adapter() -> GameEngine:
+    return _moon(42)
 
 
 @pytest.fixture
-def mahjong_adapter() -> MahjongAdapter:
-    return MahjongAdapter(variant="guangdong", player_count=2, seed=42)
+def mahjong_adapter() -> GameEngine:
+    return _mahjong_gd(42)
 
 
 @pytest.fixture
-def texas_adapter() -> TexasHoldemAdapter:
-    return TexasHoldemAdapter(seed=42)
+def texas_adapter() -> GameEngine:
+    return _texas(42)
 
 
 def _advance_chance(adapter, state):
@@ -68,13 +91,13 @@ def _advance_chance(adapter, state):
     return state
 
 
-def _drive_to_claim(seed: int) -> tuple[MahjongAdapter, dict] | None:
+def _drive_to_claim(seed: int) -> tuple[GameEngine, dict] | None:
     """Play random legal mahjong until a claim phase (or give up).
 
     Returns (adapter, state-at-claim) or None.  Engine edge cases
     (degenerate chi chains) are treated as "no claim found".
     """
-    adapter = MahjongAdapter(variant="guangdong", player_count=2, seed=seed)
+    adapter = _mahjong_gd(seed)
     rng = random.Random(seed)
     state = adapter.create_initial_state()
     for _ in range(800):
@@ -414,7 +437,7 @@ class TestActionSpace:
     def test_texas_mask(self, texas_adapter):
         action_space = ActionSpace.build_from_adapter(texas_adapter)
         assert action_space.dim == 48
-        state = texas_adapter.resolve_chance(texas_adapter.create_initial_state())
+        state = _advance_chance(texas_adapter, texas_adapter.create_initial_state())
         mask = action_space.legal_mask(state)
         assert mask.sum() == len(texas_adapter.get_legal_actions(state))
         for action in texas_adapter.get_legal_actions(state):

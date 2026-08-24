@@ -1,4 +1,4 @@
-"""Tests for the werewolf play session (human vs AI table).
+﻿"""Tests for the werewolf play session (human vs AI table).
 
 The AI solvers are stubbed with fixed-action solvers so the session
 mechanics (turn rotation, AI driving, snapshots) run without ollama.
@@ -6,18 +6,27 @@ mechanics (turn rotation, AI driving, snapshots) run without ollama.
 
 from __future__ import annotations
 
+import json
 import random
+from pathlib import Path
 
 import pytest
 
-from layer2_engine.games.werewolf.werewolf_adapter import WerewolfAdapter
+from layer2_engine.core.engine import GameEngine
 from layer4_interface.frontend.play_werewolf.session import GameSession
+
+RULES_PATH = Path(__file__).resolve().parent.parent.parent / "rules" / "werewolf.json"
+
+
+def _engine(seed: int = 3) -> GameEngine:
+    with open(RULES_PATH, "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed)
 
 
 class _StubSolver:
     """AI stub bound to the session engine: random legal action."""
 
-    def __init__(self, player_id: str, engine: WerewolfAdapter):
+    def __init__(self, player_id: str, engine: GameEngine):
         self.player_id = player_id
         self.engine = engine
         self._rng = random.Random(hash(player_id) & 0xFFFF)
@@ -35,7 +44,7 @@ class _StubSolver:
 
 
 def _make_session(seed: int = 3) -> GameSession:
-    engine = WerewolfAdapter(seed=seed)
+    engine = _engine(seed)
     pids = engine._constants["player_ids"]
     human = "p0"
     ai = {pid: _StubSolver(pid, engine) for pid in pids if pid != human}

@@ -1,10 +1,19 @@
+import json
 import random
 from collections import Counter
 from dataclasses import replace
+from pathlib import Path
 
 from _gen_werewolf import gen_rules
 from layer2_engine.core.engine import GameEngine
-from layer2_engine.games.werewolf.werewolf_adapter import WerewolfAdapter
+
+RULES_PATH = Path(__file__).resolve().parent.parent.parent / "rules" / "werewolf.json"
+
+
+def _engine(seed: int = 7) -> GameEngine:
+    """Bare engine — composition is declared data in the regenerated JSON (v5.2)."""
+    with open(RULES_PATH, "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed)
 
 
 def play_until(adapter, rng, phase_target, max_steps=300):
@@ -39,7 +48,7 @@ def play_until(adapter, rng, phase_target, max_steps=300):
 
 def test_observation_filters_roles_and_seer_result():
     """非预言家看不到别人的角色与验人结果；预言家能看到自己的验人结果。"""
-    adapter = WerewolfAdapter(seed=7)
+    adapter = _engine(seed=7)
     rng = random.Random(7)
     # 找到预言家的索引
     st = play_until(adapter, rng, "night_seer")
@@ -52,16 +61,18 @@ def test_observation_filters_roles_and_seer_result():
     check = next(a for a in legal if a.template_id == "check")
     st2 = adapter.apply_action(st, check)
     assert st2["env"].get("seerResult") is not None
-    # 预言家自己能看到验人结果
-    obs_seer = adapter.get_observation(st2, seer_id)
-    assert obs_seer["seer_result"] == st2["env"]["seerResult"]
-    assert obs_seer["my_role"] == "seer"
-    # 其他玩家看不到
-    obs_other = adapter.get_observation(st2, other_id)
-    assert obs_other["seer_result"] is None
-    assert obs_other["my_role"] != "seer"
-    # 任何人都看不到别人的角色
-    assert all(o["my_role"] is None or o["player"] == other_id for o in [obs_other])
+    # 预言家自己能看到验人结果（env 字段级可见性，v5.2）
+    obs_seer = adapter.project_observation(st2, seer_id)
+    assert obs_seer["env"].get("seerResult") == st2["env"]["seerResult"]
+    # my_role 是按 viewer 过滤的单行视图
+    assert [e.get("role") for e in obs_seer["my_role"]] == ["seer"]
+    # 其他玩家看不到验人结果
+    obs_other = adapter.project_observation(st2, other_id)
+    assert "seerResult" not in obs_other["env"]
+    assert [e.get("role") for e in obs_other["my_role"]] != ["seer"]
+    # 任何人都只看到自己的角色行
+    other_idx = adapter._constants["player_ids"].index(other_id)  # noqa: SLF001
+    assert [e.get("_index") for e in obs_other["my_role"]] == [other_idx]
     # 发言记录公开
     assert isinstance(obs_seer["speech_log"], list)
 
@@ -70,7 +81,7 @@ def test_observation_speech_log_is_public():
     """发言日志对所有玩家公开。"""
     st = None
     for s in range(20):  # 有些局第一夜后狼直接获胜，重试找进白天的局
-        adapter = WerewolfAdapter(seed=200 + s)
+        adapter = _engine(seed=200 + s)
         rng = random.Random(200 + s)
         cand = play_until(adapter, rng, "day_speech")
         if cand is not None and adapter.get_node_type(cand) == "player":
@@ -83,8 +94,9 @@ def test_observation_speech_log_is_public():
     speak = replace(speak, params={**speak.params, "text": "我是真预言家"})
     st2 = adapter.apply_action(st, speak)
     for pid in adapter._constants["player_ids"]:
-        obs = adapter.get_observation(st2, pid)
-        assert any("我是真预言家" in s.get("text", "") for s in obs["speech_log"])
+        obs = adapter.project_observation(st2, pid)
+        entries = [e.get("entry", {}) for e in obs["speech_log"]]
+        assert any("我是真预言家" in s.get("text", "") for s in entries)
 
 
 # ── 胜负与收益 ────────────────────────────────────────────────────
@@ -92,7 +104,7 @@ def test_observation_speech_log_is_public():
 
 def test_utility_by_faction():
     """狼赢：狼玩家 +1 好人 -1；好人赢：相反。"""
-    adapter = WerewolfAdapter(seed=3)
+    adapter = _engine(seed=3)
     rng = random.Random(3)
     st = play_until(adapter, rng, "game_over")
     assert st is not None
@@ -111,7 +123,7 @@ def test_full_games_terminate():
     """随机自对弈 30 局全部正常终局、胜负合法（默认 3狼1预1女巫1猎人）。"""
     winners = Counter()
     for s in range(30):
-        adapter = WerewolfAdapter(seed=100 + s, players=9, wolves=3)
+        adapter = _engine(seed=100 + s)
         rng = random.Random(100 + s)
         state = adapter.create_initial_state()
         steps = 0
@@ -182,7 +194,7 @@ def _speak(adapter, state, text="发言"):
 
 def test_witch_phase_precedes_seer():
     """P1-16: 狼刀后先进入女巫夜（预言家存活也不跳过），女巫行动后到预言家夜。"""
-    adapter = WerewolfAdapter(seed=7)
+    adapter = _engine(seed=7)
     rng = random.Random(7)
     st = play_until(adapter, rng, "night_wolf")
     assert st is not None
@@ -207,7 +219,7 @@ def test_witch_phase_precedes_seer():
 
 def test_dead_witch_skipped_even_with_potions():
     """P1-8: 女巫已死（药未用）时狼刀后跳过女巫夜，直接进预言家夜。"""
-    adapter = WerewolfAdapter(seed=7)
+    adapter = _engine(seed=7)
     rng = random.Random(7)
     st = play_until(adapter, rng, "night_wolf")
     assert st is not None
@@ -225,7 +237,7 @@ def test_dead_witch_skipped_even_with_potions():
 
 def test_wolf_phase_turn_is_wolf():
     """P1-5: night_wolf 入场 turn 必须是最小座位的存活狼人。"""
-    adapter = WerewolfAdapter(seed=7)
+    adapter = _engine(seed=7)
     rng = random.Random(7)
     st = play_until(adapter, rng, "night_wolf")
     assert st is not None
@@ -236,7 +248,7 @@ def test_wolf_phase_turn_is_wolf():
 
 def test_day_speech_rotation():
     """P1-7: 发言轮转由规则层推进 — speechLog[i].speaker 恒等于 living[i]。"""
-    adapter = WerewolfAdapter(seed=203)
+    adapter = _engine(seed=203)
     rng = random.Random(203)
     st = play_until(adapter, rng, "day_speech")
     assert st is not None and adapter.get_node_type(st) == "player"
@@ -256,7 +268,7 @@ def test_day_speech_rotation():
 
 def test_day_vote_rotation():
     """P1-7: 投票轮转同样由规则层推进 — voteLog[i].voter 恒等于 living[i]。"""
-    adapter = WerewolfAdapter(seed=203)
+    adapter = _engine(seed=203)
     rng = random.Random(203)
     st = play_until(adapter, rng, "day_speech")
     assert st is not None

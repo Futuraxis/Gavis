@@ -1,11 +1,11 @@
 # Gavis — 自适应策略游戏 AI Agent 架构设计
 
-> 版本: v0.3 | 状态: 实现中 (四层水平集成) | 日期: 2026-08-22
+> 版本: v0.4 | 状态: 实现中 (四层水平集成) | 日期: 2026-08-22
 >
-> 规则语言: **v5.1 零 BUILTIN**（`rules["functions"]` alias，规则自足，
-> `BUILTIN_FUNCTIONS` 注册表已退役）。架构分层硬约束：Layer N 只依赖
-> Layer N-1；层间通信只走 Protocol（`SolverAdapter` / `SolverBase` /
-> `BaseBinding`；L4→L3 再经 `SolverProvider` 协议倒转依赖）。
+> 规则语言: **v5.2 零 BUILTIN + variants 声明式**（`rules["functions"]` alias
+> 规则自足；变种/人数/配比在 JSON `variants` 声明，无 per-game 适配器）。
+> 架构分层硬约束：Layer N 只依赖 Layer N-1；层间通信只走契约
+> （L2→L3: `GameEngine`；L3: `SolverBase`；L4: `BaseBinding`）。
 
 ---
 
@@ -26,9 +26,9 @@
 │  层间: L1→L2 单一授权通道 (validate() = schema +           │
 │         L2 smoke 校验, 引擎冒烟验证下沉到 L2 服务)         │
 ├────────────────────────────────────────────────────────────┤
-│ Layer 2: Env/Engine        [游戏引擎]                      │
-│  rules.json → GameEngine → SolverAdapter                  │
-│  求解器通过 SolverAdapter Protocol 消费游戏                │
+│ Layer 2: Env/Engine        [游戏引擎核心]                  │
+│  rules.json → GameEngine（单一契约，无 per-game 适配器）   │
+│  求解器通过 GameEngine 公开 API 消费游戏                   │
 ├────────────────────────────────────────────────────────────┤
 │ Layer 3: Solver            [求解器]                        │
 │  MCTS / CFR / Hybrid / PPO / PSRO / MARL / LLM / 启发式    │
@@ -39,10 +39,12 @@
 │  Encoding: MoonStateEncoder → 特征向量                     │
 │  VisionBridge: Observation → Engine State                  │
 │  Frontend: play_* 单应用服务 + platform 平台前端           │
-│   (React 前端: 大厅/对战/评测/历史, 见 frontend/platform/) │
-│  OnlineLearning: 反馈收集 (预留)                           │
+│   (React 前端: 大厅/对战/评测/历史/在线学习,               │
+│    见 frontend/platform/)                                 │
+│  OnlineLearning: 捕获+持久化+经验表+门禁发布 (已实现,      │
+│    见 docs/design/online-learning.md)                     │
 │  层间: 不 import L3 — 求解器经 SolverProvider 协议注入     │
-│         (L4 定义协议, demos/solver_provider.py 装配实现)   │
+│         (L4 定义协议, train-cli/games.py 注册表装配实现)   │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -51,7 +53,7 @@
 ## 3. 当前目录结构
 
 ```
-rules/                              # 游戏规则 JSON (v5.1, 零 BUILTIN)
+rules/                              # 游戏规则 JSON (v5.2, 零 BUILTIN + variants)
 ├── stochastic_gomoku.json           # 随机五子棋 (9×9, 50% 消失)
 ├── moon_chess.json                  # 月亮棋 (3×3, FIFO 淘汰)
 ├── texas_holdem.json                # 德州扑克 (双人/多人)
@@ -70,21 +72,14 @@ layer1_translator/                  # LLM 规则翻译 (已实现)
 └── engine_validator.py              # validate() = schema + L2 smoke 校验
                                     # (L1→L2 单一授权通道; 冒烟服务在 L2)
 
-layer2_engine/                      # 游戏引擎
+layer2_engine/                      # 游戏引擎核心 (无 per-game 适配器)
 ├── core/
-│   ├── engine.py                    # GameEngine — 实现 SolverAdapter
-│   ├── state_graph.py               # State / ActionInstance / ChanceOutcome
+│   ├── engine.py                    # GameEngine — 规则解释器 + 编译器（L2→L3 单一契约）
+│   ├── state_graph.py               # State / ActionInstance / ChanceOutcome / NodeType
 │   ├── expr_eval.py                 # 表达式求值器 + codegen 编译
-│   ├── rules_compiler.py            # v5.1 alias 编译管线
+│   ├── rules_compiler.py            # v5.2 alias 编译管线
+│   ├── api_key.py                   # L1 通道的 LLM API key 解析（自 interfaces/ 迁入）
 │   └── smoke_validator.py           # L2 冒烟校验服务 (L1 validate 下沉)
-├── interfaces/
-│   └── solver_adapter.py            # SolverAdapter Protocol (Layer 2→3 契约)
-└── games/
-    ├── moon_chess/moon_env_adapter.py    # 月亮棋薄适配器 (RL 辅助)
-    ├── stochastic_gomoku/                # 随机五子棋适配器
-    ├── texas_holdem/texas_env_adapter.py # 德州扑克适配器
-    ├── mahjong/mahjong_adapter.py        # 麻将适配器 (变种/人数 constants)
-    └── werewolf/werewolf_adapter.py      # 狼人杀适配器
 
 layer3_solvers/                     # 求解器
 ├── base.py                          # SolverBase 抽象类
@@ -124,16 +119,20 @@ layer4_interface/                   # 交互界面
 │       ├── history.py               # 对局记录 (data/matches/*.json)
 │       └── benchmark.py             # 求解器评测 (后台 job)
 │       # 前端: platform-frontend/ (React+Vite+TS, npm run build → dist/)
-├── online_learning/                 # (预留) 在线学习
+├── online_learning/                 # 在线学习 (已实现, 见 §2/§7)
+│   ├── recorder.py                  # 逐决策捕获 (RecordingHandle 包装)
+│   ├── store.py                     # JSONL 持久化 (data/online_learning/)
+│   ├── signals.py                   # 轨迹 → OnlineLearningSignal
+│   ├── feedback_collector.py        # 信号数据类 + 内存采集器
+│   ├── models.py                    # OnlineModelStore 已发布模型/回滚
+│   └── manager.py                   # LearningManager (建表/门禁/发布/auto)
 └── vision_bridge.py                 # Observation → Engine State
 
-demos/                              # 演示入口 + 求解器装配
-├── solver_provider.py               # DefaultSolverProvider (L3 装配点)
-├── demo_mcts.py / demo_cfr.py       # 单求解器演示
-├── demo_werewolf_llm.py             # 狼人杀 LLM 自对弈
-├── benchmark_all.py                 # 统一基准评测
-├── train_hybrid.py / train_marl.py  # 训练入口
-└── eval_layer1_translator.py        # L1 翻译质量评估
+train-cli/                          # 训练 CLI + 求解器装配（游戏注册制）
+├── games.py                        # 游戏注册表 (7 游戏: 引擎/座位/训练管线/运行时求解器)
+│                                   #   + DefaultSolverProvider (L3 装配点, 数据驱动)
+└── train.py                        # 统一抽象训练脚本 (只读注册表, 无 per-game 分支)
+train_cli.py                        # 根目录导入桥 → train-cli/ (连字符目录模块化别名)
 
 tests/                              # 测试 (558 用例, pytest)
 ├── test_layer1_translator/
@@ -148,22 +147,25 @@ tests/                              # 测试 (558 用例, pytest)
 
 ## 4. 核心契约
 
-### 4.1 SolverAdapter Protocol (Layer 2 → 3)
+### 4.1 GameEngine 契约 (Layer 2 → 3)
 
 ```python
-class SolverAdapter(Protocol):
-    def create_initial_state(self) -> State
-    def get_node_type(self, state) -> Literal['player','chance','terminal']
-    def get_current_player(self, state) -> str | None
-    def get_legal_actions(self, state) -> list[ActionInstance]
-    def apply_action(self, state, action) -> State
-    def get_chance_outcomes(self, state) -> list[ChanceOutcome]
-    def apply_chance(self, state, outcome) -> State
-    def is_terminal(self, state) -> bool
-    def get_utility(self, state, player) -> float
-    def get_observation(self, state, player) -> Obs
-    def get_info_set_key(self, state, player) -> str
+engine = GameEngine(rules, seed=None, variant=None, player_count=None)
+state = engine.create_initial_state()
+engine.get_node_type(state)              # Literal['player','chance','terminal']
+engine.get_current_player(state)         # str | None（env.turn 推导）
+engine.get_legal_actions(state)          # list[ActionInstance]
+engine.apply_action(state, action)       # -> State
+engine.sample_chance(state)              # chance 采样（get_chance_outcomes + rng）
+engine.apply_chance(state, outcome)      # -> State
+engine.is_terminal(state) / engine.get_utility(state, player)
+engine.project_observation(state, player)  # -> Obs（visibility 声明式投影）
+engine.get_info_set_key(state, player)
+engine.eval_expr(expr, extra_ctx=None)   # 规则表达式求值（前端显示助手用）
 ```
+
+部分可观测、变体/人数/配比、轮转全部由规则 JSON 声明（`visibility` /
+`variants` / env.`turn` / `chance`+`effectMap`），引擎不做任何游戏特化。
 
 ### 4.2 SolverBase (Layer 3)
 
@@ -181,8 +183,9 @@ class SolverBase(ABC):
 class SolverProvider(Protocol):
     def create_solver(self, game_id, name, engine, seed, budget, **kwargs) -> SolverHandle
 
-# 实现与装配在 demos/solver_provider.py（唯一允许 import layer3_solvers
-# 的装配点）；layer4_interface/ 内不存在 layer3_solvers 的 import。
+# 实现与装配在 train-cli/games.py（唯一允许 import layer3_solvers 的
+# 装配点，全部由注册表数据驱动）；layer4_interface/ 内不存在
+# layer3_solvers 的 import。
 # 启动注入: play_* / platform 的 main() 将 default_provider 注入
 # PlayManager / BenchmarkRunner。
 ```
@@ -190,7 +193,7 @@ class SolverProvider(Protocol):
 ### 4.4 VisionBridge (Layer 4 → 2)
 
 ```python
-def observation_to_state(observation: Observation, engine: SolverAdapter) -> State
+def observation_to_state(observation: Observation, engine: GameEngine) -> State
 ```
 
 纯函数，不依赖 Layer 3。Solver 集成在应用层完成。
@@ -209,7 +212,7 @@ def observation_to_state(observation: Observation, engine: SolverAdapter) -> Sta
 ### 5.1 离线训练
 
 ```
-rules.json → GameEngine → SolverAdapter → SolverBase.train() → 策略
+rules.json → GameEngine → SolverBase.train() → 策略
 ```
 
 ### 5.2 在线决策
@@ -236,7 +239,7 @@ rules.json → GameEngine → SolverAdapter → SolverBase.train() → 策略
 |--------|---------|---------|---------|
 | MCTS | 完美信息、随机博弈 | 纯搜索 (无需训练) | ✅ 可用 |
 | CFR | 小棋盘、需要均衡解 | External Sampling | ✅ 可用 |
-| Hybrid | 不完全信息（德州扑克） | CFR 表 + MCTS/策略 | ✅ 可用 |
+| Hybrid | 不完全信息（德州扑克） | CFR 表 + MCTS/策略 + 经验对手模型（在线学习） | ✅ 可用 |
 | OllamaSolver | 自由文本游戏（狼人杀） | 本地 LLM 推理 | ✅ 可用 (需 ollama) |
 | MahjongHeuristicAI | 麻将 | 启发式 | ✅ 可用 |
 | PPO | 大状态空间、视觉输入 | 策略梯度 + GAE | ✅ 可用 (需 torch) |
@@ -248,6 +251,9 @@ rules.json → GameEngine → SolverAdapter → SolverBase.train() → 策略
 ## 7. 效果路线图
 
 ```
-现在:     四层结构已建立, 8 类求解器 + 六游戏可跑, 558 测试通过
-下阶段:   Layer 1 LLM 路由全量启用, 在线学习闭环, 平台鉴权/工程化
+现在:     四层结构已建立, 8 类求解器 + 六游戏可跑, 610 测试通过,
+          在线学习 MVP 已上线 (德州扑克经验对手模型 + 门禁发布,
+          见 docs/design/online-learning.md)
+下阶段:   Layer 1 LLM 路由全量启用, 在线学习扩展到 MCTS/PPO/CFR,
+          平台鉴权/工程化
 ```

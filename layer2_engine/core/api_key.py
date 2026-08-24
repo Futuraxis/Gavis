@@ -5,9 +5,9 @@ decision 2026-08-13) — priority:
 
     显式构造参数 > 环境变量 > 默认值
 
-The helper lives in Layer 2 because it is the lowest layer that both
-Layer 3 (solvers: ollama / social LLM policy) and Layer 4 (binding:
-qwen_vision) may legally import.
+The helper lives in Layer 2's core (generic service, v5.2) because it is
+the lowest layer that both Layer 3 (solvers: ollama / social LLM policy)
+and Layer 4 (binding: qwen_vision) may legally import.
 """
 
 from __future__ import annotations

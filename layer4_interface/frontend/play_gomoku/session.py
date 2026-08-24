@@ -4,7 +4,7 @@ Each session owns a ``GameEngine`` (v5.0 rules) and a solver handle.
 Unlike Moon Chess, every placement is followed by a chance node (50%
 vanish), so both the human and the AI move resolve the chance step and
 report whether the stone vanished.  The solver is injected through a
-``SolverProvider`` (see ``demos/solver_provider.py``), keeping Layer 4
+``SolverProvider`` (see ``train-cli/games.py``), keeping Layer 4
 free of ``layer3_solvers`` imports.
 """
 

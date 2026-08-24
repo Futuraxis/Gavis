@@ -8,7 +8,18 @@ and claim-queue rotation.
 
 from __future__ import annotations
 
-from layer2_engine.games.mahjong.mahjong_adapter import MahjongAdapter
+import json
+from pathlib import Path
+
+from layer2_engine.core.engine import GameEngine
+
+RULES_PATH = Path(__file__).resolve().parent.parent.parent / "rules" / "mahjong.json"
+
+
+def _engine(variant: str | None = None, player_count: int = 2, seed: int = 1) -> GameEngine:
+    """Bare engine — variant/player count are declared data (v5.2)."""
+    with open(RULES_PATH, "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed, variant=variant, player_count=player_count)
 
 
 def _resolve(adapter, state: dict) -> dict:
@@ -47,7 +58,7 @@ def _eval_win(adapter, hand: list) -> bool:
 
 class TestDeal:
     def test_deal_2p(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         assert len(s["_arrays"]["hand_p0"]) == 14
         assert len(s["_arrays"]["hand_p1"]) == 13
@@ -56,13 +67,13 @@ class TestDeal:
         assert s["env"]["turn"] == "p0"
 
     def test_deal_4p(self):
-        a = MahjongAdapter(player_count=4, seed=1)
+        a = _engine(player_count=4, seed=1)
         s = _resolve(a, a.create_initial_state())
         assert [len(s["_arrays"][f"hand_p{i}"]) for i in range(4)] == [14, 13, 13, 13]
         assert s["env"]["wall_count"] == 136 - 53
 
     def test_no_duplicate_tiles(self):
-        a = MahjongAdapter(player_count=4, seed=2)
+        a = _engine(player_count=4, seed=2)
         s = _resolve(a, a.create_initial_state())
         drawn = s["_arrays"]["drawn"]
         assert len(drawn) == 53
@@ -74,7 +85,7 @@ class TestDeal:
 
 class TestFlow:
     def test_discard_then_draw(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         s = _act(a, s, "discard", tile=s["_arrays"]["hand_p0"][0])
         assert s["env"]["phase"] == "claim"
@@ -88,7 +99,7 @@ class TestFlow:
         assert len(s["_arrays"]["hand_p1"]) == 14
 
     def test_claim_queue_rotation_4p(self):
-        a = MahjongAdapter(player_count=4, seed=1)
+        a = _engine(player_count=4, seed=1)
         s = _resolve(a, a.create_initial_state())
         s = _act(a, s, "discard", tile=s["_arrays"]["hand_p0"][0])
         assert s["env"]["claim_queue"] == ["p1", "p2", "p3"]
@@ -100,7 +111,7 @@ class TestFlow:
         assert s["env"]["turn"] == "p1"
 
     def test_peng_claims_and_melds(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         tile = s["_arrays"]["hand_p0"][0]
         s = _act(a, s, "discard", tile=tile)
@@ -114,7 +125,7 @@ class TestFlow:
         assert s["_arrays"]["hand_p1"].count(tile) == 0
 
     def test_chi_only_first_responder(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         # Plant a run around a tile p0 discards
         hand = s["_arrays"]["hand_p1"]
@@ -132,7 +143,7 @@ class TestFlow:
         assert "m6" not in s["_arrays"]["hand_p1"]
 
     def test_concealed_gang_draws_replacement(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         hand = s["_arrays"]["hand_p0"]
         tile = hand[0]
@@ -145,7 +156,7 @@ class TestFlow:
         assert s["_arrays"]["melds_p0"][0]["type"] == "concealed_gang"
 
     def test_added_gang_promotes_peng(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         tile = "m7"
         s["_arrays"]["melds_p0"] = [{"type": "peng", "tiles": [tile, tile, tile], "from": "p1"}]
@@ -164,33 +175,33 @@ class TestFlow:
 
 class TestWinHand:
     def test_standard_win_123_456_789_pairs(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         hand = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p1", "p2", "p3", "p3", "p3"]
         assert _eval_win(a, hand)
 
     def test_not_a_win(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         hand = ["m1", "m2", "m4", "m5", "m6", "m7", "m8", "m9", "p1", "p1", "p2", "p3", "p3", "p4"]
         assert not _eval_win(a, hand)
 
     def test_seven_pairs(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         hand = ["m1", "m1", "m2", "m2", "p3", "p3", "s4", "s4", "z1", "z1", "z2", "z2", "z3", "z3"]
         assert _eval_win(a, hand)
 
     def test_thirteen_orphans(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         hand = ["m1", "m9", "p1", "p9", "s1", "s9", "z1", "z2", "z3", "z4", "z5", "z6", "z7", "m1"]
         assert _eval_win(a, hand)
 
     def test_hongzhong_wild_fills_gap(self):
-        a = MahjongAdapter(variant="hongzhong", player_count=2, seed=1)
+        a = _engine(variant="hongzhong", player_count=2, seed=1)
         # Two red dragons stand in for the missing m3 and m6
         hand = ["m1", "m2", "m4", "m5", "p1", "p1", "p1", "p2", "p3", "s1", "s2", "s3", "z5", "z5"]
         assert _eval_win(a, hand)
 
     def test_hongzhong_wild_not_enough(self):
-        a = MahjongAdapter(variant="hongzhong", player_count=2, seed=1)
+        a = _engine(variant="hongzhong", player_count=2, seed=1)
         hand = ["m1", "m2", "m4", "m5", "p1", "p1", "p1", "p2", "p3", "s1", "s2", "s3", "z5"]
         assert not _eval_win(a, hand)
 
@@ -200,7 +211,7 @@ class TestWinHand:
 
 class TestWins:
     def test_tsumo_win_ends_game(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         # Plant a ready hand for p0 (14 tiles: three runs + pair; the last
         # drawn tile is the second p3, already in the hand).
@@ -214,7 +225,7 @@ class TestWins:
         assert p0 == -p1 and p0 > 0
 
     def test_ron_win_via_claim(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         # p0 discards m3; p1 (13 tiles) rons with m3 completing the pair.
         s["_arrays"]["hand_p0"] = ["m3"] + s["_arrays"]["hand_p0"][1:]
@@ -226,7 +237,7 @@ class TestWins:
         assert s["env"]["winner"] == "p1"
 
     def test_fan_pay_scale(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         # 14-tile ready hand: three runs + p123 + z1 pair; the drawn tile
         # (z1) is already part of the hand.
@@ -242,7 +253,7 @@ class TestWins:
 
 class TestVariants:
     def test_blood_continues_after_first_win(self):
-        a = MahjongAdapter(variant="blood", player_count=2, seed=1)
+        a = _engine(variant="blood", player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         # p0 tsumos (drawn tile p3 already in hand)
         s["_arrays"]["hand_p0"] = ["m1", "m2", "m3", "m4", "m5", "m6", "p1", "p2", "p3", "s1", "s2", "s3", "p3", "p3"]
@@ -261,7 +272,7 @@ class TestVariants:
         assert s["env"]["done"] == ["p0", "p1"]
 
     def test_guangdong_ends_after_one_win(self):
-        a = MahjongAdapter(variant="guangdong", player_count=2, seed=1)
+        a = _engine(variant="guangdong", player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         s["_arrays"]["hand_p0"] = ["m1", "m2", "m3", "m4", "m5", "m6", "p1", "p2", "p3", "s1", "s2", "s3", "p3", "p3"]
         s["env"]["last_drawn"] = "p3"
@@ -272,7 +283,7 @@ class TestVariants:
         """P1-4: seven pairs tsumo must be legal and scored on the real
         14-tile hand (the old check appended last_drawn to the hand that
         already contained it, making COUNT==15 and qidui never legal)."""
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         hand = ["z1", "z1", "z2", "z2", "z3", "z3", "z4", "z4", "z5", "z5", "z6", "z6", "m1", "m1"]
         s["_arrays"]["hand_p0"] = hand
@@ -292,31 +303,36 @@ class TestVariants:
         """P1-4: a 14-tile non-winning hand (with the drawn tile in hand)
         must not expose a legal win_self — the old 15-tile check could
         cover 14 tiles with a duplicate draw."""
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         # m123 m456 p123 + p333 pung + z1 z2 singletons → no pair, not a win.
         s["_arrays"]["hand_p0"] = ["m1", "m2", "m3", "m4", "m5", "m6", "p1", "p2", "p3", "p3", "p3", "p3", "z1", "z2"]
         s["env"]["last_drawn"] = "z1"
         assert not _win_legal(a, s)
 
-    def test_claim_phase_observation_rotates(self):
-        """审查 J1: claim 阶段 get_observation 的 my_turn/legal 必须按
-        get_current_player（队列头）判定 — 旧实现用 env.turn（弃牌者），
-        响应者看到空 legal 而弃牌者看到一堆 claim 选项。"""
-        a = MahjongAdapter(player_count=2, seed=1)
+    def test_claim_phase_rotation(self):
+        """审查 J1 → 规则化 (v5.2): claim 阶段行动者由环境队列决定 —
+        ``claim_queue`` + ``claim_index`` 推进，效应器轮转，而非适配器
+        get_current_player 特判。"""
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         s["_arrays"]["hand_p0"] = ["m3"] + s["_arrays"]["hand_p0"][1:]
         s["_arrays"]["hand_p1"] = ["m3", "m3", "p1", "p2", "p3", "s1", "s2", "s3", "z1", "z2", "z3", "m1", "m2"]
         s = _act(a, s, "discard", tile="m3")
         assert s["env"]["phase"] == "claim"
-        obs_responder = a.get_observation(s, "p1")
-        assert obs_responder["my_turn"] is True
-        assert any(entry["type"] == "claim_peng" for entry in obs_responder["legal"])
-        obs_discarder = a.get_observation(s, "p0")
-        assert obs_discarder["my_turn"] is False
+        # 响应者 = 队列头（p1），claim 选项对响应者合法
+        actor = (s["env"].get("claim_queue") or [None])[int(s["env"].get("claim_index", 0))]
+        assert actor == "p1"
+        legal_ids = {x.template_id for x in a.get_legal_actions(s)}
+        assert "claim_peng" in legal_ids
+        # 弃牌者继续推进队列 → 轮到它时不再有 claim 选项（等下一响应者）
+        s = _act(a, s, "claim_pass")
+        actor = (s["env"].get("claim_queue") or [None])[int(s["env"].get("claim_index", 0))]
+        assert actor is None  # 队列耗尽 → 进入抽牌
+        assert s["env"]["phase"] == "draw"
 
     def test_wall_empty_draw(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         s = _act(a, s, "discard", tile=s["_arrays"]["hand_p0"][0])
         # Drain the wall before the draw resolves
@@ -327,7 +343,7 @@ class TestVariants:
         assert a.get_utility(s, "p0") == 0.0
 
     def test_visibility_hides_opponent_hand(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         obs = a.project_observation(s, "p0")
         assert all("id" in c for c in obs["hand_view_p0"])
@@ -335,11 +351,12 @@ class TestVariants:
         obs1 = a.project_observation(s, "p1")
         assert all("id" in c for c in obs1["hand_view_p1"])
 
-    def test_adapter_observation(self):
-        a = MahjongAdapter(player_count=2, seed=1)
+    def test_view_observation(self):
+        """v5.2 obs is view-shaped (hand views + env), no adapter obs dict."""
+        a = _engine(player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         obs = a.get_observation(s, "p0")
-        assert len(obs["hand"]) == 14
-        assert obs["phase"] == "action"
-        assert obs["my_turn"] is True
-        assert "discard" in {a["type"] for a in obs["legal"]}
+        assert len(obs["hand_view_p0"]) == 14
+        assert obs["env"]["phase"] == "action"
+        assert obs["env"]["turn"] == "p0"  # my turn (env is public here)
+        assert any(x.template_id == "discard" for x in a.get_legal_actions(s))

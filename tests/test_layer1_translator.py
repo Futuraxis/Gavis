@@ -964,7 +964,12 @@ class TestTemplateTranslator:
 
         assert response.validation is not None
         assert response.validation.valid
-        assert response.rules_json["constants"]["player_ids"] == [f"p{i}" for i in range(9)]
+        # v5.2: 配比在 variants 声明（player_ids 由 role_pool 计数派生），
+        # 不支持的配比保留默认 9 人 / 3 狼模板
+        assert response.rules_json["variants"]["variant"] == "default"
+        role_pool = response.rules_json["constants"]["role_pool"]
+        assert len(role_pool) == 9
+        assert role_pool.count("wolf") == 3
         assert any("固定" in warning for warning in response.validation.warnings)
 
     def test_texas_holdem_parameters_update_constants(self) -> None:

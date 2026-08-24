@@ -1,7 +1,7 @@
-"""Layer 3: Solvers — game-playing AI algorithms.
+﻿"""Layer 3: Solvers — game-playing AI algorithms.
 
 All solvers implement ``SolverBase`` and consume games exclusively
-through the ``SolverAdapter`` Protocol from Layer 2.
+through the GameEngine contract from Layer 2.
 """
 
 from .base import SolverBase, SolverConfig

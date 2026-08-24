@@ -42,5 +42,6 @@ cd platform-frontend && npm run dev                    # 开发模式 5173
 ## 规则实现
 
 - 全部逻辑在 `rules/mahjong.json`（一套 JSON 通吃变种与人数），
-  变种/人数由 `MahjongAdapter` 注入 `constants`。
+  变种/人数由 JSON 的 `variants` 节声明（`variant` + `player_count` +
+  `options[n].constants` 补丁），引擎纯数据解析，无 per-game 适配器。
 - 修改规则请改 `_gen_mahjong.py` 后运行 `python _gen_mahjong.py` 重新生成。

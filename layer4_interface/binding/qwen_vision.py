@@ -9,7 +9,7 @@ import base64
 import json
 import os
 
-from layer2_engine.interfaces.api_key import resolve_api_key
+from layer2_engine.core.api_key import resolve_api_key
 
 from .exceptions import VisionModelResponseError
 

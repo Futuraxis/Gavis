@@ -1,4 +1,4 @@
-"""Regression tests for the architecture-audit bug fixes (2026-08-13).
+﻿"""Regression tests for the architecture-audit bug fixes (2026-08-13).
 
 Each test pins one fixed bug from the audit report (C-xx / M-xx / minor
 items) so it cannot silently regress:
@@ -23,13 +23,23 @@ items) so it cannot silently regress:
 
 from __future__ import annotations
 
+import json
 import random
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import clone_state
-from layer2_engine.interfaces.solver_adapter import ActionInstance, ChanceOutcome
+from layer2_engine.core.state_graph import ActionInstance, ChanceOutcome
+
+RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
+
+
+def _moon(seed: int = 42) -> GameEngine:
+    with open(RULES_DIR / "moon_chess.json", "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed)
 
 try:
     import torch  # noqa: F401
@@ -295,10 +305,9 @@ class TestStateTrackerFIFO:
 @pytest.mark.skipif(not _HAS_TORCH, reason="torch not installed")
 class TestMAACGreedyEval:
     def test_select_action_is_deterministic(self):
-        from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
         from layer3_solvers.marl.maac import MAACConfig, MAACSolver
 
-        adapter = MoonChessAdapter(seed=42)
+        adapter = _moon()
         solver = MAACSolver(adapter, MAACConfig(seed=42))
         state = adapter.create_initial_state()
         first = solver.select_action(state)
@@ -459,10 +468,9 @@ class TestPPOFixes:
         assert feats[6] == 1.0
 
     def test_mcts_opponent_returns_legal_action(self):
-        from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
         from layer3_solvers.ppo.solver import PPOConfig, PPOSolver
 
-        adapter = MoonChessAdapter(seed=42)
+        adapter = _moon()
         solver = PPOSolver(adapter, PPOConfig(seed=42))
         state = adapter.create_initial_state()
         action = solver._opponent_action(state, "mcts", "p_black")  # noqa: SLF001

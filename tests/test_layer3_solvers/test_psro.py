@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from layer2_engine.interfaces.solver_adapter import ActionInstance
+from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import ActionInstance
 from layer3_solvers.psro.gym_adapter import GymAdapter
 from layer3_solvers.psro.meta_game import estimate_reward, gamescape
 from layer3_solvers.psro.solver import PSROConfig, PSROSolver
+
+RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
+
+
+def _moon(seed: int = 42) -> GameEngine:
+    with open(RULES_DIR / "moon_chess.json", "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed)
 
 
 class CountingAgent:
@@ -243,9 +252,7 @@ def test_best_response_folds_opponent_terminal_payoff():
 def test_select_action_masks_from_passed_state():
     """P1-2: select_action 的 mask 必须来自传入 state（旧实现读 gym 的
     陈旧 _state → 全真 mask → 采到已占格 → 返回 None 违反契约）。"""
-    from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
-
-    adapter = MoonChessAdapter(seed=3)
+    adapter = _moon(3)
     solver = PSROSolver(adapter, PSROConfig(seed=1))
     solver._nash_mixture = np.full((19683, 9), 1.0 / 9)  # noqa: SLF001
     state = adapter.create_initial_state()

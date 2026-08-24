@@ -1,17 +1,18 @@
 """Game session management for the Texas Hold'em play app.
 
-Each session owns a ``TexasHoldemAdapter`` (v5.0 rules) and a solver
-handle running opponent-model search over sampled worlds
-(``sample_hidden`` + uniform opponent model — imperfect-information
-play without leaking the opponent's hole cards into the search).
-Chance nodes (hole/community dealing, showdown) are resolved
-automatically; the human and the AI only ever see player nodes.
+Each session owns a bare ``GameEngine`` (v5.2 — built from
+``rules/texas_holdem.json``, no per-game adapter) and a solver handle
+running opponent-model search over sampled worlds (the engine's generic
+``eval_expr``-driven hybrid PIMC — imperfect-information play without
+leaking the opponent's hole cards into the search).  Chance nodes
+(hole/community dealing, showdown) are resolved automatically; the human
+and the AI only ever see player nodes.
 
-Seat constants and hand/payoff lookups come from the adapter / engine
-protocol (``TexasHoldemAdapter.PLAYER_SB/PLAYER_BB``, ``hand_name``,
-``get_utility``) — no ``layer2_engine.core.poker_utils`` (the module
-never existed).  Solvers are injected through a ``SolverProvider``, so
-Layer 4 holds no ``layer3_solvers`` import.
+Seat constants and hand/payoff lookups come from the rules JSON via the
+frontend ``engine_helpers`` module (``TEXAS_SEATS``, ``texas_hand_name``)
+and the generic engine protocol (``get_utility``) — no per-game adapter
+exists.  Solvers are injected through a ``SolverProvider``, so Layer 4
+holds no ``layer3_solvers`` import.
 """
 
 from __future__ import annotations
@@ -22,9 +23,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from layer2_engine.games.texas_holdem import TexasHoldemAdapter
+from layer2_engine.core.engine import GameEngine
 
 from ...solver_provider import SolverHandle, SolverProvider
+from ..engine_helpers import TEXAS_SEATS, engine_from_rules, resolve_all_chance, texas_hand_name
 
 Seat = Literal["p_sb", "p_bb"]
 Difficulty = Literal["easy", "normal", "hard"]
@@ -49,7 +51,7 @@ class GameSession:
     game_id: str
     player_pid: Seat
     difficulty: Difficulty
-    engine: TexasHoldemAdapter
+    engine: GameEngine
     solver: SolverHandle
     state: dict = field(init=False)
     last_ai_action: str | None = None
@@ -60,11 +62,7 @@ class GameSession:
 
     @property
     def ai_pid(self) -> Seat:
-        return (
-            TexasHoldemAdapter.PLAYER_BB
-            if self.player_pid == TexasHoldemAdapter.PLAYER_SB
-            else TexasHoldemAdapter.PLAYER_SB
-        )
+        return TEXAS_SEATS[1] if self.player_pid == TEXAS_SEATS[0] else TEXAS_SEATS[0]
 
     @property
     def winner(self) -> str | None:
@@ -93,7 +91,7 @@ class GameSession:
         if action is None:
             raise PlayError(f"非法动作: {choice} {amount}")
         self.state = self.engine.apply_action(self.state, action)
-        self.state = self.engine.resolve_chance(self.state)
+        self.state = resolve_all_chance(self.engine, self.state)
         self._ai_turn()
         return action.canonical_key
 
@@ -108,7 +106,7 @@ class GameSession:
                 break
             self.last_ai_action = action.canonical_key
             self.state = self.engine.apply_action(self.state, action)
-            self.state = self.engine.resolve_chance(self.state)
+            self.state = resolve_all_chance(self.engine, self.state)
 
     def _find_action(self, choice: str, amount: int | None) -> object | None:
         for action in self.engine.get_legal_actions(self.state):
@@ -136,7 +134,7 @@ class GameSession:
 
         def _hand_name(pid: str) -> str | None:
             cards = [*_cards(pid), *arrs.get("community", [])]
-            return self.engine.hand_name(cards) if over else None
+            return texas_hand_name(self.engine, cards) if over else None
 
         return {
             "game_id": self.game_id,
@@ -190,14 +188,14 @@ class PlayManager:
 
     def start(self, player_color: str, difficulty: str) -> GameSession:
         if player_color == "random":
-            player_color = TexasHoldemAdapter.PLAYER_SB if uuid.uuid4().int % 2 == 0 else TexasHoldemAdapter.PLAYER_BB
-        if player_color not in (TexasHoldemAdapter.PLAYER_SB, TexasHoldemAdapter.PLAYER_BB):
+            player_color = TEXAS_SEATS[0] if uuid.uuid4().int % 2 == 0 else TEXAS_SEATS[1]
+        if player_color not in TEXAS_SEATS:
             raise PlayError(f"unknown seat: {player_color}")
         if difficulty not in DIFFICULTY_BUDGETS:
             raise PlayError(f"unknown difficulty: {difficulty}")
 
         game_id = uuid.uuid4().hex[:8]
-        engine = TexasHoldemAdapter(seed=self._seed)
+        engine = engine_from_rules("texas_holdem", self._seed)
         solver = self._provider.create_solver(
             "texas_holdem",
             "hybrid",
@@ -215,7 +213,7 @@ class PlayManager:
         )
         # Blinds/deals are chance nodes — resolve, then let the AI open
         # if the human sits in the big blind (SB acts first preflop).
-        session.state = engine.resolve_chance(session.state)
+        session.state = resolve_all_chance(engine, session.state)
         session._ai_turn()
         self._register(session)
         return session

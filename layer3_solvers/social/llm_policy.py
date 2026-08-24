@@ -18,7 +18,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
-from layer2_engine.interfaces.api_key import resolve_api_key
+from layer2_engine.core.api_key import resolve_api_key
 
 from .base import LanguageObservation
 

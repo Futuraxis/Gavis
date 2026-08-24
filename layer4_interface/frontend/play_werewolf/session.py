@@ -1,6 +1,6 @@
 """Werewolf play session — human vs local-LLM players (one web table).
 
-Each session owns one ``WerewolfAdapter`` (v5.1 rules) plus one solver
+Each session owns one ``GameEngine`` (rules/werewolf.json, v5.2) plus one solver
 handle per AI seat (local ollama, one instance per player so each AI
 sees only its own partial observation).  Chance nodes (dealing,
 night/vote settlement) are resolved automatically; AI turns are driven
@@ -11,7 +11,7 @@ the AIs use (``speak:{intent}+text`` for speeches, ``{kill|check|...}:{target}``
 for night/vote actions) — the frontend renders the legal options.
 
 Layer contract: solvers are injected through a ``SolverProvider``
-(``demos/solver_provider.py``), so this module holds no
+(``train-cli/games.py``), so this module holds no
 ``layer3_solvers`` import.  The small target/text normalization helpers
 (``_target_of`` / ``_sanitize_speech``) are duplicated here deliberately
 — they are action-vocabulary knowledge, and Layer 4 must not reach into
@@ -22,14 +22,44 @@ Usage:  ``python -m layer4_interface.frontend.play_werewolf.server``
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import uuid
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
-from layer2_engine.games.werewolf.werewolf_adapter import WerewolfAdapter
+from layer2_engine.core.engine import GameEngine
 
 from ...solver_provider import SolverHandle, SolverProvider
+
+RULES_PATH = Path(__file__).resolve().parent.parent.parent.parent / "rules" / "werewolf.json"
+
+
+def _load_engine(seed: int) -> GameEngine:
+    with open(RULES_PATH, "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed)
+
+
+def _expect_composition(engine: GameEngine, players: int, wolves: int) -> None:
+    """v5.2: 配比由 JSON 声明 — 请求必须与声明一致，只做校验不注入。
+
+    当前 werewolf.json 声明 9 人 / 3 狼 / 预言家 / 女巫 / 猎人。
+    """
+    pool = sorted((getattr(engine, "_constants", None) or {}).get("role_pool", []))
+    expected = sorted(
+        ["wolf"] * wolves
+        + ["villager"] * (players - wolves - 3)
+        + ["seer", "witch", "hunter"]
+    )
+    if pool != expected:
+        raise PlayError(f"配比不受支持：规则声明 {pool} ≠ 请求 {players}人/{wolves}狼")
+
+
+def _my_role_of(obs: dict) -> str | None:
+    """v5.2 视图形状：my_role 是单行视图 [{role, _index}]。"""
+    rows = obs.get("my_role") or []
+    return str(rows[0].get("role")) if rows else None
 
 PHASE_LABEL = {
     "night_wolf": "夜晚·狼人行动",
@@ -85,7 +115,7 @@ class GameSession:
 
     game_id: str
     human_pid: str
-    engine: WerewolfAdapter
+    engine: GameEngine
     ai_solvers: dict[str, SolverHandle]
     model: str
     state: dict = field(init=False)
@@ -113,7 +143,7 @@ class GameSession:
     @property
     def my_role(self) -> str | None:
         obs = self.engine.get_observation(self.state, self.human_pid)
-        return obs.get("my_role")
+        return _my_role_of(obs)
 
     def _resolve_chance(self) -> None:
         """Auto-apply chance nodes (dealing / settlement)."""
@@ -218,7 +248,7 @@ class GameSession:
             "over": self.over,
             "winner": env.get("winner"),
             "my_pid": self.human_pid,
-            "my_role": ROLE_LABEL.get(obs.get("my_role")),
+            "my_role": ROLE_LABEL.get(_my_role_of(obs)),
             "my_turn": self.my_turn,
             "phase": phase,
             "phase_label": PHASE_LABEL.get(phase, phase),
@@ -227,10 +257,10 @@ class GameSession:
             "speech_log": list(self.state["_arrays"].get("speechLog", [])),
             "vote_log": list(self.state["_arrays"].get("voteLog", [])),
             "deaths": list(self.state["_arrays"].get("deathsArr", [])),
-            "seer_result": obs.get("seer_result"),
-            "guard_last_target": obs.get("guard_last_target"),
-            "witch_save_used": bool(obs.get("witch_save_used")),
-            "witch_poison_used": bool(obs.get("witch_poison_used")),
+            "seer_result": (obs.get("env") or {}).get("seerResult"),
+            "guard_last_target": (obs.get("env") or {}).get("guardLastTarget"),
+            "witch_save_used": bool((obs.get("env") or {}).get("witchSaveUsed")),
+            "witch_poison_used": bool((obs.get("env") or {}).get("witchPoisonUsed")),
             "legal": legal,
             "ai_steps": self.ai_steps,
         }
@@ -266,7 +296,10 @@ class PlayManager:
         if human_pid is None:
             human_pid = f"p{uuid.uuid4().int % players}"
         try:
-            engine = WerewolfAdapter(seed=self._seed, players=players, wolves=wolves)
+            engine = _load_engine(self._seed)
+            _expect_composition(engine, players, wolves)
+        except PlayError:
+            raise
         except ValueError as exc:
             # 当前生成的 rules/werewolf.json 只含 9 人/3 狼配比
             raise PlayError(f"狼人杀配比不受支持: {exc}") from exc

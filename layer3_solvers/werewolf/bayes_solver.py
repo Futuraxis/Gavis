@@ -20,10 +20,11 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter, State
+from layer2_engine.core.state_graph import ActionInstance, State
+from layer2_engine.core.engine import GameEngine
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
-from .belief import BeliefTracker
+from .belief import BeliefTracker, belief_obs
 
 GOD_ROLES = ("seer", "witch", "guard", "hunter")
 
@@ -39,18 +40,18 @@ class BayesConfig(SolverConfig):
 class BayesSolver(SolverBase):
     """Bayesian Werewolf player for one ``player_id``."""
 
-    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None, player_id: str | None = None):
-        super().__init__(adapter, config or BayesConfig())
-        self.player_id = player_id or self._default_player(adapter)
+    def __init__(self, engine: GameEngine, config: SolverConfig | None = None, player_id: str | None = None):
+        super().__init__(engine, config or BayesConfig())
+        self.player_id = player_id or self._default_player(engine)
         self._tracker: BeliefTracker | None = None
         self._seen_speech = 0
         self._seen_votes = 0
         self._rng = random.Random(getattr(self.config, "seed", None))
 
     @staticmethod
-    def _default_player(adapter: SolverAdapter) -> str:
-        state = adapter.create_initial_state()
-        return str(adapter.get_current_player(state) or "p0")
+    def _default_player(engine: GameEngine) -> str:
+        state = engine.create_initial_state()
+        return str(engine.get_current_player(state) or "p0")
 
     @property
     def name(self) -> str:
@@ -59,14 +60,15 @@ class BayesSolver(SolverBase):
     # ── SolverBase ──────────────────────────────────────────────────
 
     def select_action(self, state: State) -> ActionInstance | None:
-        legal = self.adapter.get_legal_actions(state)
+        legal = self.engine.get_legal_actions(state)
         if not legal:
             return None
-        obs = self.adapter.get_observation(state, self.player_id)
-        self._ensure_tracker(obs)
-        self._fold_incremental(obs)
+        obs = self.engine.get_observation(state, self.player_id)
+        flat = belief_obs(obs, self.player_id)
+        self._ensure_tracker()
+        self._fold_incremental(flat)
 
-        phase = str(obs.get("phase"))
+        phase = str(flat.get("phase"))
         action = None
         if phase == "day_vote":
             action = self._vote_action(legal)
@@ -81,7 +83,7 @@ class BayesSolver(SolverBase):
         elif phase in ("night_hunter", "vote_hunter"):
             action = self._hunter_action(legal)
         elif phase == "day_speech":
-            action = self._speech_action(legal, obs)
+            action = self._speech_action(legal, flat)
         return action if action is not None else self._fallback(legal)
 
     def reset(self) -> None:
@@ -101,8 +103,8 @@ class BayesSolver(SolverBase):
 
     def _ensure_tracker(self, obs: dict) -> None:
         if self._tracker is None:
-            self._tracker = BeliefTracker.from_adapter(
-                self.adapter, self.player_id, seed=getattr(self.config, "seed", None)
+            self._tracker = BeliefTracker.from_engine(
+                self.engine, self.player_id, seed=getattr(self.config, "seed", None)
             )
             self._seen_speech = 0
             self._seen_votes = 0

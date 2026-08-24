@@ -3,7 +3,7 @@
 Handles the full player→chance→player→... alternating structure
 that stochastic games require.  Implements ``SolverBase``.
 
-The search core is generic over ``SolverAdapter``; board-game rollout
+The search core is generic over ``GameEngine``; board-game rollout
 heuristics live in ``rollout_policy.BoardHeuristicPolicy`` and are only
 applied when the state carries a square ``_arrays.board`` (M-04).
 """
@@ -16,14 +16,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from layer2_engine.core.state_graph import clone_state
-from layer2_engine.interfaces.solver_adapter import (
-    ActionInstance,
-    ChanceOutcome,
-    NodeType,
-    SolverAdapter,
-    State,
-)
+from layer2_engine.core.state_graph import ActionInstance, ChanceOutcome, NodeType, State, clone_state
+from layer2_engine.core.engine import GameEngine
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 from .rollout_policy import BoardHeuristicPolicy, root_player
@@ -62,7 +56,7 @@ class MCTSNode:
 class MCTS(SolverBase):
     """Monte Carlo Tree Search with chance-node handling."""
 
-    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
+    def __init__(self, engine: GameEngine, config: SolverConfig | None = None):
         # Coerce a plain SolverConfig into an MCTSConfig so solver-specific
         # defaults apply (M-05: `config or MCTSConfig()` silently ignored
         # the config class when a plain SolverConfig was passed).
@@ -70,7 +64,7 @@ class MCTS(SolverBase):
             config = MCTSConfig()
         elif not isinstance(config, MCTSConfig):
             config = MCTSConfig(**vars(config))
-        super().__init__(adapter, config)
+        super().__init__(engine, config)
         cfg = self.config
         self.budget = cfg.budget
         self.ucb_c = cfg.ucb_c
@@ -92,17 +86,17 @@ class MCTS(SolverBase):
 
     def select_action(self, state: State) -> Optional[ActionInstance]:
         """为玩家节点选棋；若根是 chance 节点则返回 None（随机事件请自行采样）。"""
-        root_type = self.adapter.get_node_type(state)
+        root_type = self.engine.get_node_type(state)
         root = MCTSNode(node_type=root_type)
-        root.player = root_player(state, self.adapter)
+        root.player = root_player(state, self.engine)
         self._nodes_created = 0
 
         if root_type == "player":
-            root.untried_actions = sorted(self.adapter.get_legal_actions(state), key=lambda a: a.canonical_key)
+            root.untried_actions = sorted(self.engine.get_legal_actions(state), key=lambda a: a.canonical_key)
             if not root.untried_actions:
                 return None
         elif root_type == "chance":
-            root.untried_outcomes = sorted(self.adapter.get_chance_outcomes(state), key=lambda o: o.key)
+            root.untried_outcomes = sorted(self.engine.get_chance_outcomes(state), key=lambda o: o.key)
 
         _t0 = time.perf_counter()
         for _ in range(self.budget):
@@ -114,7 +108,7 @@ class MCTS(SolverBase):
 
         if root_type == "player":
             if not root.children:
-                actions = sorted(self.adapter.get_legal_actions(state), key=lambda a: a.canonical_key)
+                actions = sorted(self.engine.get_legal_actions(state), key=lambda a: a.canonical_key)
                 return self.rng.choice(actions) if actions else None
             if getattr(self.config, "verbose", False):
                 print(f"MCTS budget={self.budget} 根节点访问次数={root.visits}")
@@ -140,14 +134,14 @@ class MCTS(SolverBase):
                 if key is None:
                     break
                 action = node.child_actions[key]
-                state = self.adapter.apply_action(state, action)
+                state = self.engine.apply_action(state, action)
                 node = node.children[key]
                 path.append((key, node))
             elif node.node_type == "chance":
                 outcome = self._select_chance(node, state)
                 if outcome is None:
                     break
-                state = self.adapter.apply_chance(state, outcome)
+                state = self.engine.apply_chance(state, outcome)
                 node = node.children[outcome.key]
                 path.append((outcome.key, node))
             else:
@@ -194,13 +188,13 @@ class MCTS(SolverBase):
         return best_key
 
     def _select_chance(self, node: MCTSNode, state: dict) -> Optional[ChanceOutcome]:
-        # Reuse the node's cached outcomes — avoids a full adapter re-query
+        # Reuse the node's cached outcomes — avoids a full engine re-query
         # (context build + probability eval) on every selection step.
         outcomes = sorted(node.child_outcomes.values(), key=lambda o: o.key)
         if not outcomes:
             outcomes = sorted(node.untried_outcomes, key=lambda o: o.key)
         if not outcomes:
-            outcomes = sorted(self.adapter.get_chance_outcomes(state), key=lambda o: o.key)
+            outcomes = sorted(self.engine.get_chance_outcomes(state), key=lambda o: o.key)
         return self._sample_outcome(outcomes, self.rng)
 
     @staticmethod
@@ -234,15 +228,15 @@ class MCTS(SolverBase):
             return None
         action = node.untried_actions.pop()
         key = action.canonical_key
-        new_state = self.adapter.apply_action(state, action)
-        child_type = self.adapter.get_node_type(new_state)
+        new_state = self.engine.apply_action(state, action)
+        child_type = self.engine.get_node_type(new_state)
         child = MCTSNode(node_type=child_type)
         if child_type == "player":
-            child.player = self.adapter.get_current_player(new_state)
-            child.untried_actions = sorted(self.adapter.get_legal_actions(new_state), key=lambda a: a.canonical_key)
+            child.player = self.engine.get_current_player(new_state)
+            child.untried_actions = sorted(self.engine.get_legal_actions(new_state), key=lambda a: a.canonical_key)
         elif child_type == "chance":
             child.player = node.player  # 机会节点继承父节点视角
-            child.untried_outcomes = sorted(self.adapter.get_chance_outcomes(new_state), key=lambda o: o.key)
+            child.untried_outcomes = sorted(self.engine.get_chance_outcomes(new_state), key=lambda o: o.key)
         node.children[key] = child
         node.child_actions[key] = action
         self._nodes_created += 1
@@ -259,24 +253,24 @@ class MCTS(SolverBase):
         # and desync the tree from the sim).
         child_states: dict[str, dict] = {}
         for outcome in node.untried_outcomes:
-            child_state = self.adapter.apply_chance(state, outcome)
+            child_state = self.engine.apply_chance(state, outcome)
             child_states[outcome.key] = child_state
-            child_type = self.adapter.get_node_type(child_state)
+            child_type = self.engine.get_node_type(child_state)
             child = MCTSNode(node_type=child_type)
             child.player = node.player  # 机会子节点继承父节点视角
             if child_type == "player":
                 child.untried_actions = sorted(
-                    self.adapter.get_legal_actions(child_state), key=lambda a: a.canonical_key
+                    self.engine.get_legal_actions(child_state), key=lambda a: a.canonical_key
                 )
             elif child_type == "chance":
-                child.untried_outcomes = sorted(self.adapter.get_chance_outcomes(child_state), key=lambda o: o.key)
+                child.untried_outcomes = sorted(self.engine.get_chance_outcomes(child_state), key=lambda o: o.key)
             node.children[outcome.key] = child
             node.child_outcomes[outcome.key] = outcome
             self._nodes_created += 1
         node.untried_outcomes.clear()
 
         # Sample which child the expansion descends into — from the node's
-        # own outcome objects, no adapter re-query needed.
+        # own outcome objects, no engine re-query needed.
         chosen = self._sample_outcome(sorted(node.child_outcomes.values(), key=lambda o: o.key), self.rng)
         if chosen is None:
             return None
@@ -287,9 +281,9 @@ class MCTS(SolverBase):
         terminal = False
         for _ in range(self.rollout_depth):
             # get_node_type already folds in is_terminal — one call, not two.
-            nt = self.adapter.get_node_type(sim_state)
+            nt = self.engine.get_node_type(sim_state)
             if nt == "player":
-                actions = sorted(self.adapter.get_legal_actions(sim_state), key=lambda a: a.canonical_key)
+                actions = sorted(self.engine.get_legal_actions(sim_state), key=lambda a: a.canonical_key)
                 if not actions:
                     break
                 chosen = None
@@ -299,25 +293,25 @@ class MCTS(SolverBase):
                     chosen = self._board_policy.choose(sim_state, actions)
                 if chosen is None:
                     chosen = self.rng.choice(actions)
-                sim_state = self.adapter.apply_action(sim_state, chosen)
+                sim_state = self.engine.apply_action(sim_state, chosen)
             elif nt == "chance":
-                outcomes = sorted(self.adapter.get_chance_outcomes(sim_state), key=lambda o: o.key)
+                outcomes = sorted(self.engine.get_chance_outcomes(sim_state), key=lambda o: o.key)
                 chosen = self._sample_outcome(outcomes, self.rng)
                 if chosen is None:
                     break
-                sim_state = self.adapter.apply_chance(sim_state, chosen)
+                sim_state = self.engine.apply_chance(sim_state, chosen)
             else:
                 terminal = True
                 break
 
-        if terminal or self.adapter.is_terminal(sim_state):
-            player = root_player(state, self.adapter)
+        if terminal or self.engine.is_terminal(sim_state):
+            player = root_player(state, self.engine)
             if player is None:
                 return 0.0
-            return self.adapter.get_utility(sim_state, player)
+            return self.engine.get_utility(sim_state, player)
         # Non-terminal at depth limit: board games get the threat-gap
         # heuristic (clamped to ±0.5); everything else gets the neutral 0.
-        player = root_player(state, self.adapter)
+        player = root_player(state, self.engine)
         if player is None:
             return 0.0
         return self._board_policy.leaf_value(sim_state, player)

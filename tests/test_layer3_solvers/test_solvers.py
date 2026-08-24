@@ -1,8 +1,8 @@
-"""Tests for all four solvers (Layer 3).
+﻿"""Tests for all four solvers (Layer 3).
 
 Each solver is tested at the unit level (select_action, train API).
 MCTS and CFR are tested on stochastic_gomoku (small board for CFR).
-PPO and PSRO are tested on moon_chess via MoonChessAdapter.
+PPO and PSRO are tested on moon_chess via GameEngine.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from layer2_engine.core.engine import GameEngine
-from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
 from layer3_solvers import CFR, MCTS, PSROSolver
 from layer3_solvers.cfr import CFRConfig
 from layer3_solvers.mcts import MCTSConfig
@@ -32,8 +31,9 @@ RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
 
 
 @pytest.fixture
-def moon_adapter() -> MoonChessAdapter:
-    return MoonChessAdapter(seed=42)
+def moon_adapter() -> GameEngine:
+    with open(RULES_DIR / "moon_chess.json", "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=42)
 
 
 @pytest.fixture
@@ -50,7 +50,7 @@ def small_gomoku_engine() -> GameEngine:
 
 
 class TestSolverBaseCompliance:
-    def test_all_have_required_methods(self, moon_adapter: MoonChessAdapter):
+    def test_all_have_required_methods(self, moon_adapter: GameEngine):
         for cls, cfg, _ in _all_solver_configs():
             if cls is None:
                 continue
@@ -76,7 +76,7 @@ class TestSolverBaseCompliance:
         action = cfr.select_action(state)
         assert action is not None
 
-    def test_ppo_psro_select_action(self, moon_adapter: MoonChessAdapter):
+    def test_ppo_psro_select_action(self, moon_adapter: GameEngine):
         """PPO and PSRO on moon chess (untrained — just check API)."""
         state = moon_adapter.create_initial_state()
 
@@ -92,7 +92,7 @@ class TestSolverBaseCompliance:
             legal = {a.canonical_key for a in moon_adapter.get_legal_actions(state)}
             assert action.canonical_key in legal
 
-    def test_all_can_play_moon_chess_short(self, moon_adapter: MoonChessAdapter):
+    def test_all_can_play_moon_chess_short(self, moon_adapter: GameEngine):
         """Each solver plays a few moves on moon chess."""
         for cls, cfg, name in _all_solver_configs():
             if cls is None or name == "PSRO":
@@ -117,7 +117,7 @@ class TestSolverBaseCompliance:
 
 
 class TestMCTS:
-    def test_select_action_returns_valid(self, moon_adapter: MoonChessAdapter):
+    def test_select_action_returns_valid(self, moon_adapter: GameEngine):
         solver = MCTS(moon_adapter, MCTSConfig(seed=42, budget=200))
         state = moon_adapter.create_initial_state()
         action = solver.select_action(state)
@@ -125,7 +125,7 @@ class TestMCTS:
         legal_keys = {a.canonical_key for a in moon_adapter.get_legal_actions(state)}
         assert action.canonical_key in legal_keys
 
-    def test_plays_legal_moves_only(self, moon_adapter: MoonChessAdapter):
+    def test_plays_legal_moves_only(self, moon_adapter: GameEngine):
         solver = MCTS(moon_adapter, MCTSConfig(seed=42, budget=100))
         for _ in range(3):
             state = moon_adapter.create_initial_state()
@@ -142,7 +142,7 @@ class TestMCTS:
                 assert action.canonical_key in legal_keys
                 state = moon_adapter.apply_action(state, action)
 
-    def test_blocks_immediate_three_in_a_row(self, moon_adapter: MoonChessAdapter):
+    def test_blocks_immediate_three_in_a_row(self, moon_adapter: GameEngine):
         """Black 0,1 → the AI (white) must block cell_0_2.
 
         Regression: UCB selection did not flip the exploitation term for
@@ -186,7 +186,7 @@ class TestCFR:
 
 @pytest.mark.skipif(not _HAS_TORCH, reason="torch not installed")
 class TestPPO:
-    def test_select_action_no_training(self, moon_adapter: MoonChessAdapter):
+    def test_select_action_no_training(self, moon_adapter: GameEngine):
         cfg = PPOConfig(seed=42, state_dim=38, action_dim=9)
         solver = PPOSolver(moon_adapter, cfg)
         state = moon_adapter.create_initial_state()
@@ -195,13 +195,13 @@ class TestPPO:
         legal_keys = {a.canonical_key for a in moon_adapter.get_legal_actions(state)}
         assert action.canonical_key in legal_keys
 
-    def test_train_short(self, moon_adapter: MoonChessAdapter):
+    def test_train_short(self, moon_adapter: GameEngine):
         cfg = PPOConfig(seed=42, state_dim=38, action_dim=9)
         solver = PPOSolver(moon_adapter, cfg)
         metrics = solver.train(episodes=3, verbose=False)
         assert metrics.episodes == 3
 
-    def test_save_load(self, moon_adapter: MoonChessAdapter, tmp_path):
+    def test_save_load(self, moon_adapter: GameEngine, tmp_path):
         cfg = PPOConfig(seed=42, state_dim=38, action_dim=9)
         solver = PPOSolver(moon_adapter, cfg)
         path = tmp_path / "ppo_test.pt"
@@ -215,13 +215,13 @@ class TestPPO:
 
 
 class TestPSRO:
-    def test_train_short(self, moon_adapter: MoonChessAdapter):
+    def test_train_short(self, moon_adapter: GameEngine):
         cfg = PSROConfig(seed=42, num_iters=2, num_steps_per_iter=200)
         solver = PSROSolver(moon_adapter, cfg)
         metrics = solver.train(episodes=2, verbose=False)
         assert metrics.extra["pool_size"] >= 1
 
-    def test_select_action_after_training(self, moon_adapter: MoonChessAdapter):
+    def test_select_action_after_training(self, moon_adapter: GameEngine):
         cfg = PSROConfig(seed=42, num_iters=2, num_steps_per_iter=200)
         solver = PSROSolver(moon_adapter, cfg)
         solver.train(episodes=2, verbose=False)

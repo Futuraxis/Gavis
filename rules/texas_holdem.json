@@ -309,6 +309,15 @@
       }
     }
   },
+  "hiddenWorld": {
+    "arrays": {
+      "bb_hole": {
+        "pool": "card_ids",
+        "count": 2,
+        "exclude": ["sb_hole", "drawn"]
+      }
+    }
+  },
   "derivedViews": {
     "card": {
       "from": {

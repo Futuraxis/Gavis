@@ -4,6 +4,7 @@ const NAV = [
   { to: '/', label: '游戏大厅', icon: '🏛️', end: true },
   { to: '/battle/moon_chess', label: '对战中心', icon: '⚔️', end: false },
   { to: '/benchmark', label: '求解器评测', icon: '📊', end: false },
+  { to: '/learning', label: '在线学习', icon: '🧠', end: false },
   { to: '/history', label: '对局记录', icon: '📜', end: false },
 ]
 

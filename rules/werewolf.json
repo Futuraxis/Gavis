@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "werewolf",
-    "version": "5.1",
+    "version": "5.2",
     "description": "Werewolf 9-player (3狼人/3村民/1预言家/1女巫/1猎人) win=side"
   },
   "players": [
@@ -42,6 +42,34 @@
       "type": "player"
     }
   ],
+  "variants": {
+    "variant": "default",
+    "options": {
+      "default": {}
+    },
+    "player_ids": {
+      "map": {
+        "list": {
+          "range": {
+            "from": {
+              "const": 0
+            },
+            "to": {
+              "count": {
+                "var": "$constants.role_pool"
+              }
+            }
+          }
+        },
+        "as": "$node",
+        "expr": {
+          "template": "p{$node}"
+        }
+      }
+    },
+    "trim_players": true,
+    "trim_utility": true
+  },
   "groundState": {
     "roles": {
       "type": "array",
@@ -204,20 +232,75 @@
           "var": "$self.value"
         }
       }
+    },
+    "my_role": {
+      "from": {
+        "type": "enum",
+        "array": "roles"
+      },
+      "fields": {
+        "role": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "alive": {
+      "from": {
+        "type": "enum",
+        "array": "alive"
+      },
+      "fields": {
+        "alive": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "speech_log": {
+      "from": {
+        "type": "enum",
+        "array": "speechLog"
+      },
+      "fields": {
+        "entry": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "vote_log": {
+      "from": {
+        "type": "enum",
+        "array": "voteLog"
+      },
+      "fields": {
+        "entry": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "deaths_arr": {
+      "from": {
+        "type": "enum",
+        "array": "deathsArr"
+      },
+      "fields": {
+        "entry": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "dead_roles": {
+      "from": {
+        "type": "enum",
+        "array": "roles"
+      },
+      "fields": {
+        "role": {
+          "var": "$self.value"
+        }
+      }
     }
   },
   "constants": {
-    "player_ids": [
-      "p0",
-      "p1",
-      "p2",
-      "p3",
-      "p4",
-      "p5",
-      "p6",
-      "p7",
-      "p8"
-    ],
     "role_pool": [
       "wolf",
       "wolf",
@@ -4313,7 +4396,85 @@
     }
   ],
   "visibility": {
-    "default": "public"
+    "default": "partial",
+    "rules": [
+      {
+        "view": "my_role",
+        "drop": true,
+        "filter": {
+          "eq": [
+            {
+              "get": [
+                {
+                  "var": "$node"
+                },
+                "_index"
+              ]
+            },
+            {
+              "call": [
+                "player_index",
+                {
+                  "var": "$viewer"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "view": "dead_roles",
+        "drop": true,
+        "filter": {
+          "eq": [
+            {
+              "at": [
+                {
+                  "var": "$alive"
+                },
+                {
+                  "get": [
+                    {
+                      "var": "$node"
+                    },
+                    "_index"
+                  ]
+                }
+              ]
+            },
+            {
+              "const": 0
+            }
+          ]
+        }
+      }
+    ],
+    "env": {
+      "seerResult": {
+        "filter": {
+          "eq": [
+            {
+              "at": [
+                {
+                  "var": "$roles"
+                },
+                {
+                  "call": [
+                    "player_index",
+                    {
+                      "var": "$viewer"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "const": "seer"
+            }
+          ]
+        }
+      }
+    }
   },
   "terminal": [
     {

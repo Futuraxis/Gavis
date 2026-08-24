@@ -1,6 +1,6 @@
-"""Game engine — interprets v5.0 rules JSON as a stochastic game model.
+﻿"""Game engine — interprets v5.0 rules JSON as a stochastic game model.
 
-Implements the ``SolverAdapter`` Protocol: all solvers in Layer 3 interact
+GameEngine — the single solver-facing contract (Layer 2 to Layer 3): all solvers interact
 with the game exclusively through this engine.
 
 Two-layer state architecture:
@@ -41,12 +41,24 @@ _TRIGGER_CYCLE_CAP = 16
 class GameEngine:
     """A game engine that interprets a v5.0 rules JSON.
 
-    This is the canonical implementation of the ``SolverAdapter`` Protocol:
+    This is the canonical solver-facing engine (the Layer 2 to Layer 3 contract):
     all Layer 3 solvers consume the game through this class.
     """
 
-    def __init__(self, rules: dict, seed: int | None = None):
-        self.rules = rules
+    def __init__(
+        self,
+        rules: dict,
+        seed: int | None = None,
+        variant: str | None = None,
+        player_count: int | None = None,
+    ):
+        # Resolve the declarative ``variants`` section (pure data in the
+        # JSON — choosing a variant / player count only selects declared
+        # options; nothing game-specific is hardcoded here).
+        self.variant = variant
+        self.player_count = player_count
+        self.rules = self._resolve_variants(rules)
+        rules = self.rules
         self.rng = random.Random(seed)
         self.expr = ExprEvaluator()
         # Compiled query filters, keyed by id() of the filter expr object
@@ -100,6 +112,62 @@ class GameEngine:
             logger.warning("规则编译失败，回退纯解释器: %s: %s", type(exc).__name__, exc)
             self._compiled = None
 
+    def _resolve_variants(self, rules: dict) -> dict:
+        """Resolve the declarative ``variants`` section (pure data).
+
+        ``rules["variants"]`` is a self-describing option table; choosing a
+        variant / player count only *selects declared data* — the engine
+        hardcodes nothing about any concrete game:
+
+        - ``variants.variant`` / ``variants.player_count``: default selection
+        - ``variants.options[<variant>].constants``: per-variant constants patch
+          (merged into the base ``constants``)
+        - any other key whose value is an expression dict is evaluated with
+          ``$variant`` / ``$player_count`` / ``$constants`` / ``$players``
+          bound and stored into ``constants`` (e.g. ``player_ids``,
+          ``deal_target`` — formulas live in the JSON)
+        - ``variants.trim_players`` / ``variants.trim_utility``: keep only
+          the selected player ids (``players`` list / ``utility`` entries)
+
+        Rules without a ``variants`` section are returned unchanged.
+        """
+        spec = rules.get("variants")
+        if not spec:
+            return rules
+        name = self.variant or spec.get("variant")
+        count = self.player_count if self.player_count is not None else spec.get("player_count")
+        options = spec.get("options", {}) or {}
+        if name not in options:
+            raise ValueError(f"unknown variant {name!r}; declared options: {sorted(options)}")
+        constants = dict(rules.get("constants", {}))
+        patch = options[name].get("constants", {}) or {}
+        constants.update(patch)
+        constants["variant"] = name
+        constants["player_count"] = count
+        ctx = {
+            "$variant": name,
+            "$player_count": count,
+            "$constants": constants,
+            "$players": rules.get("players", []),
+        }
+        evaluator = ExprEvaluator()
+        evaluator.set_functions(rules.get("functions", {}))
+        reserved = ("variant", "player_count", "options", "trim_players", "trim_utility")
+        for key, value in spec.items():
+            if key in reserved:
+                continue
+            if isinstance(value, dict) and any(k in value for k in _EXPR_KEYS):
+                constants[key] = evaluator.eval(value, ctx)
+        out = dict(rules)
+        out["constants"] = constants
+        pids = constants.get("player_ids")
+        if spec.get("trim_players") and isinstance(pids, list):
+            out["players"] = list(pids)
+        if spec.get("trim_utility") and isinstance(pids, list):
+            keep = set(pids)
+            out["utility"] = [u for u in rules.get("utility", []) if u.get("player") in keep]
+        return out
+
     def _expand_missing(self, template_ids: list[str], state: dict) -> list:
         """Interpreter fallback for action templates the compiler skipped.
 
@@ -119,7 +187,7 @@ class GameEngine:
         """Create initial ground state from schema."""
         return create_initial_state(self._schema, self._constants, self._players)
 
-    # ── SolverAdapter API ─────────────────────────────────────────────
+    # ── Solver contract API ─────────────────────────────────────────────
 
     def get_node_type(self, state: dict) -> str:
         """Return 'player', 'chance', or 'terminal'."""
@@ -262,12 +330,19 @@ class GameEngine:
                 for entity in entities:
                     entity_ctx = {**base_ctx, "$node": entity, "$viewer": viewer}
                     entity_obs = dict(entity)
+                    dropped = False
                     for rule in rules:
                         if rule.get("view", "") != vname:
                             continue
                         rule_filter = rule.get("filter")
                         if rule_filter is not None:
                             if not self.expr.eval(rule_filter, entity_ctx):
+                                # "drop": the filter decides entity survival —
+                                # a failing filter removes the whole row
+                                # (v5.2, e.g. werewolf's per-viewer role row).
+                                if rule.get("drop"):
+                                    dropped = True
+                                    break
                                 continue
                         # Apply field visibility
                         hidden_any = False
@@ -280,11 +355,26 @@ class GameEngine:
                         # (e.g. an opponent's hole card id).
                         if hidden_any:
                             entity_obs.pop("value", None)
+                    if dropped:
+                        continue
                     filtered.append(entity_obs)
                 obs[vname] = filtered
 
-        # Also include env
-        obs["env"] = dict(state.get("env", {}))
+        # Also include env, with optional viewer-level filtering declared in
+        # ``visibility.env`` (v5.2): per-field viewer rules hide secret env
+        # scalars, e.g. werewolf's ``seerResult`` is only visible to the seer.
+        env_obs = dict(state.get("env", {}))
+        env_rules = visibility.get("env", {}) or {}
+        if env_rules:
+            env_ctx = self._build_context(state)
+            env_ctx["$viewer"] = viewer
+            for field, spec in env_rules.items():
+                if field not in env_obs:
+                    continue
+                rule_filter = spec.get("filter") if isinstance(spec, dict) else None
+                if rule_filter is not None and not self.expr.eval(rule_filter, env_ctx):
+                    env_obs.pop(field, None)
+        obs["env"] = env_obs
         return obs
 
     def get_info_set_key(self, state: dict, player_id: str) -> str:
@@ -303,6 +393,25 @@ class GameEngine:
         obs = self.project_observation(state, player_id)
         serialized = json.dumps(obs, ensure_ascii=False, separators=(",", ":"))
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def eval_expr(self, expr: dict, extra_ctx: dict | None = None) -> Any:
+        """Evaluate a rules expression with optional extra context (generic).
+
+        Generic Layer-2 service (v5.2): lets upper layers (e.g. frontend
+        display helpers) evaluate any rules-declared alias/expression —
+        e.g. Texas ``best5`` hand evaluation — without reaching into
+        engine internals.  Nothing game-specific lives here; the
+        expression itself comes from the rules JSON.
+        """
+        ctx: dict[str, Any] = {
+            "$constants": self._constants,
+            "$env": {},
+            "$players": self._players,
+            "_query_fn": self._query_fn,
+        }
+        if extra_ctx:
+            ctx.update(extra_ctx)
+        return self.expr.eval(expr, ctx)
 
     def get_utility(self, state: dict, player_id: str) -> float:
         """Evaluate utility for ``player_id`` at a terminal state."""

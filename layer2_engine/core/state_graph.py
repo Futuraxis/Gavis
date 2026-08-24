@@ -14,21 +14,58 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
-from typing import Any, Callable
+from dataclasses import dataclass
+from typing import Any, Callable, Literal
 
-from ..interfaces.solver_adapter import (
-    ActionInstance as ActionInstance,
-)
-from ..interfaces.solver_adapter import (
-    ChanceOutcome as ChanceOutcome,
-)
 from .expr_eval import ExprEvaluator
 
 _TEMPLATE_RE = re.compile(r"\{([^}]+)\}")
 
-# ``ActionInstance`` / ``ChanceOutcome`` are single-source defined in
-# ``interfaces/solver_adapter.py`` (the Layer 2↔3 contract) and re-exported
-# here so engine internals keep importing them from this module.
+# ── Core data types (single source since v5.2) ────────────────────────
+# Previously defined in ``interfaces/solver_adapter.py`` (the Layer 2↔3
+# contract); moved here so the adapter Protocol becomes a pure typing
+# artifact and solvers import their data types straight from the engine
+# layer (``solver_adapter`` now re-exports them for back-compat).
+
+NodeType = Literal["player", "chance", "terminal"]
+"""Type of a game node."""
+
+State = dict[str, Any]
+"""Game state — a generic dict with ground arrays + env scalars.
+
+Ground arrays are stored under ``_arrays``, environment scalars under ``env``.
+Derived views are computed on-the-fly by the engine.
+"""
+
+
+@dataclass
+class ActionInstance:
+    """A concrete action generated from an action template at runtime."""
+
+    template_id: str
+    type: str
+    actor_id: str
+    params: dict
+    canonical_key: str
+
+
+@dataclass
+class ChanceOutcome:
+    """A single outcome of a chance node."""
+
+    key: str
+    probability: float
+    effect_ref: str
+    canonical_key: str
+
+
+Obs = dict[str, Any]
+"""An observation returned by ``project_observation``.
+
+For perfect-information games this includes materialized derived views;
+for imperfect-information games it is the player's partial view after
+visibility projection.
+"""
 
 
 # ── Ground state operations ──────────────────────────────────────────

@@ -161,3 +161,48 @@ export interface BenchmarkJob {
   started_at: string | null
   ended_at: string | null
 }
+
+// ── 在线学习 ─────────────────────────────────────────────────
+
+export interface LearningGate {
+  episodes: number
+  candidate_wins: number
+  baseline_wins: number
+  draws: number
+  candidate_win_rate: number
+  baseline_win_rate: number
+  draw_rate: number
+  budget: number
+}
+
+export interface LearningModel {
+  version: number
+  samples: number
+  coverage: number
+  published_at: string | null
+  gate: LearningGate | null
+  preview: unknown[]
+}
+
+export interface LearningStatus {
+  game_id: string
+  enabled: boolean
+  matches: number
+  decisions: number
+  human_decisions: number
+  ai_decisions: number
+  model: LearningModel | null
+  min_samples: number
+  pending: boolean
+}
+
+export interface LearningApplyResult {
+  game_id: string
+  applied: boolean
+  reason: 'ok' | 'insufficient' | 'unchanged' | 'rejected' | 'disabled' | 'error'
+  version: number | null
+  gate: LearningGate | null
+  samples: number
+  coverage: number
+  error: string | null
+}

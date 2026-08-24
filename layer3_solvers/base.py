@@ -1,7 +1,7 @@
 """SolverBase — abstract base for all Layer 3 solvers.
 
 Every solver (MCTS, CFR, PPO, PSRO) implements this interface so that
-demos, benchmarks, and the auto-selector can treat them uniformly.
+the training CLI, benchmarks, and the auto-selector can treat them uniformly.
 """
 
 from __future__ import annotations
@@ -10,11 +10,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
 
-from layer2_engine.interfaces.solver_adapter import (
-    ActionInstance,
-    SolverAdapter,
-    State,
-)
+from layer2_engine.core.state_graph import ActionInstance, State
+from layer2_engine.core.engine import GameEngine
 
 
 @dataclass
@@ -51,8 +48,8 @@ class SolverBase(ABC):
         solver.save("model.pt")
     """
 
-    def __init__(self, adapter: SolverAdapter, config: SolverConfig):
-        self.adapter = adapter
+    def __init__(self, engine: GameEngine, config: SolverConfig):
+        self.engine = engine
         self.config = config
 
     # ── Required ──────────────────────────────────────────────────

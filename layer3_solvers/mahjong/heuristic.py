@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import random
 
-from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter
+from layer2_engine.core.state_graph import ActionInstance
+from layer2_engine.core.engine import GameEngine
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 
@@ -26,8 +27,8 @@ _SUITS = "mpsz"
 class MahjongHeuristicAI(SolverBase):
     """Heuristic mahjong policy (claim priority + tile-value discards)."""
 
-    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
-        super().__init__(adapter, config or SolverConfig(seed=0))
+    def __init__(self, engine: GameEngine, config: SolverConfig | None = None):
+        super().__init__(engine, config or SolverConfig(seed=0))
         self._rng = random.Random(self.config.seed)
 
     @property
@@ -35,7 +36,7 @@ class MahjongHeuristicAI(SolverBase):
         return "mahjong_heuristic"
 
     def select_action(self, state: dict) -> ActionInstance | None:
-        legal = self.adapter.get_legal_actions(state)
+        legal = self.engine.get_legal_actions(state)
         if not legal:
             return None
         phase = state.get("env", {}).get("phase", "")

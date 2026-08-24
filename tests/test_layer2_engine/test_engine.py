@@ -13,7 +13,7 @@ from layer2_engine.core.state_graph import (
     clone_state,
     create_initial_state,
 )
-from layer2_engine.interfaces.solver_adapter import ActionInstance
+from layer2_engine.core.state_graph import ActionInstance
 
 RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
 

@@ -6,14 +6,15 @@ Solver integration is handled at the application/demo layer.
 
 from __future__ import annotations
 
-from layer2_engine.interfaces.solver_adapter import SolverAdapter, State
+from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import State
 
 from .binding.schemas import Observation
 
 
 def observation_to_state(
     observation: Observation,
-    engine: SolverAdapter,
+    engine: GameEngine,
 ) -> State:
     """Convert a visual ``Observation`` to an Engine-compatible ``State``.
 

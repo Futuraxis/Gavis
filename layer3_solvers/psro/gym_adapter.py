@@ -1,8 +1,8 @@
-"""GymAdapter — wraps a SolverAdapter into a Gym-style interface.
+"""GymAdapter — wraps a GameEngine into a Gym-style interface.
 
 PSRO's core algorithms (tabular Q, gamescape) expect a Gym-like
 environment with ``reset()`` / ``step(action)`` / ``available_actions()``.
-This adapter bridges the two worlds.
+This engine bridges the two worlds.
 
 The wrapper is hard-wired to 3×3 moon-chess-like games (Discrete(9) action
 space, ``cell_r_c`` canonical keys, base-3 board encoding); constructing it
@@ -17,11 +17,8 @@ import logging
 import numpy as np
 from gymnasium import spaces
 
-from layer2_engine.interfaces.solver_adapter import (
-    ActionInstance,
-    SolverAdapter,
-    State,
-)
+from layer2_engine.core.state_graph import ActionInstance, State
+from layer2_engine.core.engine import GameEngine
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +26,11 @@ _BOARD_SIZE = 3
 
 
 class GymAdapter:
-    """Wrap a ``SolverAdapter`` into a Gym-style environment.
+    """Wrap a ``GameEngine`` into a Gym-style environment.
 
     Parameters
     ----------
-    adapter : SolverAdapter
+    engine : GameEngine
     state_dim : int
         Size of the encoded observation space (default 19683 for 3×3).
     seed : int, optional
@@ -41,11 +38,11 @@ class GymAdapter:
         ``np.random`` behavior.
     """
 
-    def __init__(self, adapter: SolverAdapter, state_dim: int = 19683, seed: int | None = None):
-        self._adapter = adapter
+    def __init__(self, engine: GameEngine, state_dim: int = 19683, seed: int | None = None):
+        self._adapter = engine
         self._state: State | None = None
         self._rng = np.random.RandomState(seed)
-        raw_players = getattr(adapter, "rules", {}).get("players", [])
+        raw_players = getattr(engine, "rules", {}).get("players", [])
 
         if len(raw_players) >= 2:
             first_player = raw_players[0]
@@ -64,13 +61,13 @@ class GymAdapter:
 
         # 审查 P2-22: 只支持 3×3 月亮棋形状 — 校验 board 尺寸与动作模板
         # 可解析性，失败即抛错（此前非 3×3 游戏静默降级成无意义结果）。
-        self._validate_board(adapter)
+        self._validate_board(engine)
 
         self.observation_space = spaces.Discrete(state_dim)
         self.action_space = spaces.Discrete(9)
         self.n_actions = 9
 
-    def _validate_board(self, adapter: SolverAdapter) -> None:
+    def _validate_board(self, engine: GameEngine) -> None:
         """Reject games whose board is not 3×3 (9 cells).
 
         The encoding (base-3 over 9 cells) and the int↔action mapping
@@ -79,7 +76,7 @@ class GymAdapter:
         Gated on the rules declaring a ``board`` array so test fakes
         without a groundState still construct.
         """
-        rules = getattr(adapter, "rules", {})
+        rules = getattr(engine, "rules", {})
         ground = rules.get("groundState", {})
         board_def = ground.get("board")
         if not board_def:
@@ -174,7 +171,7 @@ class GymAdapter:
     def clone(self) -> "GymAdapter":
         """A copy with its own ``_state`` for parallel match-up evaluation.
 
-        Clones share the wrapped adapter (engine) — its methods only
+        Clones share the wrapped engine (engine) — its methods only
         mutate the passed-in state, so concurrent episodes over separate
         states are safe (audit 3.6: PSRO 评估并行化).
         """

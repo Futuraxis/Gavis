@@ -47,9 +47,7 @@ python -m layer4_interface.frontend.play_texas_holdem.server --host 0.0.0.0 --po
 ## 终端演示
 
 ```bash
-python -m demos.demo_texas_holdem --budget 1500              # Hybrid vs 随机，一局完整对局
-python -m demos.demo_texas_holdem --solver mcts --budget 1500  # 也可用纯 MCTS
-python -m demos.demo_texas_holdem --cfr-iters 60             # 先训练 CFR 先验（较慢）
+python train-cli/train.py --game texas_holdem --solver hybrid --skip-eval  # 训练 Hybrid（CFR 先验 + 不完全信息搜索）
 ```
 
 ## API（与其他对弈应用一致）

@@ -27,7 +27,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter, State
+from layer2_engine.core.state_graph import ActionInstance, State
+from layer2_engine.core.engine import GameEngine
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 from .action_space import ActionSpace
@@ -55,19 +56,19 @@ class QMixConfig(SolverConfig):
 
 
 class QMixSolver(SolverBase):
-    """QMix solver for any ``SolverAdapter`` (moon_chess / mahjong / texas)."""
+    """QMix solver for any ``GameEngine`` (moon_chess / mahjong / texas)."""
 
-    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
-        super().__init__(adapter, config or QMixConfig())
+    def __init__(self, engine: GameEngine, config: SolverConfig | None = None):
+        super().__init__(engine, config or QMixConfig())
         cfg = self.config
         if cfg.seed is not None:
             torch.manual_seed(cfg.seed)
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(cfg.seed)
             np.random.seed(cfg.seed)
-        self._players = resolve_players(adapter)
-        self._encoder = GameEncoder.build_from_adapter(adapter, self._players)
-        self._action_space = ActionSpace.build_from_adapter(adapter)
+        self._players = resolve_players(engine)
+        self._encoder = GameEncoder.build_from_adapter(engine, self._players)
+        self._action_space = ActionSpace.build_from_adapter(engine)
         self._player_idx = {p: i for i, p in enumerate(self._players)}
         self.device = resolve_device(cfg.device)
 
@@ -98,10 +99,10 @@ class QMixSolver(SolverBase):
 
     def select_action(self, state: State) -> ActionInstance | None:
         """Greedy masked-argmax of the current player's Q (untrained-safe)."""
-        player = self.adapter.get_current_player(state)
+        player = self.engine.get_current_player(state)
         if player is None or player not in self._player_idx:
             return None
-        legal = self.adapter.get_legal_actions(state)
+        legal = self.engine.get_legal_actions(state)
         if not legal:
             return None
         # 复用已求值的 legal（legal_mask 支持传入，避免第二次引擎求值）
@@ -129,7 +130,7 @@ class QMixSolver(SolverBase):
 
         for ep in range(episodes):
             traj = run_episode(
-                self.adapter,
+                self.engine,
                 self._players,
                 self._rng,
                 self._encoder,

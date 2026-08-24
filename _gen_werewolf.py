@@ -838,6 +838,39 @@ class WerewolfRules:
                 "from": {"type": "literal", "list": {"var": "shoot_targets"}},
                 "fields": {"id": {"var": "$self.value"}},
             }
+        # v5.2: player-facing views over ground arrays — partial observability
+        # is declared in ``visibility`` (my_role filtered per viewer; the rest
+        # public), so no adapter projection is needed.
+        views.update(
+            {
+                "my_role": {
+                    "from": {"type": "enum", "array": "roles"},
+                    "fields": {"role": {"var": "$self.value"}},
+                },
+                "alive": {
+                    "from": {"type": "enum", "array": "alive"},
+                    "fields": {"alive": {"var": "$self.value"}},
+                },
+                "speech_log": {
+                    "from": {"type": "enum", "array": "speechLog"},
+                    "fields": {"entry": {"var": "$self.value"}},
+                },
+                "vote_log": {
+                    "from": {"type": "enum", "array": "voteLog"},
+                    "fields": {"entry": {"var": "$self.value"}},
+                },
+                "deaths_arr": {
+                    "from": {"type": "enum", "array": "deathsArr"},
+                    "fields": {"entry": {"var": "$self.value"}},
+                },
+                # v5.3: 死后身份公开 — dead_roles 只保留死亡玩家的角色行
+                # （visibility 里按 alive==1 drop），消费者用 _index → pid 映射。
+                "dead_roles": {
+                    "from": {"type": "enum", "array": "roles"},
+                    "fields": {"role": {"var": "$self.value"}},
+                },
+            }
+        )
         alive_filter = {"eq": [{"at": [{"var": "$alive"}, {"get": [{"var": "$node"}, "_index"]}]}, {"const": 1}]}
         queries = {
             "unassigned_roles": {
@@ -856,6 +889,46 @@ class WerewolfRules:
         if self.has["hunter"]:
             queries["shoot_targets"] = {"view": "shoot_target"}
         return views, queries
+
+    def _visibility(self) -> dict:
+        """Declarative partial observability (v5.2).
+
+        - ``default: partial``: every view goes through per-viewer filtering;
+          views without a rule pass through fully (public).
+        - ``my_role``: only the viewer's own row survives the filter.
+        - ``env.seerResult``: only the seer role sees the check result.
+        """
+        viewer_role = lambda viewer: {"call": ["player_index", {"var": viewer}]}
+        return {
+            "default": "partial",
+            "rules": [
+                {
+                    "view": "my_role",
+                    # ``drop`` (v5.2): a failing filter removes the whole row,
+                    # so each viewer sees exactly their own role row.
+                    "drop": True,
+                    "filter": {
+                        "eq": [{"get": [{"var": "$node"}, "_index"]}, viewer_role("$viewer")],
+                    },
+                },
+                {
+                    # 死后身份公开：filter 命中 → 保留行；未命中且 drop=True
+                    # → 整行删除。alive==0（死亡）命中保留，alive==1 被删。
+                    "view": "dead_roles",
+                    "drop": True,
+                    "filter": {
+                        "eq": [{"at": [{"var": "$alive"}, {"get": [{"var": "$node"}, "_index"]}]}, {"const": 0}],
+                    },
+                }
+            ],
+            "env": {
+                "seerResult": {
+                    "filter": {
+                        "eq": [{"at": [{"var": "$roles"}, viewer_role("$viewer")]}, {"const": "seer"}],
+                    }
+                }
+            },
+        }
 
     def _functions(self) -> dict:
         fns = {
@@ -1015,7 +1088,7 @@ class WerewolfRules:
         return {
             "meta": {
                 "name": "werewolf",
-                "version": "5.1",
+                "version": "5.2",
                 "description": (
                     f"Werewolf {self.players}-player "
                     f"({'/'.join(f'{self.role_pool.count(r)}{ROLE_LABEL[r]}' for r in ROLES if r in self.role_pool)}) "
@@ -1023,10 +1096,24 @@ class WerewolfRules:
                 ),
             },
             "players": [{"id": pid, "type": "player"} for pid in self.ids],
+            # v5.2: player ids are derived from the declared role pool — the
+            # engine selects the (single) composition without any injection.
+            "variants": {
+                "variant": "default",
+                "options": {"default": {}},
+                "player_ids": {
+                    "map": {
+                        "list": {"range": {"from": {"const": 0}, "to": {"count": {"var": "$constants.role_pool"}}}},
+                        "as": "$node",
+                        "expr": {"template": "p{$node}"},
+                    }
+                },
+                "trim_players": True,
+                "trim_utility": True,
+            },
             "groundState": ground,
             "derivedViews": views,
             "constants": {
-                "player_ids": self.ids,
                 "role_pool": role_pool,
                 "intents": INTENTS,
                 "resolve_outcomes": ["resolve"],
@@ -1042,7 +1129,7 @@ class WerewolfRules:
             "chance": self._chance(),
             "effectors": self._effectors(),
             "phases": self._phases(),
-            "visibility": {"default": "public"},
+            "visibility": self._visibility(),
             "terminal": [
                 {"id": "game_over", "condition": {"neq": [{"get": ["$env", "winner"]}, {"const": None}]}},
                 # 轮次上限（法官干预）：超限判平局（winner 保持 None）

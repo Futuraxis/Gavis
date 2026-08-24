@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 
 import pytest
 
-from demos.solver_provider import RandomSolver, create_solver, default_provider
-from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
+from train_cli import RandomSolver, create_solver, default_provider
+from layer2_engine.core.engine import GameEngine
 from layer4_interface.frontend.platform.benchmark import (
     BENCHMARK_BUDGETS,
     SOLVER_OPTIONS,
@@ -15,10 +17,12 @@ from layer4_interface.frontend.platform.benchmark import (
 )
 from layer4_interface.frontend.platform.games import GAMES
 
+RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
+
 
 class TestRandomSolver:
     def test_select_action_is_legal(self):
-        engine = MoonChessAdapter(seed=42)
+        engine = GameEngine(json.load(open(RULES_DIR / "moon_chess.json", encoding="utf-8")), seed=42)
         solver = RandomSolver(engine, seed=42)
         state = engine.create_initial_state()
         for _ in range(20):
@@ -30,7 +34,7 @@ class TestRandomSolver:
                 break
 
     def test_train_is_noop(self):
-        solver = RandomSolver(MoonChessAdapter(seed=42), seed=42)
+        solver = RandomSolver(GameEngine(json.load(open(RULES_DIR / "moon_chess.json", encoding="utf-8")), seed=42), seed=42)
         metrics = solver.train(episodes=10)
         assert metrics.episodes == 10
 
@@ -50,7 +54,7 @@ class TestCreateSolver:
             create_solver("texas_holdem", "cfr", engine, 42, 100)
 
     def test_unknown_solver_rejected(self):
-        engine = MoonChessAdapter(seed=42)
+        engine = GameEngine(json.load(open(RULES_DIR / "moon_chess.json", encoding="utf-8")), seed=42)
         with pytest.raises(ValueError):
             create_solver("moon_chess", "ppo", engine, 42, 100)
 

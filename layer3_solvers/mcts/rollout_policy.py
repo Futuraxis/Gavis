@@ -1,6 +1,6 @@
 """Rollout policies for MCTS.
 
-The MCTS core is generic over ``SolverAdapter``; game-specific rollout
+The MCTS core is generic over ``GameEngine``; game-specific rollout
 smarts live here as opt-in policies instead of being hardcoded in the
 search (M-04).  ``BoardHeuristicPolicy`` implements the win/block/threat
 heuristics for square-board line-connect games.  Every method returns
@@ -15,21 +15,21 @@ import random
 import warnings
 from typing import Optional
 
-from layer2_engine.interfaces.solver_adapter import ActionInstance, State
+from layer2_engine.core.state_graph import ActionInstance, State
 
 
-def root_player(state: State, adapter, default_player: Optional[str] = None) -> Optional[str]:
+def root_player(state: State, engine, default_player: Optional[str] = None) -> Optional[str]:
     """Rollout-start player id，解析失败时可用 default_player 兜底。"""
     env = state.get("env", {}) if isinstance(state, dict) else {}
     turn = env.get("turn")
     if isinstance(turn, dict):
         turn = turn.get("currentPlayerId", turn)
-    if adapter is not None and adapter.get_node_type(state) == "chance":
+    if engine is not None and engine.get_node_type(state) == "chance":
         turn = env.get("lastActor", turn)
         if turn is None:
             warnings.warn("root_player: chance 节点缺少 env.lastActor，视角可能不正确")
-    if turn is None and adapter is not None:
-        turn = adapter.get_current_player(state)
+    if turn is None and engine is not None:
+        turn = engine.get_current_player(state)
     if turn is None:
         turn = default_player
     return turn

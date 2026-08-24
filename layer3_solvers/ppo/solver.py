@@ -1,6 +1,6 @@
-"""PPO Solver — Proximal Policy Optimization with SolverAdapter.
+"""PPO Solver — Proximal Policy Optimization with GameEngine.
 
-Refactored from the original ``PPOAgent`` to consume the ``SolverAdapter``
+Refactored from the original ``PPOAgent`` to consume the ``GameEngine``
 Protocol instead of a hard-coded environment.
 """
 
@@ -15,11 +15,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from layer2_engine.interfaces.solver_adapter import (
-    ActionInstance,
-    SolverAdapter,
-    State,
-)
+from layer2_engine.core.state_graph import ActionInstance, State
+from layer2_engine.core.engine import GameEngine
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 from .networks import ActorCriticNetwork
@@ -37,27 +34,27 @@ class PPOConfig(SolverConfig):
     max_grad_norm: float = 0.5
     update_epochs: int = 4
     minibatch_size: int = 32
-    state_dim: int = 38  # default for MoonChessAdapter
+    state_dim: int = 38  # default for MoonChess
     action_dim: int = 9  # default for 3×3 grid
     hidden_dim: int = 128  # ActorCriticNetwork 隐藏层宽度
     update_frequency: int = 16  # 每 N 局更新一次；0 表示每局更新（保持旧行为）
 
 
 class PPOSolver(SolverBase):
-    """PPO solver that works with any ``SolverAdapter``.
+    """PPO solver that works with any ``GameEngine``.
 
-    Designed specifically for games where the adapter provides
-    ``get_feature_vector()`` and ``get_action_mask()`` (like
-    ``MoonChessAdapter``).
+    Designed specifically for games where the engine provides
+    ``get_feature_vector()`` and ``get_action_mask()`` .
     """
 
-    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
-        super().__init__(adapter, config or PPOConfig())
+    def __init__(self, engine: GameEngine, config: SolverConfig | None = None):
+        super().__init__(engine, config or PPOConfig())
         cfg = self.config
         self._state_dim = getattr(cfg, "state_dim", 38)
         self._action_dim = getattr(cfg, "action_dim", 9)
-        self._board_size = getattr(self.adapter, "BOARD_SIZE", 3)
-        self._action_dim = getattr(self.adapter, "ACTION_DIM", self._action_dim)
+        # Generic board size: read the rules' declared constant (pure data);
+        # falls back to the 3×3 default when absent.
+        self._board_size = (getattr(self.engine, "_constants", {}) or {}).get("board_size", 3)
 
         if cfg.seed is not None:
             torch.manual_seed(cfg.seed)
@@ -121,23 +118,23 @@ class PPOSolver(SolverBase):
         total_steps = 0
 
         for ep in range(episodes):
-            state = self.adapter.create_initial_state()
+            state = self.engine.create_initial_state()
             self._last_agent_step = None
             ep_reward = 0.0
             step = 0
 
-            while not self.adapter.is_terminal(state):
-                nt = self.adapter.get_node_type(state)
+            while not self.engine.is_terminal(state):
+                nt = self.engine.get_node_type(state)
                 if nt == "player":
-                    cp = self.adapter.get_current_player(state)
+                    cp = self.engine.get_current_player(state)
                     if cp == controlled_player:
                         action = self._select_action_train(state)
                         log_prob = self._last_log_prob
                         value = self._last_value
                         mask = self._get_mask(state)
 
-                        next_state = self.adapter.apply_action(state, action)
-                        done = self.adapter.is_terminal(next_state)
+                        next_state = self.engine.apply_action(state, action)
+                        done = self.engine.is_terminal(next_state)
                         reward = self._get_reward(next_state, controlled_player, done)
                         next_value = 0.0 if done else self._evaluate_value(next_state)
 
@@ -166,8 +163,8 @@ class PPOSolver(SolverBase):
                         opp_action = self._opponent_action(state, opponent_type, controlled_player)
                         if opp_action is None:
                             break
-                        state = self.adapter.apply_action(state, opp_action)
-                        if self.adapter.is_terminal(state) and self._last_agent_step is not None:
+                        state = self.engine.apply_action(state, opp_action)
+                        if self.engine.is_terminal(state) and self._last_agent_step is not None:
                             feat, act_idx, m, lp, v = self._last_agent_step
                             self.buffer.add(
                                 state=feat,
@@ -180,17 +177,17 @@ class PPOSolver(SolverBase):
                                 next_value=0.0,
                             )
                 elif nt == "chance":
-                    outcomes = self.adapter.get_chance_outcomes(state)
+                    outcomes = self.engine.get_chance_outcomes(state)
                     if outcomes:
                         o = self._sample_outcome(outcomes, self.rng)
                         if o is not None:
-                            state = self.adapter.apply_chance(state, o)
+                            state = self.engine.apply_chance(state, o)
                 else:
                     break
                 total_steps += 1  # 环境总步数（含对手/运气步）
 
             # Episode end
-            if self.adapter.is_terminal(state):
+            if self.engine.is_terminal(state):
                 winner = state["env"].get("winner")
                 if winner == controlled_player:
                     wins += 1
@@ -321,79 +318,102 @@ class PPOSolver(SolverBase):
         return float(value.squeeze(0).item())
 
     def _get_features(self, state: State) -> np.ndarray:
-        """Extract feature vector.  Prefers adapter.get_feature_vector()."""
-        if hasattr(self.adapter, "get_feature_vector"):
-            # MoonChessAdapter exposes this directly
-            cp = self.adapter.get_current_player(state) or "p_black"
-            return self.adapter.get_feature_vector(state, cp)
-        # Fallback: encode board cells as empty/self/opponent from the
-        # current player's perspective (previously every occupied cell
-        # was encoded identically, erasing whose piece it is).
-        cp = self.adapter.get_current_player(state) or "p_black"
-        obs = self.adapter.get_observation(state, cp)
-        board = obs.get("board", [])
-        features = []
-        for row in board:
-            for cell in row:
-                if cell is None:
-                    features.extend([1, 0, 0])
-                elif cell == cp:
-                    features.extend([0, 1, 0])
-                else:
-                    features.extend([0, 0, 1])
-        # Pad or reshape to state_dim
-        arr = np.asarray(features, dtype=np.float32)
+        """Feature vector from engine ground state / projected observation.
+
+        Generic solver-side encoding (v5.2) — no game-specific engine
+        method is probed.  Board cells are encoded as empty / self /
+        opponent from the current player's perspective, sourced from (in
+        order):
+
+          1. ``state['_arrays']['board']`` — engine ground array (flat)
+          2. ``obs['cell']`` — engine ``cell`` grid view (entities with
+             ``x``/``y``/``occupant``)
+          3. ``obs['board']`` — 2-D list shape (legacy adapter view)
+
+        Games without a board fall back to flattening the numeric fields
+        of the observation (padded to ``state_dim``).
+        """
+        cp = self.engine.get_current_player(state) or "p_black"
+        obs = self.engine.get_observation(state, cp)
+        flat = (state.get("_arrays", {}) or {}).get("board")
+        cells = obs.get("cell")
+        rows = None
+        if isinstance(flat, list):
+            size = int(round(len(flat) ** 0.5))
+            rows = [flat[i * size : (i + 1) * size] for i in range(size)] if size else None
+        elif cells:
+            size = int(round(len(cells) ** 0.5)) or self._board_size
+            rows = [["" for _ in range(size)] for _ in range(size)]
+            for ent in cells:
+                if isinstance(ent, dict) and "x" in ent and "y" in ent:
+                    x, y = int(ent["x"]), int(ent["y"])
+                    if 0 <= x < size and 0 <= y < size:
+                        rows[y][x] = ent.get("occupant") or ""
+        elif isinstance(obs.get("board"), list):
+            rows = obs["board"]
+        if rows:
+            features = []
+            for row in rows:
+                for cell in row:
+                    if cell is None or cell == "":
+                        features.extend([1, 0, 0])
+                    elif cell == cp:
+                        features.extend([0, 1, 0])
+                    else:
+                        features.extend([0, 0, 1])
+            arr = np.asarray(features, dtype=np.float32)
+        else:
+            scalars = [v for k, v in obs.items() if k != "env" and isinstance(v, (int, float, bool))]
+            arr = np.asarray([float(v) for v in scalars], dtype=np.float32)
         if len(arr) < self._state_dim:
             arr = np.pad(arr, (0, self._state_dim - len(arr)))
         return arr[: self._state_dim]
 
     def _get_mask(self, state: State) -> np.ndarray:
-        """Get action mask.  Prefers adapter.get_action_mask()."""
-        if hasattr(self.adapter, "get_action_mask"):
-            return self.adapter.get_action_mask(state)
+        """Action mask from legal actions (canonical ``place:r,c`` keys)."""
         mask = np.zeros(self._action_dim, dtype=np.float32)
-        legal = self.adapter.get_legal_actions(state)
+        legal = self.engine.get_legal_actions(state)
         for a in legal:
-            cell = a.params.get("cell", {})
-            cell_id = cell.get("id", "") if isinstance(cell, dict) else str(cell)
-            try:
-                _, r, c = cell_id.split("_")
-                idx = int(r) * self._board_size + int(c)
-                if 0 <= idx < self._action_dim:
-                    mask[idx] = 1.0
-            except (ValueError, IndexError):
-                pass
+            idx = self._index_from_key(a)
+            if idx is not None and 0 <= idx < self._action_dim:
+                mask[idx] = 1.0
         return mask
 
-    def _action_from_index(self, state: State, idx: int) -> ActionInstance:
-        """Convert action index (0-8) to ActionInstance."""
-        legal = self.adapter.get_legal_actions(state)
-        for a in legal:
-            cell = a.params.get("cell", {})
-            cell_id = cell.get("id", "") if isinstance(cell, dict) else str(cell)
-            try:
-                _, r, c = cell_id.split("_")
-                aidx = int(r) * self._board_size + int(c)
-                if aidx == idx:
-                    return a
-            except (ValueError, IndexError):
-                raise ValueError(f"无法解析动作的格子编号: {cell_id!r}") from None
-        raise ValueError(f"找不到编号 {idx} 对应的合法动作（legal={len(legal)} 个）")
+    def _index_from_key(self, action: ActionInstance) -> int | None:
+        """Map a legal action to its grid index via canonical key/params."""
+        import re as _re
 
-    def _action_to_index(self, action: ActionInstance) -> int:
-        """Convert ActionInstance back to index."""
+        m = _re.match(r"^place:(\d+),(\d+)$", action.canonical_key)
+        if m:
+            y, x = int(m.group(1)), int(m.group(2))
+            return y * self._board_size + x
         cell = action.params.get("cell", {})
         cell_id = cell.get("id", "") if isinstance(cell, dict) else str(cell)
         try:
             _, r, c = cell_id.split("_")
             return int(r) * self._board_size + int(c)
         except (ValueError, IndexError):
-            raise ValueError(f"无法解析动作的格子编号: {cell_id!r}") from None
+            return None
+
+    def _action_from_index(self, state: State, idx: int) -> ActionInstance:
+        """Convert action index to the matching legal ActionInstance."""
+        legal = self.engine.get_legal_actions(state)
+        for a in legal:
+            if self._index_from_key(a) == idx:
+                return a
+        raise ValueError(f"找不到编号 {idx} 对应的合法动作（legal={len(legal)} 个）")
+
+    def _action_to_index(self, action: ActionInstance) -> int:
+        """Convert ActionInstance back to index."""
+        idx = self._index_from_key(action)
+        if idx is not None:
+            return idx
+        raise ValueError(f"无法解析动作的格子编号: {action.canonical_key!r}")
 
     def _get_reward(self, state: State, player: str, done: bool) -> float:
         if not done:
             return 0.0
-        return self.adapter.get_utility(state, player)
+        return self.engine.get_utility(state, player)
 
     @staticmethod
     def _sample_outcome(outcomes, rng):
@@ -421,7 +441,7 @@ class PPOSolver(SolverBase):
           random).
         Unknown types raise ValueError.
         """
-        legal = self.adapter.get_legal_actions(state)
+        legal = self.engine.get_legal_actions(state)
         if not legal:
             return None
         if opponent_type == "random":
@@ -442,7 +462,7 @@ class PPOSolver(SolverBase):
             from ..mcts.solver import MCTS, MCTSConfig
 
             self._mcts_opponent = MCTS(
-                self.adapter,
+                self.engine,
                 MCTSConfig(seed=getattr(self.config, "seed", None), budget=500),
             )
         return self._mcts_opponent.select_action(state)

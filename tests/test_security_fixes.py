@@ -14,11 +14,21 @@ Each test pins one fixed item from `docs/design/security-notes.md`:
 from __future__ import annotations
 
 import io
+import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from layer2_engine.interfaces.api_key import resolve_api_key
+from layer2_engine.core.api_key import resolve_api_key
+from layer2_engine.core.engine import GameEngine
+
+RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
+
+
+def _moon(seed: int = 42) -> GameEngine:
+    with open(RULES_DIR / "moon_chess.json", "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed)
 
 # ── 路径遍历 ──────────────────────────────────────────────────────
 
@@ -148,9 +158,8 @@ class TestApiKeyResolution:
 
 class TestInfoSetKey:
     def test_compact_sha256_key(self):
-        from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
-
-        adapter = MoonChessAdapter(seed=42)
+        
+        adapter = _moon()
         state = adapter.create_initial_state()
         key = adapter.get_info_set_key(state, "p_black")
         assert len(key) == 64
@@ -161,9 +170,8 @@ class TestInfoSetKey:
         assert adapter.get_info_set_key(state, "p_white") == key
 
     def test_key_changes_after_move(self):
-        from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
-
-        adapter = MoonChessAdapter(seed=42)
+        
+        adapter = _moon()
         state = adapter.create_initial_state()
         before = adapter.get_info_set_key(state, "p_black")
         action = adapter.get_legal_actions(state)[0]
@@ -176,10 +184,9 @@ class TestInfoSetKey:
 
 class TestPSROParallel:
     def test_gym_adapter_clone_is_independent(self):
-        from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
         from layer3_solvers.psro.gym_adapter import GymAdapter
 
-        env = GymAdapter(MoonChessAdapter(seed=42))
+        env = GymAdapter(_moon())
         clone = env.clone()
         assert clone._state is None  # noqa: SLF001
         env.reset()
@@ -188,11 +195,10 @@ class TestPSROParallel:
         assert env._state is not None and clone._state is not None  # noqa: SLF001
 
     def test_gamescape_parallel_antisymmetric(self):
-        from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
         from layer3_solvers.psro.gym_adapter import GymAdapter
         from layer3_solvers.psro.meta_game import gamescape
 
-        env = GymAdapter(MoonChessAdapter(seed=42))
+        env = GymAdapter(_moon())
         rng = np.random.RandomState(7)
         pi = [np.eye(9)[rng.randint(0, 9, 19683)] for _ in range(3)]
         matrix = gamescape(env, pi, Ne=1, num_workers=4)
@@ -207,7 +213,7 @@ class TestPSROParallel:
 
 class TestBenchmarkJobPruning:
     def test_prune_drops_finished_jobs_only(self):
-        from demos.solver_provider import default_provider
+        from train_cli import default_provider
         from layer4_interface.frontend.platform.benchmark import MAX_JOBS, BenchmarkJob, BenchmarkRunner
 
         runner = BenchmarkRunner(provider=default_provider, seed=1)

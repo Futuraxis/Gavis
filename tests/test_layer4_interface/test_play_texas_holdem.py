@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from demos.solver_provider import default_provider
+from train_cli import default_provider
 from layer4_interface.frontend.play_texas_holdem.session import PlayError, PlayManager
 
 

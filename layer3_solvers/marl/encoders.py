@@ -1,6 +1,6 @@
 """GameEncoder — per-game observation encoding for MARL solvers.
 
-Turns each adapter's structured observation dict into a fixed-size
+Turns each engine's structured observation dict into a fixed-size
 float32 vector.  ``encode_global`` concatenates every player's vector
 in fixed ``rules['players']`` order, giving the CTDE joint state used by
 the QMix mixing network and the HAPPO critic.
@@ -12,7 +12,7 @@ the QMix mixing network and the HAPPO critic.
   type counts, wall/136, phase one-hot, turn one-hot
 - texas_holdem (383): hole + community one-hots, street/phase, stacks,
   committed, folded, call_to, last_action, pot
-- moon_chess (38): delegates to ``adapter.get_feature_vector``
+- moon_chess (38): delegates to ``engine.get_feature_vector``
 - unknown adapters: flattened numeric fields of the observation dict
 """
 
@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from layer2_engine.interfaces.solver_adapter import SolverAdapter, State
+from layer2_engine.core.state_graph import State
+from layer2_engine.core.engine import GameEngine
 
 TILE_IDS = [f"{s}{r}" for s in "mps" for r in range(1, 10)] + [f"z{r}" for r in range(1, 8)]
 MAHJONG_PHASES = ("deal", "action", "claim", "draw", "gang_draw", "game_over")
@@ -30,17 +31,17 @@ MELD_TYPES = ("chi", "peng", "gang")
 
 
 class GameEncoder:
-    """Encodes observations and joint states for one adapter/game.
+    """Encodes observations and joint states for one engine/game.
 
     Parameters
     ----------
-    adapter : SolverAdapter
+    engine : GameEngine
     players : list[str]
         Agent ids in fixed order (``rules['players']``).
     """
 
-    def __init__(self, adapter: SolverAdapter, players: list[str]):
-        self._adapter = adapter
+    def __init__(self, engine: GameEngine, players: list[str]):
+        self._engine = engine
         self._players = list(players)
         self._tile_index: dict[str, int] | None = None
         self._card_index: dict[str, int] | None = None
@@ -70,42 +71,61 @@ class GameEncoder:
     # ── Factory ──────────────────────────────────────────────────────
 
     @classmethod
-    def build_from_adapter(cls, adapter: SolverAdapter, players: list[str]) -> "GameEncoder":
-        """Build the encoder matching ``adapter``'s game."""
-        from layer2_engine.games.mahjong.mahjong_adapter import MahjongAdapter
-        from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
-        from layer2_engine.games.texas_holdem.texas_env_adapter import TexasHoldemAdapter
-
-        if isinstance(adapter, MoonChessAdapter):
-            return _MoonChessEncoder(adapter, players)
-        if isinstance(adapter, MahjongAdapter):
-            return _MahjongEncoder(adapter, players)
-        if isinstance(adapter, TexasHoldemAdapter):
-            return _TexasEncoder(adapter, players)
-        return _GenericEncoder(adapter, players)
+    def build_from_adapter(cls, engine: GameEngine, players: list[str]) -> "GameEncoder":
+        """Build the encoder matching ``engine``'s game (rules meta gameId)."""
+        game_id = (getattr(engine, "rules", {}) or {}).get("meta", {}).get("gameId", "")
+        if game_id == "moon_chess":
+            return _MoonChessEncoder(engine, players)
+        if game_id == "mahjong":
+            return _MahjongEncoder(engine, players)
+        if game_id == "texas_holdem":
+            return _TexasEncoder(engine, players)
+        return _GenericEncoder(engine, players)
 
 
 class _MoonChessEncoder(GameEncoder):
-    """Delegates to ``MoonChessAdapter.get_feature_vector`` (38-dim)."""
+    """Board-cell encoding from the engine's ``cell`` grid view (38-dim).
+
+    Generic v5.2 path: the engine surfaces the board as the ``cell`` view
+    (grid over ``_arrays.board``) with ``x``/``y``/``occupant`` fields —
+    no game-specific engine method is probed.
+    """
 
     @property
     def obs_dim(self) -> int:
         return 38
 
     def encode_obs(self, state: State, player: str) -> np.ndarray:
-        return np.asarray(self._adapter.get_feature_vector(state, player), dtype=np.float32)
+        obs = self._engine.get_observation(state, player)
+        cells = obs.get("cell") or []
+        vec = np.zeros(38, dtype=np.float32)
+        for ent in cells:
+            if not isinstance(ent, dict) or "occupant" not in ent:
+                continue
+            occ = ent.get("occupant")
+            base = int(ent["y"]) * 3 + int(ent["x"])
+            if occ is None:
+                vec[3 * base] = 1.0
+            elif occ == player:
+                vec[3 * base + 1] = 1.0
+            else:
+                vec[3 * base + 2] = 1.0
+        vec[27] = 1.0 if self._engine.get_current_player(state) == player else 0.0
+        step = int(state.get("env", {}).get("round", 0) or 0)
+        vec[29] = min(1.0, step / 50.0)
+        return vec
 
 
 class _MahjongEncoder(GameEncoder):
     """34-tile count / one-hot encoding built from ``get_observation``.
 
     Uses only observation fields and never ``obs['legal']`` (which the
-    adapter leaves empty for the claimer during a claim phase).
+    engine leaves empty for the claimer during a claim phase).
     """
 
-    def __init__(self, adapter: SolverAdapter, players: list[str]):
-        super().__init__(adapter, players)
-        constants = getattr(adapter, "_constants", {})
+    def __init__(self, engine: GameEngine, players: list[str]):
+        super().__init__(engine, players)
+        constants = getattr(engine, "_constants", {})
         tile_ids = constants.get("tile_ids") or []
         seen: list[str] = []
         for t in tile_ids:
@@ -191,9 +211,9 @@ class _MahjongEncoder(GameEncoder):
 class _TexasEncoder(GameEncoder):
     """One-hot card / scalar encoding for heads-up Texas Hold'em."""
 
-    def __init__(self, adapter: SolverAdapter, players: list[str]):
-        super().__init__(adapter, players)
-        constants = getattr(adapter, "_constants", {})
+    def __init__(self, engine: GameEngine, players: list[str]):
+        super().__init__(engine, players)
+        constants = getattr(engine, "_constants", {})
         cards = constants.get("card_ids") or []
         self._cards = list(cards)
         self._card_index = {c: i for i, c in enumerate(self._cards)}
@@ -206,7 +226,7 @@ class _TexasEncoder(GameEncoder):
         return 7 * n_cards + 4 + 3 + 6 + 1 + 4 + 1
 
     def encode_obs(self, state: State, player: str) -> np.ndarray:
-        obs = self._adapter.get_observation(state, player)
+        obs = self._engine.get_observation(state, player)
         n_cards = len(self._cards)
         vec = np.zeros(self.obs_dim, dtype=np.float32)
 
@@ -247,9 +267,9 @@ class _TexasEncoder(GameEncoder):
 class _GenericEncoder(GameEncoder):
     """Fallback: flatten numeric / boolean fields of the obs dict."""
 
-    def __init__(self, adapter: SolverAdapter, players: list[str]):
-        super().__init__(adapter, players)
-        probe = adapter.get_observation(adapter.create_initial_state(), players[0])
+    def __init__(self, engine: GameEngine, players: list[str]):
+        super().__init__(engine, players)
+        probe = engine.get_observation(engine.create_initial_state(), players[0])
         self._fields = [k for k, v in probe.items() if isinstance(v, (int, float, bool))]
 
     @property
@@ -257,5 +277,5 @@ class _GenericEncoder(GameEncoder):
         return len(self._fields)
 
     def encode_obs(self, state: State, player: str) -> np.ndarray:
-        obs = self._adapter.get_observation(state, player)
+        obs = self._engine.get_observation(state, player)
         return np.asarray([float(obs.get(k, 0.0)) for k in self._fields], dtype=np.float32)

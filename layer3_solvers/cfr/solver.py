@@ -18,12 +18,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from layer2_engine.core.state_graph import clone_state
-from layer2_engine.interfaces.solver_adapter import (
-    ActionInstance,
-    ChanceOutcome,
-    SolverAdapter,
-    State,
-)
+from layer2_engine.core.state_graph import ActionInstance, ChanceOutcome, State
+from layer2_engine.core.engine import GameEngine
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 
@@ -39,7 +35,7 @@ class CFRConfig(SolverConfig):
 class CFR(SolverBase):
     """External Sampling MC-CFR with depth-limited search + rollout."""
 
-    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
+    def __init__(self, engine: GameEngine, config: SolverConfig | None = None):
         # Coerce a plain SolverConfig into a CFRConfig so solver-specific
         # defaults apply (passing SolverConfig(seed=...) must not silently
         # drop the CFR parameter defaults).
@@ -47,7 +43,7 @@ class CFR(SolverBase):
             config = CFRConfig()
         elif not isinstance(config, CFRConfig):
             config = CFRConfig(**vars(config))
-        super().__init__(adapter, config)
+        super().__init__(engine, config)
         cfg = self.config
         self.iterations = cfg.iterations
         self.depth_limit = cfg.depth_limit
@@ -58,7 +54,7 @@ class CFR(SolverBase):
         # info_set_key → {'regrets': defaultdict, 'strategy_sum': defaultdict}
         self.info_sets: dict[str, dict] = {}
         # Player list + reach-array index mapping, discovered once from the
-        # adapter's rules (C-01: no hardcoded 'p_black'/'p_white').
+        # engine's rules (C-01: no hardcoded 'p_black'/'p_white').
         self._players: list[str] = self._discover_players()
         self._player_idx: dict[str, int] = {p: i for i, p in enumerate(self._players)}
         # Monotonic iteration counter for CFR+ weighted averaging.  Grows
@@ -77,19 +73,19 @@ class CFR(SolverBase):
         if not strategy:
             return None
         best_key = max(strategy, key=strategy.get)
-        for a in self.adapter.get_legal_actions(state):
+        for a in self.engine.get_legal_actions(state):
             if a.canonical_key == best_key:
                 return a
         return None
 
     def get_strategy(self, state: dict) -> dict[str, float]:
         """Average strategy for the current player at a state."""
-        actions = self.adapter.get_legal_actions(state)
+        actions = self.engine.get_legal_actions(state)
         if not actions:
             return {}
 
-        cp = self.adapter.get_current_player(state)
-        info_key = self.adapter.get_info_set_key(state, cp)
+        cp = self.engine.get_current_player(state)
+        info_key = self.engine.get_info_set_key(state, cp)
         info = self.info_sets.get(info_key)
         keys = [a.canonical_key for a in actions]
 
@@ -125,7 +121,7 @@ class CFR(SolverBase):
     def reset(self) -> None:
         """Discard all learned info sets and the CFR+ iteration count.
 
-        Call between independent training runs (or when the adapter's
+        Call between independent training runs (or when the engine's
         game changes); omitted otherwise for deliberate warm-starting.
         """
         self.info_sets.clear()
@@ -142,7 +138,7 @@ class CFR(SolverBase):
         verbose = kwargs.get("verbose", False)
         iters = episodes if episodes > 0 else self.iterations
         self.reset()
-        state = self.adapter.create_initial_state()
+        state = self.engine.create_initial_state()
         self.solve(state, iterations=iters, verbose=verbose)
 
         # Evaluate win rate vs random (avg_return = (wins − losses)/total)
@@ -173,7 +169,7 @@ class CFR(SolverBase):
         iteration order is hash-dependent across processes).
         """
         players: set[str] = set()
-        rules = getattr(self.adapter, "rules", None) or {}
+        rules = getattr(self.engine, "rules", None) or {}
         for rule in rules.get("utility", []):
             p = rule.get("player")
             if isinstance(p, str):
@@ -194,34 +190,34 @@ class CFR(SolverBase):
         return list(self._players)
 
     def _walk(self, state: dict, updating_player: str, reach: list[float], depth: int) -> float:
-        if self.adapter.is_terminal(state):
-            return self.adapter.get_utility(state, updating_player)
+        if self.engine.is_terminal(state):
+            return self.engine.get_utility(state, updating_player)
         if depth >= self.depth_limit:
             return self._rollout(state, updating_player)
 
-        nt = self.adapter.get_node_type(state)
+        nt = self.engine.get_node_type(state)
 
         if nt == "chance":
-            outcomes = self.adapter.get_chance_outcomes(state)
+            outcomes = self.engine.get_chance_outcomes(state)
             if not outcomes:
                 self._warn_once("chance_no_outcomes", "chance node without outcomes — returning 0.0")
                 return 0.0
             o = self._sample_outcome(outcomes)
             return self._walk(
-                self.adapter.apply_chance(state, o),
+                self.engine.apply_chance(state, o),
                 updating_player,
                 reach,
                 depth + 1,
             )
 
-        current_player = self.adapter.get_current_player(state)
+        current_player = self.engine.get_current_player(state)
         if current_player is None:
             self._warn_once("current_player_none", "player node with no current player — returning 0.0")
             return 0.0
 
-        info_key = self.adapter.get_info_set_key(state, current_player)
+        info_key = self.engine.get_info_set_key(state, current_player)
         info = self._get_info(info_key)
-        actions = self.adapter.get_legal_actions(state)
+        actions = self.engine.get_legal_actions(state)
         if not actions:
             self._warn_once("no_legal_actions", "player node with no legal actions — returning 0.0")
             return 0.0
@@ -238,7 +234,7 @@ class CFR(SolverBase):
                 nr = list(reach)
                 nr[my_idx] *= strategy[k]
                 vals[k] = self._walk(
-                    self.adapter.apply_action(state, a),
+                    self.engine.apply_action(state, a),
                     updating_player,
                     nr,
                     depth + 1,
@@ -265,7 +261,7 @@ class CFR(SolverBase):
             pi = self._player_idx.get(current_player, 0)
             nr[pi] *= strategy[sampled_a.canonical_key]
             return self._walk(
-                self.adapter.apply_action(state, sampled_a),
+                self.engine.apply_action(state, sampled_a),
                 updating_player,
                 nr,
                 depth + 1,
@@ -274,24 +270,24 @@ class CFR(SolverBase):
     def _rollout(self, state: dict, player: str) -> float:
         s = clone_state(state)
         for _ in range(self.rollout_depth):
-            if self.adapter.is_terminal(s):
+            if self.engine.is_terminal(s):
                 break
-            nt = self.adapter.get_node_type(s)
+            nt = self.engine.get_node_type(s)
             if nt == "player":
-                actions = self.adapter.get_legal_actions(s)
+                actions = self.engine.get_legal_actions(s)
                 if not actions:
                     break
-                s = self.adapter.apply_action(s, self._rollout_action(s, actions))
+                s = self.engine.apply_action(s, self._rollout_action(s, actions))
             elif nt == "chance":
-                outcomes = self.adapter.get_chance_outcomes(s)
+                outcomes = self.engine.get_chance_outcomes(s)
                 if not outcomes:
                     break
                 o = self._sample_outcome(outcomes)
-                s = self.adapter.apply_chance(s, o)
+                s = self.engine.apply_chance(s, o)
             else:
                 break
-        if self.adapter.is_terminal(s):
-            return self.adapter.get_utility(s, player)
+        if self.engine.is_terminal(s):
+            return self.engine.get_utility(s, player)
         return self._leaf_heuristic(s, player)
 
     def _warn_once(self, key: str, message: str) -> None:
@@ -308,9 +304,9 @@ class CFR(SolverBase):
         the live strategy instead of uniform random lowers rollout
         variance as training progresses.
         """
-        cp = self.adapter.get_current_player(state)
+        cp = self.engine.get_current_player(state)
         if cp is not None:
-            info = self.info_sets.get(self.adapter.get_info_set_key(state, cp))
+            info = self.info_sets.get(self.engine.get_info_set_key(state, cp))
             if info is not None:
                 strategy = self._regret_matching(info, [a.canonical_key for a in actions])
                 return self.rng.choices(actions, weights=[strategy[a.canonical_key] for a in actions], k=1)[0]
@@ -392,23 +388,23 @@ class CFR(SolverBase):
         # 审查 P2-19: 对手随机动作同样用配置 seed，保证 train() 可复现
         grng = random.Random(getattr(self.config, "seed", None))
         me = self._players[0]
-        while not self.adapter.is_terminal(s):
-            nt = self.adapter.get_node_type(s)
+        while not self.engine.is_terminal(s):
+            nt = self.engine.get_node_type(s)
             if nt == "player":
-                cp = self.adapter.get_current_player(s)
+                cp = self.engine.get_current_player(s)
                 if cp == me:
                     a = self.select_action(s)
                 else:
-                    acts = self.adapter.get_legal_actions(s)
+                    acts = self.engine.get_legal_actions(s)
                     a = grng.choice(acts) if acts else None
                 if a is None:
                     break
-                s = self.adapter.apply_action(s, a)
+                s = self.engine.apply_action(s, a)
             elif nt == "chance":
-                outcomes = self.adapter.get_chance_outcomes(s)
+                outcomes = self.engine.get_chance_outcomes(s)
                 if outcomes:
                     o = self._sample_outcome(outcomes)
-                    s = self.adapter.apply_chance(s, o)
+                    s = self.engine.apply_chance(s, o)
             else:
                 break
         w = s["env"].get("winner")

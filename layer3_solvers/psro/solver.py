@@ -12,11 +12,8 @@ from typing import Optional
 
 import numpy as np
 
-from layer2_engine.interfaces.solver_adapter import (
-    ActionInstance,
-    SolverAdapter,
-    State,
-)
+from layer2_engine.core.state_graph import ActionInstance, State
+from layer2_engine.core.engine import GameEngine
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 from .agent import Agent
@@ -43,13 +40,13 @@ class PSROSolver(SolverBase):
     a Nash equilibrium of the meta-game.
     """
 
-    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None):
-        super().__init__(adapter, config or PSROConfig())
+    def __init__(self, engine: GameEngine, config: SolverConfig | None = None):
+        super().__init__(engine, config or PSROConfig())
         # 审查 P2-23: 全链路种子化（初始池 / chance 采样 / Q 表初始化）
         self._rng = np.random.RandomState(getattr(self.config, "seed", None))
-        self._gym = GymAdapter(adapter, seed=getattr(self.config, "seed", None))
+        self._gym = GymAdapter(engine, seed=getattr(self.config, "seed", None))
 
-        # Get state/action dimensions from the gym adapter
+        # Get state/action dimensions from the gym engine
         obs_dim = self._gym.observation_space.n
         n_actions = self._gym.action_space.n
 
@@ -70,7 +67,7 @@ class PSROSolver(SolverBase):
     def select_action(self, state: State) -> Optional[ActionInstance]:
         """Select action using the Nash mixture policy."""
         if self._nash_mixture is None:
-            legal = self.adapter.get_legal_actions(state)
+            legal = self.engine.get_legal_actions(state)
             return legal[0] if legal else None
 
         # Encode state; mask must come from the SAME state that was passed
@@ -83,7 +80,7 @@ class PSROSolver(SolverBase):
         action_idx = agent.step(obs, amask=mask)
 
         # Convert back to ActionInstance
-        legal = self.adapter.get_legal_actions(state)
+        legal = self.engine.get_legal_actions(state)
         return self._gym._int_to_action(action_idx, legal)
 
     def train(self, episodes: int = 20, **kwargs) -> SolverMetrics:

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from layer1_translator import translate_rules_json
 
+from ...online_learning import LearningManager, LearningStore, OnlineModelStore
 from ..common.http_utils import BodyTooLargeError, read_json_body, send_error_json, send_json
 from .benchmark import SOLVER_OPTIONS, BenchmarkRunner
 from .games import GAMES, PlayError
@@ -33,7 +34,11 @@ PORT = 8770
 
 
 def make_handler(
-    manager: PlayManager, history: MatchHistory, benchmark: BenchmarkRunner, dist_dir: Path = DIST_DIR
+    manager: PlayManager,
+    history: MatchHistory,
+    benchmark: BenchmarkRunner,
+    dist_dir: Path = DIST_DIR,
+    learning: LearningManager | None = None,
 ) -> type:
     """Build a handler class bound to the given platform services.
 
@@ -82,6 +87,12 @@ def make_handler(
                     self._handle_benchmark_list()
                 elif path == "/api/benchmark/status":
                     self._handle_benchmark_status()
+                elif path == "/api/learning/status":
+                    self._handle_learning_status()
+                elif path == "/api/learning/apply":
+                    self._handle_learning_apply()
+                elif path == "/api/learning/config":
+                    self._handle_learning_config()
                 elif path.startswith("/api/"):
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
                 else:
@@ -128,6 +139,10 @@ def make_handler(
                     self._handle_benchmark_start()
                 elif path == "/api/rules/translate":
                     self._handle_rules_translate()
+                elif path == "/api/learning/apply":
+                    self._handle_learning_apply()
+                elif path == "/api/learning/config":
+                    self._handle_learning_config()
                 else:
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
             except BodyTooLargeError as exc:
@@ -239,23 +254,73 @@ def make_handler(
                 },
             )
 
+        # ── Online learning ────────────────────────────────────
+        # 在线学习：捕获在 PlayManager 内进行（learning 钩子包裹求解器
+        # 句柄并记录每步决策）；本组接口只读状态与触发 apply（建表 +
+        # 门禁评估 + 发布），apply 在 HTTP 请求线程内同步执行（默认
+        # 局数/预算较小），失败不破坏既有模型（保留上一版本）。
+
+        def _handle_learning_status(self) -> None:
+            send_json(self, HTTPStatus.OK, {"ok": True, "learning": learning.status_all()})
+
+        def _handle_learning_apply(self) -> None:
+            payload = read_json_body(self)
+            game_id = payload.get("game_id")
+            if game_id:
+                send_json(self, HTTPStatus.OK, {"ok": True, "result": asdict(learning.apply(str(game_id)))})
+                return
+            results = [asdict(learning.apply(item["game_id"])) for item in learning.status_all()]
+            send_json(self, HTTPStatus.OK, {"ok": True, "results": results})
+
+        def _handle_learning_config(self) -> None:
+            payload = read_json_body(self)
+            game_id = str(payload.get("game_id", ""))
+            if game_id not in GAMES:
+                raise PlayError(f"未知游戏: {game_id}")
+            learning.set_enabled(game_id, bool(payload.get("enabled", True)))
+            send_json(self, HTTPStatus.OK, {"ok": True, "learning": learning.status(game_id)})
+
     return PlatformHandler
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Gavis 平台前端服务 (游戏大厅 / 对战 / 评测 / 历史)")
+    parser = argparse.ArgumentParser(description="Gavis 平台前端服务 (游戏大厅 / 对战 / 评测 / 历史 / 在线学习)")
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=PORT)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    parser.add_argument("--learning-min-samples", type=int, default=30, help="apply 的最低人类决策样本数")
+    parser.add_argument("--learning-gate-episodes", type=int, default=20, help="门禁短赛局数")
+    parser.add_argument("--learning-gate-budget", type=int, default=300, help="门禁搜索预算")
+    parser.add_argument(
+        "--learning-interval", type=float, default=0.0, help="后台 auto-apply 间隔秒（0 = 仅手动 apply）"
+    )
     args = parser.parse_args()
 
-    # 求解器由应用层装配（SolverProvider 注入，L4 不 import L3）
-    from demos.solver_provider import default_provider
+    # 求解器由注册表装配（SolverProvider 注入，L4 不 import L3）
+    from train_cli import default_provider
 
     history = MatchHistory(args.data_dir)
-    manager = PlayManager(provider=default_provider, history=history, seed=42)
+    # 在线学习：捕获数据在 data/online_learning/（已 gitignore），
+    # 与用户可见的 data/matches/ 严格分离。
+    learning_dir = args.data_dir.parent / "online_learning"
+    learning_store = LearningStore(learning_dir)
+    model_store = OnlineModelStore(learning_dir / "models")
+    default_provider.online_models = model_store  # 新对局读取已发布模型
+    learning = LearningManager(
+        store=learning_store,
+        model_store=model_store,
+        provider=default_provider,
+        seed=42,
+        min_samples=args.learning_min_samples,
+        gate_episodes=args.learning_gate_episodes,
+        gate_budget=args.learning_gate_budget,
+    )
+    manager = PlayManager(provider=default_provider, history=history, seed=42, learning=learning)
     benchmark = BenchmarkRunner(provider=default_provider, seed=42)
-    handler = make_handler(manager, history, benchmark)
+    if args.learning_interval > 0:
+        learning.start_auto(interval_seconds=args.learning_interval)
+        print(f"在线学习 auto-apply 已启动: 每 {args.learning_interval}s 检查一次")
+    handler = make_handler(manager, history, benchmark, learning=learning)
     httpd = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Gavis 平台服务: http://{args.host}:{args.port}  (API 前缀 /api, 静态目录 {DIST_DIR})")
     try:
@@ -263,6 +328,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if args.learning_interval > 0:
+            learning.stop_auto()
         httpd.server_close()
 
 

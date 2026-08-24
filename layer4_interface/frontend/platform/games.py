@@ -7,6 +7,13 @@ snapshot serialization.  The three play apps under
 specs; the platform owns one generic session implementation
 (``session.py``) driven by them.
 
+Engine creation is generic (v5.2): every spec builds a bare
+``GameEngine`` from the game's rules JSON — variants / player counts are
+declared inside the JSON and selected via constructor args, so no
+per-game adapter class is required.  Per-game *display* helpers that are
+not pure rule evaluation (pot, hand name, seat constants) live in this
+frontend module, which is where game-specific presentation is allowed.
+
 ``PlayError`` lives here (not in ``session.py``) because the spec
 closures raise it at runtime, and ``session.py`` already imports
 ``GAMES`` from this module.
@@ -14,26 +21,21 @@ closures raise it at runtime, and ``session.py`` already imports
 
 from __future__ import annotations
 
-import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Literal
 
 from layer2_engine.core.engine import GameEngine
-from layer2_engine.games.mahjong.mahjong_adapter import MahjongAdapter
-from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
-from layer2_engine.games.texas_holdem.texas_env_adapter import TexasHoldemAdapter
-from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter
+from layer2_engine.core.state_graph import ActionInstance
 
+from ..engine_helpers import engine_from_rules, mahjong_tile_name, resolve_all_chance, texas_hand_name
 from ...solver_provider import SolverHandle, SolverProvider
 
 if TYPE_CHECKING:
     from .session import GameSession
 
 Difficulty = Literal["easy", "normal", "hard"]
-
-RULES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "rules"
 
 
 class PlayError(Exception):
@@ -52,8 +54,8 @@ class GameSpec:
     seat_options: tuple[str, ...]
     seat_label: str  # '颜色' for board games, '座位' for poker
     difficulty_budgets: dict[Difficulty, int]
-    create_engine: Callable[..., SolverAdapter]  # (seed, player_count=2)
-    create_solver: Callable[[SolverProvider, SolverAdapter, int, int], SolverHandle]  # (provider, engine, seed, budget)
+    create_engine: Callable[..., GameEngine]  # (seed, player_count=2)
+    create_solver: Callable[[SolverProvider, GameEngine, int, int], SolverHandle]  # (provider, engine, seed, budget)
     resolve_start: Callable[[GameSession], None]  # start chance nodes (dealing)
     ai_opens: Callable[[GameSession], bool]  # AI moves before the human's first move
     parse_human_action: Callable[[GameSession, dict], ActionInstance]
@@ -67,11 +69,11 @@ class GameSpec:
 # ── Moon Chess ────────────────────────────────────────────────────
 
 
-def _moon_create_engine(seed: int) -> SolverAdapter:
-    return MoonChessAdapter(seed=seed)
+def _moon_create_engine(seed: int) -> GameEngine:
+    return engine_from_rules("moon_chess", seed)
 
 
-def _moon_create_solver(provider: SolverProvider, engine: SolverAdapter, seed: int, budget: int) -> SolverHandle:
+def _moon_create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
     return provider.create_solver("moon_chess", "mcts", engine, seed, budget)
 
 
@@ -143,13 +145,11 @@ def _moon_describe_action(action: ActionInstance) -> str:
 # ── Stochastic Gomoku ─────────────────────────────────────────────
 
 
-def _gomoku_create_engine(seed: int) -> SolverAdapter:
-    with open(RULES_DIR / "stochastic_gomoku.json", "r", encoding="utf-8") as f:
-        rules = json.load(f)
-    return GameEngine(rules, seed=seed)
+def _gomoku_create_engine(seed: int) -> GameEngine:
+    return engine_from_rules("stochastic_gomoku", seed)
 
 
-def _gomoku_create_solver(provider: SolverProvider, engine: SolverAdapter, seed: int, budget: int) -> SolverHandle:
+def _gomoku_create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
     return provider.create_solver("stochastic_gomoku", "mcts", engine, seed, budget)
 
 
@@ -248,18 +248,24 @@ def _gomoku_describe_action(action: ActionInstance) -> str:
 
 # ── Texas Hold'em ─────────────────────────────────────────────────
 
+# Display helpers live here (frontend domain): the *rules* stay the
+# single source of truth — ``best5`` is a rules-declared alias evaluated
+# through the engine's generic ``eval_expr`` (v5.2 engine service).
 
-def _poker_create_engine(seed: int) -> SolverAdapter:
-    return TexasHoldemAdapter(seed=seed)
+# (hand-name display helper lives in ``..engine_helpers``)
 
 
-def _poker_create_solver(provider: SolverProvider, engine: SolverAdapter, seed: int, budget: int) -> SolverHandle:
+def _poker_create_engine(seed: int) -> GameEngine:
+    return engine_from_rules("texas_holdem", seed)
+
+
+def _poker_create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
     return provider.create_solver("texas_holdem", "hybrid", engine, seed, budget)
 
 
 def _poker_resolve_start(session: GameSession) -> None:
     """Deal blinds and hole cards (chance nodes) before play starts."""
-    session.state = session.engine.resolve_chance(session.state)
+    session.state = resolve_all_chance(session.engine, session.state)
 
 
 def _poker_parse_human_action(session: GameSession, payload: dict) -> ActionInstance:
@@ -279,7 +285,7 @@ def _poker_parse_human_action(session: GameSession, payload: dict) -> ActionInst
 
 def _poker_apply_human(session: GameSession, action: ActionInstance) -> None:
     session.state = session.engine.apply_action(session.state, action)
-    session.state = session.engine.resolve_chance(session.state)
+    session.state = resolve_all_chance(session.engine, session.state)
 
 
 def _poker_run_ai(session: GameSession, on_ai_action: Callable[[ActionInstance], None] | None = None) -> None:
@@ -292,7 +298,7 @@ def _poker_run_ai(session: GameSession, on_ai_action: Callable[[ActionInstance],
         if action is None:
             break
         session.state = session.engine.apply_action(session.state, action)
-        session.state = session.engine.resolve_chance(session.state)
+        session.state = resolve_all_chance(session.engine, session.state)
         session.last_ai_info["action"] = action.canonical_key
         if on_ai_action is not None:
             on_ai_action(action)
@@ -314,7 +320,7 @@ def _poker_snapshot(session: GameSession) -> dict:
 
     def _hand_name(pid: str) -> str | None:
         cards = [*_cards(pid), *arrs.get("community", [])]
-        return session.engine.hand_name(cards) if over else None
+        return texas_hand_name(session.engine, cards) if over else None
 
     return {
         "game_id": session.game_id,
@@ -357,14 +363,16 @@ def _poker_describe_action(action: ActionInstance) -> str:
 # ── Mahjong (guangdong / hongzhong / blood) ───────────────────────
 
 
-def _make_mahjong_engine(variant: str) -> Callable[..., SolverAdapter]:
-    def _create(seed: int, player_count: int = 2) -> SolverAdapter:
-        return MahjongAdapter(variant=variant, player_count=player_count, seed=seed)
+def _make_mahjong_engine(variant: str) -> Callable[..., GameEngine]:
+    def _create(seed: int, player_count: int = 2) -> GameEngine:
+        # Variants and player counts are declared in the JSON's
+        # ``variants`` section (v5.2); the engine selects them as pure data.
+        return engine_from_rules("mahjong", seed, variant=variant, player_count=player_count)
 
     return _create
 
 
-def _mahjong_create_solver(provider: SolverProvider, engine: SolverAdapter, seed: int, budget: int) -> SolverHandle:
+def _mahjong_create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
     return provider.create_solver("mahjong", "mahjong", engine, seed, budget)
 
 
@@ -443,7 +451,7 @@ def _mahjong_snapshot(session: GameSession) -> dict:
         "over": over,
         "winner": session.winner,
         # During a claim the effective actor is the queue head, not the
-        # discarder — mirror MahjongAdapter.get_current_player.
+        # During a claim the effective actor is the queue head.
         "turn": ((env.get("claim_queue") or [None])[int(env.get("claim_index", 0))])
         if env.get("phase") == "claim"
         else session.current_player,
@@ -473,22 +481,22 @@ def _mahjong_snapshot(session: GameSession) -> dict:
 
 def _mahjong_describe_action(action: ActionInstance) -> str:
     if action.template_id == "discard":
-        return f"打 {MahjongAdapter.tile_name(action.params['tile'])}"
+        return f"打 {mahjong_tile_name(action.params['tile'])}"
     if action.template_id == "win_self":
         return "自摸"
     if action.template_id == "claim_win":
         return "荣和"
     if action.template_id == "claim_peng":
-        return f"碰 {MahjongAdapter.tile_name(action.params['tile'])}"
+        return f"碰 {mahjong_tile_name(action.params['tile'])}"
     if action.template_id == "claim_gang":
-        return f"明杠 {MahjongAdapter.tile_name(action.params['tile'])}"
+        return f"明杠 {mahjong_tile_name(action.params['tile'])}"
     if action.template_id == "claim_chi":
         tiles = action.params.get("tiles", [])
-        return "吃 " + "".join(MahjongAdapter.tile_name(t) for t in tiles)
+        return "吃 " + "".join(mahjong_tile_name(t) for t in tiles)
     if action.template_id == "gang_concealed":
-        return f"暗杠 {MahjongAdapter.tile_name(action.params['tile'])}"
+        return f"暗杠 {mahjong_tile_name(action.params['tile'])}"
     if action.template_id == "gang_added":
-        return f"加杠 {MahjongAdapter.tile_name(action.params['tile'])}"
+        return f"加杠 {mahjong_tile_name(action.params['tile'])}"
     if action.template_id == "claim_pass":
         return "过"
     return action.canonical_key
@@ -551,7 +559,7 @@ GAMES: dict[str, GameSpec] = {
         description="双人德州扑克：翻前/翻牌/转牌/河牌四轮下注，AI 使用混合求解器。",
         kind="poker",
         board_size=None,
-        seat_options=(TexasHoldemAdapter.PLAYER_SB, TexasHoldemAdapter.PLAYER_BB),
+        seat_options=("p_sb", "p_bb"),  # declared in rules players
         seat_label="座位",
         difficulty_budgets={"easy": 150, "normal": 500, "hard": 1200},
         create_engine=_poker_create_engine,

@@ -1,10 +1,11 @@
 """Game session management for the Moon Chess play app.
 
-Holds a ``game_id → GameSession`` registry; each session owns a
-``MoonChessAdapter`` engine and a solver handle.  The solver is never
-instantiated here — Layer 4 receives a ``SolverProvider`` (assembled by
-the app layer, ``demos/solver_provider.py``) and asks it for a handle,
-so this module contains no Layer 3 reference.
+Holds a ``game_id → GameSession`` registry; each session owns a bare
+``GameEngine`` (v5.2 — built from ``rules/moon_chess.json``, no per-game
+adapter) and a solver handle.  The solver is never instantiated here —
+Layer 4 receives a ``SolverProvider`` (assembled by the app layer,
+``train-cli/games.py``) and asks it for a handle, so this module
+contains no Layer 3 reference.
 """
 
 from __future__ import annotations
@@ -14,9 +15,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from layer2_engine.games.moon_chess import MoonChessAdapter
+from layer2_engine.core.engine import GameEngine
 
 from ...solver_provider import SolverHandle, SolverProvider
+from ..engine_helpers import engine_from_rules
 
 PlayerColor = Literal["p_black", "p_white"]
 Difficulty = Literal["easy", "normal", "hard"]
@@ -47,7 +49,7 @@ class GameSession:
     game_id: str
     player_color: PlayerColor
     difficulty: Difficulty
-    engine: MoonChessAdapter
+    engine: GameEngine
     solver: SolverHandle
     state: dict = field(init=False)
     last_ai_move: int | None = None
@@ -168,7 +170,7 @@ class PlayManager:
             raise PlayError(f"unknown difficulty: {difficulty}")
 
         game_id = uuid.uuid4().hex[:8]
-        engine = MoonChessAdapter(seed=self._seed)
+        engine = engine_from_rules("moon_chess", self._seed)
         solver = self._provider.create_solver("moon_chess", "mcts", engine, self._seed, DIFFICULTY_BUDGETS[difficulty])
 
         session = GameSession(

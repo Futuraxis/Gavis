@@ -19,8 +19,7 @@ import pytest
 from layer2_engine.core.engine import _MAX_ACTION_COMBINATIONS, GameEngine, _cartesian_product
 from layer2_engine.core.expr_eval import ExprEvaluator
 from layer2_engine.core.rules_compiler import RulesCompiler, UnsupportedShapeError, _Gen
-from layer2_engine.core.state_graph import _eval_length_expr
-from layer2_engine.interfaces.solver_adapter import SolverAdapter
+from layer2_engine.core.state_graph import ActionInstance, _eval_length_expr
 
 RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
 
@@ -103,9 +102,7 @@ def test_trigger_cascade_processes_nested_events():
     engine = GameEngine(rules, seed=1)
     state = engine.apply_action(
         engine.create_initial_state(),
-        __import__("layer2_engine.interfaces.solver_adapter", fromlist=["ActionInstance"]).ActionInstance(
-            "go", "action", "p0", {}, "go"
-        ),
+        ActionInstance("go", "action", "p0", {}, "go"),
     )
     # a → trigger → emit b → trigger → append；级联事件被处理而非丢弃
     assert state["_arrays"]["log"] == ["b-seen"]
@@ -130,8 +127,6 @@ def test_branch_missing_then_no_crash():
     ]
     rules["effectors"] = {"br": {"ops": [{"op": "branch", "if": {"const": True}}]}}
     engine = GameEngine(rules, seed=1)
-    from layer2_engine.interfaces.solver_adapter import ActionInstance
-
     state = engine.apply_action(engine.create_initial_state(), ActionInstance("go", "action", "p0", {}, "go"))
     assert state["env"]["phase"] == "p1"  # 分支无操作、不崩溃
 
@@ -160,8 +155,6 @@ def test_inc_remove_foreach_none_guards():
         }
     }
     engine = GameEngine(rules, seed=1)
-    from layer2_engine.interfaces.solver_adapter import ActionInstance
-
     state = engine.create_initial_state()
     state["_arrays"]["hand"] = [1, 2, 1]
     state = engine.apply_action(state, ActionInstance("go", "action", "p0", {}, "go"))
@@ -207,8 +200,6 @@ def test_trim_by_key_non_square_cols():
         }
     }
     engine = GameEngine(rules, seed=1)
-    from layer2_engine.interfaces.solver_adapter import ActionInstance
-
     state = engine.create_initial_state()
     state["_arrays"]["board"] = [1] * 12
     state["_arrays"]["order"] = [
@@ -296,13 +287,13 @@ def test_unknown_effector_logs_warning(caplog):
 # ── 27: sample_chance 进入 Protocol（可选，带默认抛错实现） ─────────────
 
 
-def test_sample_chance_optional_in_protocol():
-    assert hasattr(SolverAdapter, "sample_chance")
-    with pytest.raises(NotImplementedError):
-        SolverAdapter.sample_chance(None, {})  # 默认实现为占位
-    # 引擎实现可用
+def test_sample_chance_engine_method():
+    """sample_chance 是引擎通用方法（v5.2 无 SolverAdapter Protocol）。"""
     engine = _load("texas_holdem")
     assert callable(engine.sample_chance)
+    state = engine.create_initial_state()
+    outcome, new_state = engine.sample_chance(state)
+    assert outcome.probability > 0
 
 
 # ── 28: 笛卡尔积规模上限 ──────────────────────────────────────────────

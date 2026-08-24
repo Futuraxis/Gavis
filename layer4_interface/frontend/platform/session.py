@@ -13,8 +13,10 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from layer2_engine.interfaces.solver_adapter import ActionInstance, SolverAdapter
+from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import ActionInstance
 
+from ...online_learning.recorder import LearningHooks, TrajectoryRecorder
 from ...solver_provider import SolverHandle, SolverProvider
 from .games import GAMES, GameSpec, PlayError
 from .history import MatchHistory
@@ -32,13 +34,16 @@ class GameSession:
     spec: GameSpec
     player_pid: str
     difficulty: str
-    engine: SolverAdapter
+    engine: GameEngine
     solver: SolverHandle
     state: dict = field(init=False)
     last_ai_info: dict = field(default_factory=dict)  # {'move'|'vanish'|'action': ...} per game
     log: list[dict] = field(default_factory=list)  # move entries for history/replay
     started_at: str = field(default_factory=_now_iso)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    #: Online-learning capture hook (set by ``PlayManager`` when learning
+    #: is enabled); records every human/AI decision at adapter level.
+    recorder: TrajectoryRecorder | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.state = self.engine.create_initial_state()
@@ -66,6 +71,10 @@ class GameSession:
         if self.over:
             raise PlayError("本局已结束")
         action = self.spec.parse_human_action(self, payload)
+        if self.recorder is not None:
+            # ``self.state`` is still the pre-move snapshot here — engine
+            # applies return new states, so the reference is safe.
+            self.recorder.record_human(self, action)
         self.spec.apply_human(self, action)
         self.log.append(self._log_entry("human", action))
         self.spec.run_ai(self, self._record_ai_action)
@@ -100,11 +109,13 @@ class PlayManager:
         history: MatchHistory | None = None,
         seed: int = 42,
         max_sessions: int = 128,
+        learning: LearningHooks | None = None,
     ) -> None:
         self._provider = provider
         self._history = history
         self._seed = seed
         self._max_sessions = max_sessions
+        self._learning = learning
         self._sessions: dict[str, GameSession] = {}
         self._lock = threading.Lock()
 
@@ -136,6 +147,11 @@ class PlayManager:
             engine=engine,
             solver=solver,
         )
+        if self._learning is not None:
+            # Wrap the solver in a recording handle and attach a
+            # per-match recorder; every AI decision (incl. multi-action
+            # loops) is captured with zero GameSpec changes.
+            session.solver = self._learning.wrap_handle(session, session.solver)
         spec.resolve_start(session)
         if spec.ai_opens(session):
             spec.run_ai(session, session._record_ai_action)
@@ -164,6 +180,8 @@ class PlayManager:
             if session.over:
                 if self._history is not None:
                     self._history.record(self._build_record(session))
+                if self._learning is not None:
+                    self._learning.on_finished(session)
                 self.remove(game_id)
         return snapshot
 

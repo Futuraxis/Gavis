@@ -15,7 +15,7 @@ from typing import Generator
 
 import pytest
 
-from demos.solver_provider import default_provider
+from train_cli import default_provider
 from layer4_interface.frontend.platform.benchmark import BenchmarkRunner
 from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.server import make_handler

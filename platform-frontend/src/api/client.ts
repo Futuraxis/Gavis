@@ -44,3 +44,20 @@ export function apiPost<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   })
 }
+
+// ── 在线学习 API ────────────────────────────────────────────────
+
+export function getLearningStatus(): Promise<{ learning: import('../types').LearningStatus[] }> {
+  return apiGet<{ learning: import('../types').LearningStatus[] }>('/learning/status')
+}
+
+export function applyLearning(gameId?: string): Promise<{ result: import('../types').LearningApplyResult } | { results: import('../types').LearningApplyResult[] }> {
+  return apiPost<{ result: import('../types').LearningApplyResult } | { results: import('../types').LearningApplyResult[] }>(
+    '/learning/apply',
+    gameId ? { game_id: gameId } : {},
+  )
+}
+
+export function setLearningConfig(gameId: string, enabled: boolean): Promise<{ learning: import('../types').LearningStatus }> {
+  return apiPost<{ learning: import('../types').LearningStatus }>('/learning/config', { game_id: gameId, enabled })
+}

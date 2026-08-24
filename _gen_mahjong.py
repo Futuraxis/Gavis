@@ -1,9 +1,12 @@
 """Generate rules/mahjong.json — one JSON serving all variants.
 
-Variants (guangdong/hongzhong/blood) × player counts (2/4) are injected
-by MahjongAdapter into ``constants`` (variant, player_count, player_ids,
-deal_target) at engine construction.  Everything else is static and
-self-contained: zero builtins, pure expression aliases (v5.1).
+Variants (guangdong/hongzhong/blood) × player counts (2/4) are declared
+in the JSON's ``variants`` section (v5.2, self-describing): the engine
+only *selects* a declared option (variant / player_count) and evaluates
+the declared formulas (``player_ids``, ``deal_target``).  Nothing is
+injected at construction time and no adapter is required.  Everything
+else is static and self-contained: zero builtins, pure expression
+aliases (v5.1).
 """
 
 from __future__ import annotations
@@ -595,6 +598,10 @@ def _effectors():
                     ),
                 ),
                 _set_env("claim_index", C(0)),
+                # Claim-phase actor is the queue head — ``env.turn`` is set
+                # to CLAIM_ACTOR so the base engine's ``get_current_player``
+                # needs no adapter override (v5.2 declarative rotation).
+                _set_env("turn", CLAIM_ACTOR),
                 _set_env("last_action", C("discard")),
                 _set_env("phase", C("claim")),
             ],
@@ -614,6 +621,9 @@ def _effectors():
                     ],
                     [
                         _set_env("last_action", C("pass")),
+                        # Next responder becomes the acting player (the queue
+                        # head), keeping ``env.turn`` aligned with CLAIM_ACTOR.
+                        _set_env("turn", CLAIM_ACTOR),
                     ],
                 ),
             ],
@@ -965,20 +975,36 @@ def build() -> dict:
     return {
         "meta": {
             "gameId": "mahjong",
-            "version": "5.1.0",
+            "version": "5.2.0",
             "description": (
                 "Mahjong — guangdong jihu / hongzhong wild / blood "
-                "variants × 2-4 players. Variant and player_count are "
-                "injected into constants by MahjongAdapter. "
+                "variants × 2-4 players. The JSON's ``variants`` section "
+                "declares every option (v5.2); the engine selects a variant "
+                "and player count without any adapter injection. "
                 "Pure-expression aliases (zero builtins)."
             ),
         },
         "players": PLAYERS4,
-        "constants": {
+        "variants": {
             "variant": "guangdong",
             "player_count": 2,
-            "deal_target": 27,  # 13×N + 1 (injected per player_count)
-            "player_ids": ["p0", "p1"],
+            "options": {
+                "guangdong": {},
+                "hongzhong": {"constants": {"wild_tile": "z5"}},
+                "blood": {},
+            },
+            "player_ids": {
+                "map": {
+                    "list": {"range": {"from": {"const": 0}, "to": {"var": "$player_count"}}},
+                    "as": "$node",
+                    "expr": {"template": "p{$node}"},
+                }
+            },
+            "deal_target": {"add": [{"mul": [{"const": 13}, {"var": "$player_count"}]}, {"const": 1}]},
+            "trim_players": True,
+            "trim_utility": True,
+        },
+        "constants": {
             "tile_ids": TILE_IDS,
             "suit_of": SUIT_OF,
             "chi_runs": CHI_RUNS,

@@ -7,14 +7,29 @@ LLM prompt/solver hygiene (llm.md).
 
 from __future__ import annotations
 
+import json
 import random
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import clone_state
-from layer2_engine.interfaces.solver_adapter import ActionInstance
+from layer2_engine.core.state_graph import ActionInstance
 from layer3_solvers.cfr import CFR, CFRConfig
+
+RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
+
+
+def _moon(seed: int = 1) -> GameEngine:
+    with open(RULES_DIR / "moon_chess.json", "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed)
+
+
+def _mahjong_hz(seed: int = 42) -> GameEngine:
+    with open(RULES_DIR / "mahjong.json", "r", encoding="utf-8") as f:
+        return GameEngine(json.load(f), seed=seed, variant="hongzhong", player_count=2)
 
 try:
     import torch  # noqa: F401 — 仅探测可用性
@@ -101,12 +116,11 @@ def test_cfr_train_avg_return_is_win_minus_loss():
 
 @pytest.mark.skipif(not _HAS_TORCH, reason="requires torch (MARL)")
 def test_run_episode_truncation_marks_all_done():
-    from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
     from layer3_solvers.marl.action_space import ActionSpace
     from layer3_solvers.marl.encoders import GameEncoder
     from layer3_solvers.marl.env import run_episode
 
-    adapter = MoonChessAdapter(seed=1)
+    adapter = _moon(seed=1)
     players = ["p_black", "p_white"]
     encoder = GameEncoder.build_from_adapter(adapter, players)
     action_space = ActionSpace.build_from_adapter(adapter)
@@ -133,11 +147,10 @@ def test_mahjong_encoder_variant_tile_count():
     last_discard 块 [5n,6n) 完全重叠（同槽位互相覆盖），且对任意非 34
     的变种 tile 集都会错位/越界。新布局按 n 划块，测试钉住该布局。
     """
-    from layer2_engine.games.mahjong.mahjong_adapter import MahjongAdapter
     from layer3_solvers.marl.encoders import GameEncoder
     from layer3_solvers.marl.env import resolve_players
 
-    adapter = MahjongAdapter(variant="hongzhong", player_count=2, seed=42)
+    adapter = _mahjong_hz(seed=42)
     players = resolve_players(adapter)
     encoder = GameEncoder.build_from_adapter(adapter, players)
     n = len(encoder._tiles)  # noqa: SLF001
@@ -150,7 +163,9 @@ def test_mahjong_encoder_variant_tile_count():
     vec = encoder.encode_obs(state, players[0])
     assert vec.shape == (dim,)
     assert np.all(vec[6 * n : 6 * n + n] == 0.0)  # 开局无 last_drawn
-    assert np.all(vec[7 * n + 7 : 7 * n + 7 + len(players)] == 0.0)  # 开局无人行动，turn 一热全 0
+    # 开局 turn = 庄家 p0（规则 env.turn initial="p0"），故 turn 一热首槽置位
+    assert vec[7 * n + 7] == 1.0
+    assert np.all(vec[7 * n + 8 : 7 * n + 7 + len(players)] == 0.0)
     # 打出一张后：last_discard 置位在 [5n,6n)，last_drawn 不置位
     env = state.get("env", {})
     env["last_discard"] = encoder._tiles[0]  # noqa: SLF001
