@@ -86,6 +86,7 @@ def gamescape(
     Ne: int = 50,  # noqa: N803 — preserved for API compatibility
     previous: np.ndarray | None = None,
     num_workers: int | None = None,
+    verbose: bool = True,
 ) -> np.ndarray:
     """Compute or incrementally expand the policy payoff matrix.
 
@@ -109,6 +110,9 @@ def gamescape(
         so only match-ups involving newly added policies are evaluated.
     num_workers : int, optional
         Parallel evaluation threads (None/0 = auto, 1 = serial).
+    verbose : bool, optional
+        Show tqdm progress bars (default True for library callers; the
+        training CLI passes ``--verbose`` and otherwise silences them).
 
     Returns
     -------
@@ -150,12 +154,15 @@ def gamescape(
                     pool.map(lambda ij: eval_pair(env_factory(), ij), pairs),
                     total=len(pairs),
                     desc="Gamescape",
-                    position=1,
+                    position=0,
                     leave=False,
+                    disable=not verbose,
                 )
             )
     else:
-        payoffs = [eval_pair(env, ij) for ij in tqdm(pairs, desc="Gamescape", position=1, leave=False)]
+        payoffs = [
+            eval_pair(env, ij) for ij in tqdm(pairs, desc="Gamescape", position=0, leave=False, disable=not verbose)
+        ]
 
     for (i, j), payoff in zip(pairs, payoffs):
         payoff_matrix[i, j] = payoff
@@ -170,6 +177,7 @@ def exploitability(
     pi: list[np.ndarray],
     Ne: int = 50,  # noqa: N803 — preserved for API compatibility
     num_workers: int | None = None,
+    verbose: bool = True,
 ) -> float:
     """Compute the exploitability of a Nash mixture.
 
@@ -194,6 +202,9 @@ def exploitability(
         Episodes per exploitability estimate.
     num_workers : int, optional
         Parallel evaluation threads (None/0 = auto, 1 = serial).
+    verbose : bool, optional
+        Show tqdm progress bars (default True for library callers; the
+        training CLI passes ``--verbose`` and otherwise silences them).
 
     Returns
     -------
@@ -212,14 +223,15 @@ def exploitability(
                     ),
                     total=len(pi),
                     desc="Exploitability",
-                    position=1,
+                    position=0,
                     leave=False,
+                    disable=not verbose,
                 )
             )
     else:
         nash_agent = Agent(nash_pi)
         values = [
             estimate_reward(env, Ne, nash_agent, Agent(pi[i]))
-            for i in tqdm(range(len(pi)), desc="Exploitability", position=1, leave=False)
+            for i in tqdm(range(len(pi)), desc="Exploitability", position=0, leave=False, disable=not verbose)
         ]
     return -sum(values) / len(pi)

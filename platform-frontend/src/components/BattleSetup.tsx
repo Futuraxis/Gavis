@@ -1,11 +1,21 @@
 import { useState } from 'react'
-import type { GameInfo } from '../types'
+import type { GameInfo, HintLevel, Pacing, PersonaKey } from '../types'
+
+export interface BattleConfig {
+  playerPid: string
+  difficulty: string
+  playerCount: number
+  persona: PersonaKey
+  hintLevel: HintLevel
+  pacing: Pacing
+  adaptive: boolean
+}
 
 interface Props {
   game: GameInfo
   busy: boolean
   error: string | null
-  onStart: (playerPid: string, difficulty: string, playerCount: number) => void
+  onStart: (config: BattleConfig) => void
 }
 
 const SEAT_LABELS: Record<string, string> = {
@@ -26,20 +36,75 @@ const DIFFICULTY_LABELS: Record<string, string> = {
   hard: '困难 😈',
 }
 
+const PERSONA_OPTIONS: { value: PersonaKey; label: string }[] = [
+  { value: 'gentle', label: '温柔陪伴 🌸' },
+  { value: 'teacher', label: '认真教学 📖' },
+  { value: 'banter', label: '轻松吐槽 😄' },
+  { value: 'cold', label: '高冷竞技 🗿' },
+]
+
+const HINT_OPTIONS: { value: HintLevel; label: string }[] = [
+  { value: 'off', label: '关闭' },
+  { value: 'direction', label: '方向提示' },
+  { value: 'specific', label: '具体建议' },
+  { value: 'demo', label: '演示' },
+]
+
+const PACING_OPTIONS: { value: Pacing; label: string }[] = [
+  { value: 'fast', label: '快棋 ⚡' },
+  { value: 'standard', label: '标准 🕐' },
+  { value: 'slow', label: '慢棋 🐢' },
+]
+
+const RULES_SUMMARY: Record<string, string> = {
+  moon_chess: '3×3 棋盘，双方轮流落子，三子连珠即胜；棋盘放满后最旧的棋子会被挤出。',
+  stochastic_gomoku: '9×9 棋盘，五子连珠即胜；每次落子后，棋子有 50% 概率被随机抹去。',
+  texas_holdem: '双人德州扑克：每人两张底牌，依次翻牌/转牌/河牌，比五张最大牌型。',
+  mahjong_guangdong: '二人/四人广东鸡胡：吃碰杠、自摸荣和、清一色等番种。',
+  mahjong_hongzhong: '红中万能牌：红中可代任意牌凑搭子，其余规则同鸡胡。',
+  mahjong_blood: '血战到底：胡牌后不退出，剩余玩家继续，直到两家胡或牌墙摸空。',
+}
+
 export default function BattleSetup({ game, busy, error, onStart }: Props) {
   const [playerPid, setPlayerPid] = useState('random')
   const [difficulty, setDifficulty] = useState('normal')
-  const [playerCount, setPlayerCount] = useState(game.player_counts.includes(4) ? 2 : 2)
+  const [playerCount, setPlayerCount] = useState(game.player_counts[0] ?? 2)
+  const [persona, setPersona] = useState<PersonaKey>('gentle')
+  const [hintLevel, setHintLevel] = useState<HintLevel>('off')
+  const [pacing, setPacing] = useState<Pacing>('standard')
+  const [adaptive, setAdaptive] = useState(true)
+  const [showRules, setShowRules] = useState(false)
+
+  // 麻将 2 人只显 p0/p1（4 人显 p0-p3）——2p 选到 p2/p3 会造成死局。
+  const seatOptions = game.seat_options.slice(0, playerCount)
+
+  function changePlayerCount(n: number) {
+    setPlayerCount(n)
+    const valid = game.seat_options.slice(0, n)
+    if (playerPid !== 'random' && !valid.includes(playerPid)) setPlayerPid('random')
+  }
 
   return (
-    <div className="panel" style={{ maxWidth: 520 }}>
+    <div className="panel" style={{ maxWidth: 560 }}>
       <h1 className="page-title">{game.display_name}</h1>
       <p className="page-sub">{game.description}</p>
       {error && <div className="error-banner">{error}</div>}
+
+      <div className="form-row">
+        <button className="btn" onClick={() => setShowRules((v) => !v)}>
+          {showRules ? '收起规则速览' : '📜 规则速览'}
+        </button>
+      </div>
+      {showRules && (
+        <div className="rules-panel">
+          {RULES_SUMMARY[game.game_id] ?? `${game.display_name} 的规则摘要（后端尚未回填，此处为占位文本）。`}
+        </div>
+      )}
+
       {game.player_counts.length > 1 && (
         <div className="form-row">
           <label>人数:</label>
-          <select value={playerCount} onChange={(e) => setPlayerCount(Number(e.target.value))}>
+          <select value={playerCount} onChange={(e) => changePlayerCount(Number(e.target.value))}>
             {game.player_counts.map((n) => (
               <option key={n} value={n}>
                 {n} 人
@@ -52,7 +117,7 @@ export default function BattleSetup({ game, busy, error, onStart }: Props) {
         <label>{game.seat_label}:</label>
         <select value={playerPid} onChange={(e) => setPlayerPid(e.target.value)}>
           <option value="random">{SEAT_LABELS.random}</option>
-          {game.seat_options.map((pid) => (
+          {seatOptions.map((pid) => (
             <option key={pid} value={pid}>
               {SEAT_LABELS[pid] ?? pid}
             </option>
@@ -69,7 +134,48 @@ export default function BattleSetup({ game, busy, error, onStart }: Props) {
           ))}
         </select>
       </div>
-      <button className="btn btn-primary" disabled={busy} onClick={() => onStart(playerPid, difficulty, playerCount)}>
+      <div className="form-row">
+        <label>性格:</label>
+        <select value={persona} onChange={(e) => setPersona(e.target.value as PersonaKey)}>
+          {PERSONA_OPTIONS.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="form-row">
+        <label>提示:</label>
+        <select value={hintLevel} onChange={(e) => setHintLevel(e.target.value as HintLevel)}>
+          {HINT_OPTIONS.map((h) => (
+            <option key={h.value} value={h.value}>
+              {h.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="form-row">
+        <label>节奏:</label>
+        <select value={pacing} onChange={(e) => setPacing(e.target.value as Pacing)}>
+          {PACING_OPTIONS.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="form-row">
+        <label>自适应难度:</label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" checked={adaptive} onChange={(e) => setAdaptive(e.target.checked)} />
+          <span>{adaptive ? '开启' : '关闭'}</span>
+        </label>
+      </div>
+      <button
+        className="btn btn-primary"
+        disabled={busy}
+        onClick={() => onStart({ playerPid, difficulty, playerCount, persona, hintLevel, pacing, adaptive })}
+      >
         {busy ? '加载中…' : '开始对局'}
       </button>
     </div>

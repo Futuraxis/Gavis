@@ -10,10 +10,10 @@ import pytest
 import layer2_engine
 from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import (
+    ActionInstance,
     clone_state,
     create_initial_state,
 )
-from layer2_engine.core.state_graph import ActionInstance
 
 RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
 

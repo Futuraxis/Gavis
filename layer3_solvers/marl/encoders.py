@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from layer2_engine.core.state_graph import State
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import State
 
 TILE_IDS = [f"{s}{r}" for s in "mps" for r in range(1, 10)] + [f"z{r}" for r in range(1, 8)]
 MAHJONG_PHASES = ("deal", "action", "claim", "draw", "gang_draw", "game_over")

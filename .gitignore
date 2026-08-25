@@ -8,3 +8,5 @@ platform-frontend/node_modules/
 platform-frontend/dist/
 # 本地文档
 .docs
+# 临时实验/探针脚本与产物
+.scratch

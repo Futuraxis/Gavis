@@ -1,8 +1,20 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { apiGet, apiPost } from '../api/client'
-import type { BoardSnapshot, GameInfo, MahjongSnapshot, PokerSnapshot, Snapshot } from '../types'
-import BattleSetup from '../components/BattleSetup'
+import { agentSay, apiGet, apiPost, matchHint } from '../api/client'
+import { getStoredMuted, setStoredMuted } from '../settings'
+import type {
+  BoardSnapshot,
+  ChatMessage,
+  GameInfo,
+  MahjongSnapshot,
+  Mood,
+  PersonaKey,
+  PokerSnapshot,
+  Snapshot,
+} from '../types'
+import AgentAvatar from '../components/AgentAvatar'
+import BattleSetup, { type BattleConfig } from '../components/BattleSetup'
+import ChatPanel from '../components/ChatPanel'
 import ResultOverlay from '../components/ResultOverlay'
 import VanishToast from '../components/VanishToast'
 import GomokuBoard from '../components/boards/GomokuBoard'
@@ -15,6 +27,19 @@ const SEAT_SHORT: Record<string, string> = {
   p0: '庄家', p1: '下家', p2: '对家', p3: '上家',
 }
 const DIFFICULTY_SHORT: Record<string, string> = { easy: '简单', normal: '普通', hard: '困难' }
+const PERSONA_NAMES: Record<PersonaKey, string> = {
+  gentle: '温柔陪伴', teacher: '认真教学', banter: '轻松吐槽', cold: '高冷竞技',
+}
+const PERSONA_GREETINGS: Record<PersonaKey, string> = {
+  gentle: '你好呀，我们开始吧～放轻松，玩得开心最重要。',
+  teacher: '我们开始吧。有不懂的随时问我，我会讲解每一步。',
+  banter: '来啦？这局可别手下留情，我已经准备好整活了。',
+  cold: '轮到你了。',
+}
+
+function uid(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+}
 
 export default function BattlePage() {
   const { gameId = '' } = useParams()
@@ -24,10 +49,14 @@ export default function BattlePage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [stepKey, setStepKey] = useState(0)
+  const [persona, setPersona] = useState<PersonaKey>('gentle')
+  const [chat, setChat] = useState<ChatMessage[]>([])
+  const [muted, setMuted] = useState<boolean>(() => getStoredMuted())
   const navigate = useNavigate()
 
   const game = games.find((g) => g.game_id === gameId)
   const activeId = searchParams.get('game')
+  const lastAgentMood: Mood | undefined = [...chat].reverse().find((m) => m.role === 'agent')?.mood
 
   useEffect(() => {
     apiGet<{ games: GameInfo[] }>('/games')
@@ -46,18 +75,37 @@ export default function BattlePage() {
       })
   }, [activeId, session, setSearchParams])
 
-  async function start(playerPid: string, difficulty: string, playerCount: number) {
+  function pushAgent(text: string, mood: Mood) {
+    setChat((prev) => [...prev, { id: uid(), role: 'agent', text, mood, ts: Date.now() }])
+  }
+
+  function pushPlayer(text: string) {
+    setChat((prev) => [...prev, { id: uid(), role: 'player', text, ts: Date.now() }])
+  }
+
+  function greet(p: PersonaKey) {
+    pushAgent(PERSONA_GREETINGS[p], 'happy')
+  }
+
+  async function start(config: BattleConfig) {
     setBusy(true)
     setError(null)
     try {
       const data = await apiPost<{ session: Snapshot }>('/match/start', {
         game_id: gameId,
-        player_pid: playerPid,
-        difficulty: difficulty,
-        player_count: playerCount,
+        player_pid: config.playerPid,
+        difficulty: config.difficulty,
+        player_count: config.playerCount,
+        persona: config.persona,
+        hint_level: config.hintLevel,
+        pacing: config.pacing,
+        adaptive: config.adaptive,
       })
       setSession(data.session)
+      setPersona(config.persona)
+      setChat([])
       setSearchParams({ game: data.session.game_id })
+      greet(config.persona)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -87,6 +135,39 @@ export default function BattlePage() {
     setSession(null)
     setSearchParams({})
     setError(null)
+    setChat([])
+  }
+
+  function toggleMute() {
+    const next = !muted
+    setMuted(next)
+    setStoredMuted(next)
+  }
+
+  async function handleSend(text: string) {
+    pushPlayer(text)
+    try {
+      const data = await agentSay('chat', { message: text })
+      pushAgent(data.text, data.mood)
+    } catch {
+      pushAgent('我在的，你继续说。', 'neutral')
+    }
+  }
+
+  async function handleQuick(phrase: string) {
+    if (phrase === '再来一局') {
+      restart()
+      return
+    }
+    if (phrase === '这步为什么？') {
+      pushPlayer(phrase)
+      try {
+        const data = await matchHint('direction')
+        pushAgent(data.text, data.mood)
+      } catch {
+        pushAgent('这一步…我建议先看看空位更多的方向。', 'thinking')
+      }
+    }
   }
 
   if (!game) {
@@ -99,60 +180,84 @@ export default function BattlePage() {
 
   const interactive = !session.over && session.turn === session.player_pid && !busy
 
+  const board =
+    game.kind === 'mahjong' ? (
+      <MahjongTable
+        snapshot={session as MahjongSnapshot}
+        interactive={interactive}
+        onAction={(action) => move(action)}
+      />
+    ) : game.kind === 'poker' ? (
+      <PokerTable
+        snapshot={session as PokerSnapshot}
+        interactive={interactive}
+        onAction={(action) => move(action)}
+      />
+    ) : game.board_size === 3 ? (
+      <MoonBoard snapshot={session as BoardSnapshot} interactive={interactive} onMove={(i) => move({ cell_index: i })} />
+    ) : (
+      <GomokuBoard
+        snapshot={session as BoardSnapshot}
+        interactive={interactive}
+        stepKey={stepKey}
+        onMove={(i) => move({ cell_index: i })}
+      />
+    )
+
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+      <div className="battle-header">
         <h1 className="page-title">{game.display_name} · 人机对战</h1>
         <span className="badge accent">{DIFFICULTY_SHORT[session.difficulty] ?? session.difficulty}</span>
         <span className="badge">{SEAT_SHORT[session.player_pid] ?? session.player_pid}</span>
-        <button className="btn" style={{ marginLeft: 'auto' }} onClick={restart}>
-          重新开始
-        </button>
+        {persona && <span className="badge">{PERSONA_NAMES[persona]}</span>}
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+          <button className="btn" onClick={toggleMute}>
+            {muted ? '🔇 已静音' : '🔊 对话'}
+          </button>
+          <button className="btn" onClick={restart}>
+            重新开始
+          </button>
+        </span>
       </div>
       {error && <div className="error-banner">{error}</div>}
-      {!session.over && (
-        <div style={{ marginBottom: 12, color: 'var(--muted)', display: 'flex', gap: 16, alignItems: 'center' }}>
-          {busy ? (
-            <span>
-              <span className="spinner" /> AI 思考中…
-            </span>
-          ) : (
-            <span>{session.turn === session.player_pid ? '轮到你了' : 'AI 回合'}</span>
+
+      <div className="battle-body">
+        <div className="battle-main">
+          {!session.over && (
+            <div style={{ marginBottom: 12, color: 'var(--muted)', display: 'flex', gap: 16, alignItems: 'center' }}>
+              {busy ? (
+                <span>
+                  <span className="spinner" /> AI 思考中…
+                </span>
+              ) : (
+                <span>{session.turn === session.player_pid ? '轮到你了' : 'AI 回合'}</span>
+              )}
+              {'round' in session && session.round != null && <span>第 {session.round} 轮</span>}
+              {game.kind === 'board' && game.board_size === 9 && <VanishToast snapshot={session} />}
+            </div>
           )}
-          {'round' in session && session.round != null && <span>第 {session.round} 轮</span>}
-          {game.kind === 'board' && game.board_size === 9 && <VanishToast snapshot={session} />}
+          {board}
+          {session.over && (
+            <ResultOverlay
+              snapshot={session}
+              game={game}
+              onReplay={() => navigate(`/review/${session.game_id}`)}
+              onRestart={restart}
+            />
+          )}
         </div>
-      )}
-      {game.kind === 'mahjong' ? (
-        <MahjongTable
-          snapshot={session as MahjongSnapshot}
-          interactive={interactive}
-          onAction={(action) => move(action)}
-        />
-      ) : game.kind === 'poker' ? (
-        <PokerTable
-          snapshot={session as PokerSnapshot}
-          interactive={interactive}
-          onAction={(action) => move(action)}
-        />
-      ) : game.board_size === 3 ? (
-        <MoonBoard snapshot={session as BoardSnapshot} interactive={interactive} onMove={(i) => move({ cell_index: i })} />
-      ) : (
-        <GomokuBoard
-          snapshot={session as BoardSnapshot}
-          interactive={interactive}
-          stepKey={stepKey}
-          onMove={(i) => move({ cell_index: i })}
-        />
-      )}
-      {session.over && (
-        <ResultOverlay
-          snapshot={session}
-          game={game}
-          onReplay={() => navigate(`/replay/${session.game_id}`)}
-          onRestart={restart}
-        />
-      )}
+
+        {!muted && (
+          <div className="battle-side">
+            <div className="battle-agent">
+              <AgentAvatar mood={lastAgentMood ?? 'neutral'} thinking={busy} size={84} />
+              <div className="battle-agent-name">Gavis{persona ? ` · ${PERSONA_NAMES[persona]}` : ''}</div>
+            </div>
+            <ChatPanel messages={chat} disabled={!session} onSend={handleSend} onQuick={handleQuick} />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

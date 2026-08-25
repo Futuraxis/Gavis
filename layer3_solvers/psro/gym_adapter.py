@@ -8,6 +8,12 @@ The wrapper is hard-wired to 3×3 moon-chess-like games (Discrete(9) action
 space, ``cell_r_c`` canonical keys, base-3 board encoding); constructing it
 for another game shape raises ``ValueError`` instead of silently producing
 meaningless results (审查 P2-22).
+
+The board encoding is **perspective-relative** (1=own, 2=opponent, 0=empty
+from the acting player's view), so the shared PSRO pool table is a strategy
+valid for BOTH seats in the color-symmetric game — the old color-absolute
+encoding (1=p_black, 2=p_white) left the white seat's table indices
+entirely untrained and the pool played at random level from that seat.
 """
 
 from __future__ import annotations
@@ -17,8 +23,8 @@ import logging
 import numpy as np
 from gymnasium import spaces
 
-from layer2_engine.core.state_graph import ActionInstance, State
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import ActionInstance, State
 
 logger = logging.getLogger(__name__)
 
@@ -196,21 +202,41 @@ class GymAdapter:
     # ── Internal ──────────────────────────────────────────────────
 
     def _encode_state(self, state: State) -> int:
-        """Encode board as 3-base integer (matching original PSRO encoding).
+        """Encode board as a 3-base integer — **perspective-relative**.
 
-        Note: the encoding captures only the board occupancy — pieceOrder
-        (FIFO age) and the round counter are dropped.  Acceptable under
-        the shared-policy symmetry of PSRO's pool, but states that differ
+        Digits are relative to the player to move: ``1`` = own piece,
+        ``2`` = opponent piece, ``0`` = empty.  This is the key fix for
+        why the old PSRO pool played at random level (审查 2026-08): the
+        old encoding was color-absolute (1=p_black, 2=p_white), so in a
+        symmetric game the color-swapped boards the *white* seat faces
+        map to entirely different table indices that the best-response
+        Q-learning (always acting as ``p_black``) never visited — the
+        shared pool was only ever trained for one seat and played
+        untrained-random as the other.
+
+        With a perspective-relative code the table is a strategy that is
+        valid for **whoever is to move**, so one pool serves both roles
+        (mirror states share the same code and, by color symmetry of the
+        game, the same optimal action).
+
+        Note: the code captures only board occupancy — ``pieceOrder``
+        (FIFO age) and the round counter are dropped; states that differ
         only in age/round collapse to the same code.
         """
         board = state.get("_board")
         if board is None:
             board = state.get("_arrays", {}).get("board", [])
+        if not board:
+            return 0
+        # Acting player → own pieces encode as 1.  Unknown/None falls
+        # back to the row player so test fakes keep working.
+        current = self._adapter.get_current_player(state)  # type: ignore[attr-defined]
+        own = current if current in (self._p1, self._p2) else self._p1
         code = 0
         for i, val in enumerate(board):
-            if val == "p_black":
+            if val == own:
                 digit = 1
-            elif val == "p_white":
+            elif val in (self._p1, self._p2):
                 digit = 2
             else:
                 digit = 0

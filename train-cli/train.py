@@ -26,7 +26,22 @@ Usage::
                               [--solver all|hybrid|cfr|ppo|psro|qmix|happo|maac|bayes]
                               [--episodes N] [--seed N] [--device auto|cpu|cuda]
                               [--out-dir models/train] [--eval-episodes N]
+                              [--preset full|quick]  # 默认 full=完整训练; quick=演示校准
+                              [--config-override KEY=VALUE,...]  # 管线配置覆盖
                               [--skip-eval] [--list] [--verbose]
+
+例（大参数 + 训练对手编排）::
+
+    python train-cli/train.py --game mahjong_guangdong --solver qmix \\
+        --episodes 1200 --config-override hidden_dim=512,opponent_enabled=true, \\
+        opponent_mode=pfsp,opponent_checkpoint_interval=25,eval_interval=100
+
+编排默认值见 ``games.py`` 的 ``_MAHJONG_OPPONENT_CFG``（麻将管线默认开启
+PFSP 对手池），设计文档：``docs/design/training-opponent-scheduling.md``。
+
+``--preset`` 选择训练预设：``full``（默认）按注册表完整训练；``quick`` 在
+运行时按系数缩放注册表读出的局数与预算类超参（演示校准，几秒~几十秒级），
+不改 ``games.py``。
 """
 
 from __future__ import annotations
@@ -36,6 +51,7 @@ import json
 import random
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +73,70 @@ MAX_EVAL_STEPS = 600
 #: 评估对手 —— MCTS 基线的通用搜索预算（与 Hybrid 自身 mcts_budget 同量级，
 #: 使“vs 基线”与“vs 自己”的对比在同一规模下进行）。
 EVAL_MCTS_BUDGET = 300
+
+#: 训练预设缩放系数：full=1.0（原样），quick=0.2（演示校准）。
+PRESET_FACTORS: dict[str, float] = {"full": 1.0, "quick": 0.2}
+
+#: quick 缩放会波及的管线 config 键（迭代/预算类；depth 改变搜索语义，不缩放）。
+_SCALED_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        "mcts_budget",
+        "cfr_iterations",
+        "iterations",
+        "psro_iters",
+        "psro_steps_per_iter",
+        "num_iters",
+        "num_steps_per_iter",
+        "evaluation_episodes",
+    }
+)
+
+#: quick 缩放下限（key → 最小保留值），避免缩到 0/1 导致策略退化。
+_QUICK_FLOORS: dict[str, int] = {
+    "episodes": 1,
+    "eval_episodes": 2,
+    "eval_mcts_budget": 50,
+    "mcts_budget": 20,
+    "cfr_iterations": 10,
+    "iterations": 10,
+    "psro_iters": 1,
+    "psro_steps_per_iter": 200,
+    "num_iters": 1,
+    "num_steps_per_iter": 2000,
+    "evaluation_episodes": 4,
+}
+
+
+def _preset_factor(preset: str) -> float:
+    """返回预设的缩放系数（未知值已在 argparse ``choices`` 拦截）。"""
+    return PRESET_FACTORS.get(preset, 1.0)
+
+
+def _scale_int(value: int, factor: float, floor: int) -> int:
+    """按系数缩放整数值并施加下限（quick 演示校准；full 为恒等）。"""
+    return max(floor, int(value * factor))
+
+
+def apply_preset(pipeline: SolverPipeline, preset: str) -> SolverPipeline:
+    """按预设缩放训练管线（episodes + 预算类 config 键）；full 原样返回。
+
+    只改注册表读出的默认值（``--episodes`` / ``--config-override`` 显式
+    覆盖在调用方优先），不改 ``games.py`` 注册表本身。
+    """
+    factor = _preset_factor(preset)
+    if factor >= 1.0:
+        return pipeline
+    scaled_config = {
+        key: _scale_int(value, factor, _QUICK_FLOORS.get(key, 1))
+        if key in _SCALED_CONFIG_KEYS and isinstance(value, int)
+        else value
+        for key, value in pipeline.config.items()
+    }
+    return replace(
+        pipeline,
+        episodes=_scale_int(pipeline.episodes, factor, _QUICK_FLOORS["episodes"]),
+        config=scaled_config,
+    )
 
 
 # ── 引擎 ───────────────────────────────────────────────────────────
@@ -89,6 +169,37 @@ def _expand_outdir(config: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     return expanded
 
 
+def _coerce_value(raw: str) -> Any:
+    """把 CLI 覆盖值解析为 bool/int/float/None/字符串（数据驱动覆盖）。"""
+    s = raw.strip()
+    low = s.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    if low in ("none", "null"):
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    return s
+
+
+def _merge_overrides(kwargs: dict[str, Any], overrides: list[str] | None) -> dict[str, Any]:
+    """把 ``KEY=VALUE``（支持点路径）合并进配置字典；KEY 不存在时直接新增。"""
+    for kv in overrides or []:
+        key, _, val = kv.partition("=")
+        parts = [p.strip() for p in key.split(".")]
+        d = kwargs
+        for p in parts[:-1]:
+            d = d.setdefault(p, {})
+        d[parts[-1]] = _coerce_value(val)
+    return kwargs
+
+
 def make_solver(
     name: str,
     engine: GameEngine,
@@ -97,6 +208,7 @@ def make_solver(
     device: str,
     out_dir: Path,
     player_id: str | None = None,
+    overrides: list[str] | None = None,
 ) -> SolverBase:
     """按注册表 SOLVER_FACTORY 实例化求解器（数据驱动，无 per-game 分支）。"""
     entry = SOLVER_FACTORY[name]
@@ -104,6 +216,7 @@ def make_solver(
         raise RuntimeError(f"求解器 {name} 需要可选依赖（torch/psro extra），当前环境不可用——请安装后重试")
     cls, cfg_cls = entry
     kwargs = dict(pipeline.config or {})
+    kwargs = _merge_overrides(kwargs, overrides)
     kwargs = _expand_outdir(kwargs, out_dir)
     kwargs.setdefault("seed", seed)
     kwargs.setdefault("device", device)
@@ -204,6 +317,7 @@ def evaluate(
     episodes: int,
     base_seed: int,
     opponents: tuple[str, ...] = ("random",),
+    eval_budget: int = EVAL_MCTS_BUDGET,
 ) -> dict[str, Any]:
     """通用评估：每局只有一个"own 座位"由被评求解器执掌（顺次轮换），其余座位按对手类型落子。
 
@@ -213,7 +327,7 @@ def evaluate(
     - ``self``   — 自己镜像（内置；per_player 时各座位用自身实例互博）。
     - 其余名字  — 必须是该游戏 ``runtime_solvers`` 里已登记的求解器（如
       ``mahjong`` 启发式 / ``mcts`` / ``ollama``），经 ``create_solver`` 通用装配
-      （预算统一用 ``EVAL_MCTS_BUDGET`` 规模）；未登记则该列自动跳过并提示。
+      （预算用 ``eval_budget``，默认 ``EVAL_MCTS_BUDGET``）；未登记则该列自动跳过并提示。
 
     - ``solver`` != None（普通管线）→ own 座位用该实例。
     - ``per_player_instances`` != None → own 座位用对应座位的实例（player_id 绑定）。
@@ -223,7 +337,7 @@ def evaluate(
         if opp in ("random", "self"):
             continue
         if opp in spec.runtime_solvers:
-            baselines[opp] = create_solver(spec.game_id, opp, engine, base_seed, budget=EVAL_MCTS_BUDGET)
+            baselines[opp] = create_solver(spec.game_id, opp, engine, base_seed, budget=eval_budget)
         else:
             print(f"  [提示] {spec.game_id} 未登记 '{opp}' 运行时求解器，跳过该评估列")
 
@@ -275,13 +389,16 @@ def train_one(
     out_dir: Path,
 ) -> dict[str, Any]:
     """训练一个 (游戏, 求解器) 管线并返回指标记录。"""
+    pipeline = apply_preset(pipeline, args.preset)
     episodes = args.episodes if args.episodes is not None else pipeline.episodes
     print(f"\n── 求解器 {name} @ {spec.game_id}  ({pipeline.entry}, {episodes} 局) ──")
     t0 = time.perf_counter()
 
     if pipeline.per_player:
         instances = [
-            make_solver(name, engine, pipeline, args.seed, args.device, out_dir, player_id=seat)
+            make_solver(
+                name, engine, pipeline, args.seed, args.device, out_dir, player_id=seat, overrides=args.config_overrides
+            )
             for seat in spec.players
         ]
         metrics = run_entry(instances[0], pipeline, episodes, args.verbose)
@@ -295,7 +412,7 @@ def train_one(
             "config": dict(pipeline.config),
         }
     else:
-        solver = make_solver(name, engine, pipeline, args.seed, args.device, out_dir)
+        solver = make_solver(name, engine, pipeline, args.seed, args.device, out_dir, overrides=args.config_overrides)
         metrics = run_entry(solver, pipeline, episodes, args.verbose)
         artifact = save_artifact(solver, pipeline, out_dir)
         record = {
@@ -310,12 +427,15 @@ def train_one(
             record["artifact"] = str(artifact)
 
     if pipeline.eval and not args.skip_eval:
-        n = args.eval_episodes or spec.eval_episodes
+        n = args.eval_episodes or _scale_int(
+            spec.eval_episodes, _preset_factor(args.preset), _QUICK_FLOORS["eval_episodes"]
+        )
+        eval_budget = _scale_int(EVAL_MCTS_BUDGET, _preset_factor(args.preset), _QUICK_FLOORS["eval_mcts_budget"])
         opponents: tuple[str, ...] = args.eval_opponents or spec.eval_opponents
         if pipeline.per_player:
-            record["eval"] = evaluate(engine, spec, None, instances, n, args.seed, opponents)
+            record["eval"] = evaluate(engine, spec, None, instances, n, args.seed, opponents, eval_budget=eval_budget)
         else:
-            record["eval"] = evaluate(engine, spec, solver, None, n, args.seed, opponents)
+            record["eval"] = evaluate(engine, spec, solver, None, n, args.seed, opponents, eval_budget=eval_budget)
         for opp, res in record["eval"].items():
             print(f"  评估 vs {opp}: win_rate={res['win_rate']:.3f}  avg_utility={res['avg_utility']:+.3f}")
     print(f"  训练完成: {record['train_seconds']}s")
@@ -324,9 +444,9 @@ def train_one(
 
 def train_game(spec: GameSpec, requested: list[str], args: argparse.Namespace) -> dict[str, Any]:
     """按注册表训练一个游戏；返回汇总指标。"""
-    print(f"\n{'█' * 62}")
+    print(f"\n{'-' * 62}")
     print(f"  {spec.display_name} ({spec.game_id})  players={list(spec.players)}")
-    print(f"{'█' * 62}")
+    print(f"{'-' * 62}")
 
     engine = build_engine(spec, args.seed)
     out_dir = _ROOT / args.out_dir / spec.game_id
@@ -371,9 +491,9 @@ def train_game(spec: GameSpec, requested: list[str], args: argparse.Namespace) -
 
 def print_summary(summaries: list[dict[str, Any]]) -> None:
     """打印跨游戏汇总表（win_rate / 训练耗时）。"""
-    print(f"\n{'█' * 62}")
+    print(f"\n{'-' * 62}")
     print("  训练总结")
-    print(f"{'█' * 62}")
+    print(f"{'-' * 62}")
     for summary in summaries:
         solvers = [k for k in summary if k not in ("game", "display_name")]
         if not solvers:
@@ -431,6 +551,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--out-dir", type=str, default="models/train")
+    parser.add_argument(
+        "--preset",
+        type=str,
+        default="full",
+        choices=["full", "quick"],
+        help="训练预设：full=完整训练（默认）；quick=演示校准（按 0.2 系数缩放注册表局数/预算，带下限）",
+    )
     parser.add_argument("--eval-episodes", type=int, default=0, help="覆盖评估局数（0=注册表默认）")
     parser.add_argument(
         "--eval-opponents",
@@ -438,12 +565,22 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="评估对手（逗号分隔: random,self 或任何已登记 runtime_solvers 名字，如 mahjong,mcts；默认用注册表 eval_opponents）",
     )
+    parser.add_argument(
+        "--config-override",
+        type=str,
+        default=None,
+        help="管线配置覆盖（逗号分隔 KEY=VALUE；点路径如 opponent_mode / hidden_dim；作用于该游戏所有命中的求解器管线）",
+    )
     parser.add_argument("--skip-eval", action="store_true", help="跳过训练后评估")
     parser.add_argument("--list", action="store_true", help="打印注册表一览并退出")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
     if args.eval_opponents:
         args.eval_opponents = tuple(o.strip() for o in args.eval_opponents.split(",") if o.strip())
+    if args.config_override:
+        args.config_overrides = [kv.strip() for kv in args.config_override.split(",") if kv.strip()]
+    else:
+        args.config_overrides = None
 
     if args.list:
         _print_registry()

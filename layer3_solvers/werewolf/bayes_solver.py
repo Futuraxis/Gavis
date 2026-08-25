@@ -20,8 +20,8 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-from layer2_engine.core.state_graph import ActionInstance, State
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import ActionInstance, State
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 from .belief import BeliefTracker, belief_obs

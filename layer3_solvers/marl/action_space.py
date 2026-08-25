@@ -24,8 +24,8 @@ from typing import Callable
 
 import numpy as np
 
-from layer2_engine.core.state_graph import ActionInstance, State
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import ActionInstance, State
 
 # ── Game constants (mirror rules/*.json canonicalKey templates) ─────
 

@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-JS_PATH = Path("layer4_interface/frontend/play_moon_chess/static/js/dom_observation.js")
+#: 独立应用已退役归档（C6）：JS 仍保留在 archive/legacy_play_apps/ 供本测试引用。
+JS_PATH = Path("archive/legacy_play_apps/play_moon_chess/static/js/dom_observation.js")
 
 
 def run_node_case(case_name: str) -> dict[str, object]:

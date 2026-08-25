@@ -17,9 +17,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional
 
-from layer2_engine.core.state_graph import clone_state
-from layer2_engine.core.state_graph import ActionInstance, ChanceOutcome, State
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import ActionInstance, ChanceOutcome, State, clone_state
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 

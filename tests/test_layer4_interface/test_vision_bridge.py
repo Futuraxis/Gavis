@@ -1,4 +1,4 @@
-﻿"""Tests for VisionBridge — Layer 4 → Layer 2 translation only."""
+"""Tests for VisionBridge — Layer 4 → Layer 2 translation only."""
 
 from __future__ import annotations
 

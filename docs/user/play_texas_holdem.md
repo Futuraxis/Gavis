@@ -2,23 +2,24 @@
 
 人类与 AI 在浏览器里打德州扑克（单挑无限注）。AI 使用 **HybridSolver**
 （`layer3_solvers/hybrid/`）的对手建模搜索：在采样世界（`sample_hidden`
-补全对手底牌）上进行 PIMC 式树搜索，对手节点按对手模型（默认均匀）采样，
-不在树中泄漏对手底牌；与 `layer2_engine` 的 v5.0 规则引擎交互
-（`rules/texas_holdem.json`），发牌为引擎 chance 节点，
-底池结算与牌型判定由引擎内置函数完成。
+补全对手底牌）上进行 PIMC 式树搜索，对手节点按对手模型采样，不在树中
+泄漏对手底牌；与 `layer2_engine` 的 v5.2 规则引擎交互
+（`rules/texas_holdem.json`），发牌为引擎 chance 节点，底池结算与牌型判定
+由引擎内置函数完成。
+人机对弈入口已统一到平台前端（`layer4_interface/frontend/platform`，端口 8770），
+原独立应用 `play_texas_holdem` 已退役归档（见 `archive/legacy_play_apps/`）。
 
 ## 快速开始
 
 ```bash
-python -m layer4_interface.frontend.play_texas_holdem.server
+python -m layer4_interface.frontend.platform.server   # 8770（需先 npm run build）
 ```
 
-启动后浏览器打开 **http://127.0.0.1:8768/** 即可开始对局。
-
-自定义端口：
+启动后浏览器打开 **http://127.0.0.1:8770/**，在游戏大厅选择"德州扑克"，
+设置座位与难度后开始。开发模式（热更新）：
 
 ```bash
-python -m layer4_interface.frontend.play_texas_holdem.server --host 0.0.0.0 --port 9000
+cd platform-frontend && npm run dev                   # 5173（/api 代理到 8770）
 ```
 
 ## 游戏规则（单挑无限注德州扑克）
@@ -39,7 +40,7 @@ python -m layer4_interface.frontend.play_texas_holdem.server --host 0.0.0.0 --po
 | AI 难度 | 简单 / 正常 / 困难（对应 Hybrid 搜索预算 150 / 500 / 1200） |
 | 弃牌 | 放弃本局，底池归对方 |
 | 过牌 / 跟注 | 无需跟注时显示「过牌」，需要时显示「跟注 N」 |
-| 加注 | 选择目标数额（下拉），点击「加注」；「全下」一键推 100 |
+| 加注 | 选择目标数额，点击「加注」；「全下」一键推 100 |
 | 摊牌 | 终局显示双方底牌与牌型、胜负与筹码盈亏 |
 
 对局中 AI 思考时操作按钮会禁用。
@@ -50,10 +51,7 @@ python -m layer4_interface.frontend.play_texas_holdem.server --host 0.0.0.0 --po
 python train-cli/train.py --game texas_holdem --solver hybrid --skip-eval  # 训练 Hybrid（CFR 先验 + 不完全信息搜索）
 ```
 
-## API（与其他对弈应用一致）
+## 对局保存与恢复
 
-| 接口 | 请求 | 说明 |
-|------|------|------|
-| `POST /api/start` | `{playerColor, difficulty}` | 开局（自动发牌，AI 先行动则先走） |
-| `POST /api/move` | `{gameId, choice, amount}` | 人类行动（弃牌/跟注/加注），AI 随即回应 |
-| `POST /api/state` | `{gameId}` | 查询当前局面快照 |
+平台自动把每局写入本地历史（`data/matches/`），页面刷新后可恢复当前对局，
+结束后可在历史中回看。

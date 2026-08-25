@@ -58,7 +58,7 @@ export default function HistoryPage() {
                 const badge = m.winner == null ? '' : won ? 'win' : 'lose'
                 const label = m.winner == null ? '平局' : won ? '胜利 🎉' : '失败'
                 return (
-                  <tr key={m.match_id} className="clickable" onClick={() => navigate(`/replay/${m.match_id}`)}>
+                  <tr key={m.match_id} className="clickable" onClick={() => navigate(`/review/${m.match_id}`)}>
                     <td>{new Date(m.started_at).toLocaleString('zh-CN')}</td>
                     <td>{GAME_LABELS[m.game_id] ?? m.game_id}</td>
                     <td>{SEAT_LABELS[m.player_pid] ?? m.player_pid}</td>

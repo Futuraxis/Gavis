@@ -1,6 +1,7 @@
 /* Gavis 平台全局样式 — 沿用现有 play 应用的 GitHub-dark 色板 */
 
 :root {
+  color-scheme: dark;
   --bg: #10141c;
   --panel: #1a2130;
   --board: #2a3b52;
@@ -10,6 +11,27 @@
   --win: #3fb950;
   --lose: #f85149;
   --border: #30363d;
+
+  /* 游戏主题色 (PRD 5.6) */
+  --game-moon: #58a6ff; /* 月亮棋偏蓝 */
+  --game-gomoku: #7ea6ff;
+  --game-poker: #e04f5f; /* 德州偏红金 */
+  --game-poker-gold: #d9a441;
+  --game-mahjong: #2e9e6b;
+  --game-werewolf: #6e56cf; /* 狼人杀偏暗夜 */
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f6fb;
+  --panel: #ffffff;
+  --board: #e9eef6;
+  --accent: #2f6fed;
+  --text: #17202e;
+  --muted: #667085;
+  --win: #15803d;
+  --lose: #dc2626;
+  --border: #e1e6ef;
 }
 
 * {
@@ -92,12 +114,15 @@ body {
 }
 
 .card {
+  display: block;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 20px;
   cursor: pointer;
   transition: transform 0.15s, border-color 0.15s;
+  color: var(--text);
+  text-decoration: none;
 }
 
 .card:hover {
@@ -106,6 +131,7 @@ body {
 }
 
 .btn {
+  display: inline-block;
   padding: 8px 16px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -114,6 +140,7 @@ body {
   cursor: pointer;
   font-size: 14px;
   transition: background 0.15s, opacity 0.15s;
+  text-decoration: none;
 }
 
 .btn:hover:not(:disabled) {
@@ -793,4 +820,501 @@ table.data tr.clickable:hover td {
 .hint {
   color: var(--muted);
   font-size: 12px;
+}
+
+/* ── 通用补充 ─────────────────────────────────────────────────── */
+
+.success-banner {
+  background: rgba(63, 185, 80, 0.12);
+  border: 1px solid var(--win);
+  color: var(--win);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--border);
+}
+
+input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
+/* ── 首页 ─────────────────────────────────────────────────────── */
+
+.home-hero {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 22px;
+}
+
+.home-hero-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.home-section-title {
+  font-size: 17px;
+  margin-bottom: 12px;
+}
+
+/* ── Agent 头像 ──────────────────────────────────────────────── */
+
+.agent-avatar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #3a4f6e, #1a2130 75%);
+  border: 2px solid var(--border);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+:root[data-theme='light'] .agent-avatar {
+  background: radial-gradient(circle at 35% 30%, #6b82a8, #31405c 75%);
+}
+
+.agent-avatar-face {
+  line-height: 1;
+}
+
+.agent-avatar-mood {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  font-size: 16px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.agent-avatar-spinner {
+  width: 18px;
+  height: 18px;
+}
+
+.agent-avatar-thinking {
+  position: absolute;
+  bottom: -26px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ── 对话面板 ─────────────────────────────────────────────────── */
+
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+}
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.chat-messages {
+  flex: 1;
+  min-height: 180px;
+  max-height: 420px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px;
+}
+
+.chat-empty {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px 0;
+}
+
+.chat-bubble {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.chat-bubble.agent {
+  justify-content: flex-start;
+}
+
+.chat-bubble.player {
+  justify-content: flex-end;
+}
+
+.chat-bubble-text {
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.chat-bubble.agent .chat-bubble-text {
+  background: var(--board);
+  border-bottom-left-radius: 4px;
+}
+
+.chat-bubble.player .chat-bubble-text {
+  background: var(--accent);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+:root[data-theme='light'] .chat-bubble.player .chat-bubble-text {
+  color: #fff;
+}
+
+.chat-mood {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.chat-quick {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chat-quick .btn {
+  font-size: 13px;
+  padding: 5px 12px;
+}
+
+.chat-input {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-input input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── 对局房间布局 (PRD 5.3) ──────────────────────────────────── */
+
+.battle-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.battle-header .page-title {
+  margin-bottom: 0;
+}
+
+.battle-body {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.battle-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.battle-side {
+  width: 300px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 80vh;
+}
+
+.battle-agent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.battle-agent-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+@media (max-width: 900px) {
+  .battle-body {
+    flex-direction: column;
+  }
+  .battle-side {
+    width: 100%;
+  }
+}
+
+/* ── 规则速览 ─────────────────────────────────────────────────── */
+
+.rules-panel {
+  background: var(--board);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 14px;
+}
+
+/* ── 设置页：性格卡片 / 提示滑块 ──────────────────────────────── */
+
+.persona-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.persona-card {
+  background: var(--board);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.persona-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.persona-card.selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.persona-card h4 {
+  margin: 0;
+}
+
+.persona-intro {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.persona-example {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text);
+}
+
+.persona-card .btn {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+.hint-levels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.hint-levels span.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── 复盘页 (PRD 5.5) ─────────────────────────────────────────── */
+
+.review-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr 260px;
+  gap: 16px;
+  align-items: start;
+}
+
+.review-timeline {
+  max-height: 72vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.review-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.review-step:hover {
+  background: var(--board);
+}
+
+.review-step.active {
+  background: var(--board);
+  border-color: var(--accent);
+}
+
+.review-step.turning_point {
+  background: rgba(255, 200, 60, 0.14);
+  border-color: rgba(255, 200, 60, 0.4);
+}
+
+.review-step.winning_move {
+  background: rgba(63, 185, 80, 0.14);
+  border-color: rgba(63, 185, 80, 0.4);
+}
+
+.review-step.blunder {
+  background: rgba(248, 81, 73, 0.14);
+  border-color: rgba(248, 81, 73, 0.4);
+}
+
+.review-step-num {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.review-step-actor {
+  flex-shrink: 0;
+}
+
+.review-step-action {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-step-tag {
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.review-board {
+  min-width: 0;
+}
+
+.review-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.review-controls .replay-slider {
+  flex: 1;
+}
+
+.review-comments {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.review-comment {
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--board);
+  border-left: 3px solid var(--muted);
+}
+
+.review-comment.turning_point {
+  border-left-color: #ffc83c;
+}
+
+.review-comment.winning_move {
+  border-left-color: var(--win);
+}
+
+.review-comment.blunder {
+  border-left-color: var(--lose);
+}
+
+.review-comment-tag {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.review-comment p {
+  font-size: 14px;
+}
+
+.review-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.review-summary strong {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.review-summary p {
+  font-size: 14px;
+  margin-top: 2px;
+}
+
+.review-footer {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 1100px) {
+  .review-layout {
+    grid-template-columns: 1fr;
+  }
+  .review-timeline {
+    max-height: 220px;
+  }
 }

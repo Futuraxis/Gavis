@@ -15,11 +15,11 @@ from typing import Generator
 
 import pytest
 
-from train_cli import default_provider
 from layer4_interface.frontend.platform.benchmark import BenchmarkRunner
 from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.server import make_handler
 from layer4_interface.frontend.platform.session import PlayManager
+from train_cli import default_provider
 
 _NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -237,3 +237,158 @@ class TestStatic:
         with pytest.raises(urllib.error.HTTPError) as exc:
             _get(base_url + "/api/nope")
         assert exc.value.code == 404
+
+
+@pytest.fixture
+def companion_url(tmp_path: pytest.TempPathFactory) -> Generator[str, None, None]:
+    """Platform handler with the companion wiring enabled (D 节接线).
+
+    Builds its own PlayManager (profiles/adaptive/agent_factory) and
+    passes a ProfileStore to make_handler so the new /api routes are
+    exercised end-to-end over a real HTTP server.
+    """
+    from layer4_interface.agent import PERSONAS, DialogueEngine
+    from layer4_interface.difficulty.adaptive import AdaptiveController
+    from layer4_interface.profile.store import ProfileStore
+
+    history = MatchHistory(tmp_path / "matches")
+    profiles = ProfileStore(tmp_path / "data")
+    manager = PlayManager(
+        provider=default_provider,
+        history=history,
+        seed=42,
+        profiles=profiles,
+        adaptive=AdaptiveController(),
+        agent_factory=lambda key: DialogueEngine(PERSONAS[key]),
+    )
+    benchmark = BenchmarkRunner(provider=default_provider, seed=42)
+    httpd = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        make_handler(manager, history, benchmark, dist_dir=tmp_path / "no-dist", profile_store=profiles),
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{httpd.server_address[1]}"
+    httpd.shutdown()
+    httpd.server_close()
+
+
+class TestCompanionIntegration:
+    """D 节接线回归：伴侣钩子 / 档案 / 复盘 新路由."""
+
+    def test_match_start_forwards_persona_and_chat(self, companion_url: str):
+        start = _post(
+            companion_url + "/api/match/start",
+            {
+                "game_id": "moon_chess",
+                "player_pid": "p_black",
+                "difficulty": "easy",
+                "player_count": 2,
+                "persona": "teacher",
+                "hint_level": "direction",
+                "pacing": "fast",
+                "adaptive": False,
+            },
+        )
+        assert start["ok"] is True
+        session = start["session"]
+        assert session["chat"], "开局应产生 greet 聊天增量"
+        assert session["chat"][0]["scenario"] == "greet"
+        assert session["chat"][0]["text"], "兜底台词非空"
+        assert session["chat"][0]["mood"] in {"happy", "thinking", "sorry", "neutral"}
+        assert session["evaluation"] is not None, "应附带机械局面评估"
+
+    def test_agent_say_and_hint(self, companion_url: str):
+        start = _post(
+            companion_url + "/api/match/start",
+            {"game_id": "moon_chess", "player_pid": "p_black", "difficulty": "easy"},
+        )
+        game_id = start["session"]["game_id"]
+        say = _post(companion_url + "/api/agent/say", {"game_id": game_id, "scenario": "help"})
+        assert say["ok"] is True and say["message"] is not None
+        assert say["message"]["text"]
+        assert say["message"]["mood"] in {"happy", "thinking", "sorry", "neutral"}
+        hint = _post(companion_url + "/api/match/hint", {"game_id": game_id, "level": "specific"})
+        assert hint["ok"] is True
+        assert hint["hint"]["level"] == "specific"
+        assert hint["hint"].get("hint"), "具体建议应有文本"
+
+    def test_profile_roundtrip_put_clear(self, companion_url: str):
+        _post(companion_url + "/api/profile", {"profile": {"nickname": "阿远", "default_persona": "teacher"}})
+        got = _get(companion_url + "/api/profile")
+        assert got["profile"]["nickname"] == "阿远"
+        assert got["profile"]["default_persona"] == "teacher"
+        req = urllib.request.Request(
+            companion_url + "/api/profile",
+            data=json.dumps({"profile": {"theme": "dark"}}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="PUT",
+        )
+        with _NO_PROXY_OPENER.open(req) as resp:
+            put = json.loads(resp.read().decode("utf-8"))
+        assert put["ok"] is True
+        assert put["profile"]["theme"] == "dark"
+        cleared = _post(companion_url + "/api/profile/clear", {})
+        assert cleared["ok"] is True
+        assert cleared["profile"]["nickname"] == ""
+
+    def test_illegal_move_queues_chat(self, companion_url: str):
+        start = _post(
+            companion_url + "/api/match/start",
+            {"game_id": "texas_holdem", "player_pid": "p_sb", "difficulty": "easy"},
+        )
+        game_id = start["session"]["game_id"]
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _post(companion_url + "/api/match/move", {"game_id": game_id, "action": {"choice": "bogus"}})
+        assert exc.value.code == 400
+        state = _post(companion_url + "/api/match/state", {"game_id": game_id})
+        assert any(m["scenario"] == "illegal" for m in state["session"]["chat"]), "违规后应有 illegal 聊天增量"
+
+    def test_review_endpoint_after_finish(self, companion_url: str):
+        start = _post(
+            companion_url + "/api/match/start",
+            {"game_id": "texas_holdem", "player_pid": "p_sb", "difficulty": "easy"},
+        )
+        game_id = start["session"]["game_id"]
+        move = _post(companion_url + "/api/match/move", {"game_id": game_id, "action": {"choice": "fold"}})
+        assert move["session"]["over"] is True
+        report = _get(companion_url + f"/api/review/{game_id}")
+        assert report["ok"] is True
+        assert report["report"]["summary"]
+        assert report["report"]["key_nodes"]
+        joined = (
+            report["report"]["improvement"]
+            + report["report"]["summary"]
+            + "".join(k["why"] for k in report["report"]["key_nodes"])
+        )
+        assert "_bb_hole" not in joined and "底牌" not in joined, "复盘文本不得泄露对手底牌"
+
+    def test_match_active_lists_running_session(self, companion_url: str):
+        start = _post(
+            companion_url + "/api/match/start",
+            {"game_id": "moon_chess", "player_pid": "p_black", "difficulty": "easy", "persona": "gentle"},
+        )
+        game_id = start["session"]["game_id"]
+        active = _get(companion_url + "/api/match/active")
+        assert active["ok"] is True
+        entry = next((s for s in active["sessions"] if s["game_id"] == game_id), None)
+        assert entry is not None, "开局后应在活跃列表可见"
+        assert entry["game"] == "moon_chess"
+        assert entry["display_name"]
+        assert entry["player_pid"] == "p_black"
+        assert entry["difficulty"] == "easy"
+        assert entry["persona"] == "gentle"
+        assert entry["step"] == 0
+        # 恢复契约：前端用 game_id 走 /match/state 继续
+        restored = _post(companion_url + "/api/match/state", {"game_id": game_id})
+        assert restored["session"]["game_id"] == game_id
+
+    def test_match_active_drops_finished_session(self, companion_url: str):
+        start = _post(
+            companion_url + "/api/match/start",
+            {"game_id": "texas_holdem", "player_pid": "p_sb", "difficulty": "easy"},
+        )
+        game_id = start["session"]["game_id"]
+        _post(companion_url + "/api/match/move", {"game_id": game_id, "action": {"choice": "fold"}})
+        active = _get(companion_url + "/api/match/active")
+        assert all(s["game_id"] != game_id for s in active["sessions"]), "终局后不得再出现在活跃列表"

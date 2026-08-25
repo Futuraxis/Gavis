@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import random
 
-from layer2_engine.core.state_graph import ActionInstance
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import ActionInstance
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 

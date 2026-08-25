@@ -30,8 +30,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
-from layer2_engine.core.state_graph import ActionInstance, State
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import ActionInstance, State
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 from ..werewolf.belief import belief_obs

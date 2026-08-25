@@ -1,4 +1,4 @@
-﻿"""Tests for all four solvers (Layer 3).
+"""Tests for all four solvers (Layer 3).
 
 Each solver is tested at the unit level (select_action, train API).
 MCTS and CFR are tested on stochastic_gomoku (small board for CFR).

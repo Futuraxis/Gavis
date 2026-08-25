@@ -10,8 +10,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
 
-from layer2_engine.core.state_graph import ActionInstance, State
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import ActionInstance, State
 
 
 @dataclass

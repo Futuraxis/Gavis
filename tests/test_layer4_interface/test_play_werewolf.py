@@ -1,4 +1,4 @@
-﻿"""Tests for the werewolf play session (human vs AI table).
+"""Tests for the werewolf play session (human vs AI table).
 
 The AI solvers are stubbed with fixed-action solvers so the session
 mechanics (turn rotation, AI driving, snapshots) run without ollama.
@@ -13,7 +13,20 @@ from pathlib import Path
 import pytest
 
 from layer2_engine.core.engine import GameEngine
-from layer4_interface.frontend.play_werewolf.session import GameSession
+
+#: 独立应用已退役归档（C6）；原模块不可用时整文件跳过（保留回归记录）。
+try:
+    from layer4_interface.frontend.play_werewolf.session import GameSession
+
+    _HAS_PLAY_WEREWOLF = True
+except ModuleNotFoundError:
+    GameSession = None  # type: ignore[misc]
+    _HAS_PLAY_WEREWOLF = False
+
+pytestmark = pytest.mark.skipif(
+    not _HAS_PLAY_WEREWOLF,
+    reason="play_werewolf 已退役归档至 archive/legacy_play_apps/（聊天流并入平台，见文档）",
+)
 
 RULES_PATH = Path(__file__).resolve().parent.parent.parent / "rules" / "werewolf.json"
 

@@ -12,8 +12,8 @@ from typing import Optional
 
 import numpy as np
 
-from layer2_engine.core.state_graph import ActionInstance, State
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import ActionInstance, State
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 from .agent import Agent
@@ -26,10 +26,14 @@ from .tabular_q import tabular_q_best_response
 @dataclass
 class PSROConfig(SolverConfig):
     num_iters: int = 20
-    num_steps_per_iter: int = 5000
+    # 默认预算提升 2000 → 20000：旧默认在 19683 状态的表格上仅够 ~100 局
+    # 对局，最佳响应基本没离开随机初始化（审查 2026-08: pool 塌缩成 2）。
+    num_steps_per_iter: int = 20000
     epsilon: float = 0.1
     alpha: float = 0.1
-    evaluation_episodes: int = 10
+    # Ne 10 → 30：元博弈每对 match-up 只有 ±1 结果，Ne=10 时矩阵条目
+    # 就是 ±0.3 的噪声，Nash 解被噪声主导。
+    evaluation_episodes: int = 30
     num_workers: int = 0  # 元博弈评估并行线程数（0=自动，1=串行）
 
 
@@ -110,6 +114,7 @@ class PSROSolver(SolverBase):
                 Ne=n_eval,
                 previous=self._payoff_matrix,
                 num_workers=n_workers,
+                verbose=verbose,
             )
             self._payoff_matrix = payoff_matrix
 
@@ -119,17 +124,32 @@ class PSROSolver(SolverBase):
             self._nash_weights = nash_p
 
             # Compute exploitability
-            expl = exploitability(self._gym, self._nash_mixture, self._policy_pool, Ne=n_eval, num_workers=n_workers)
+            expl = exploitability(
+                self._gym,
+                self._nash_mixture,
+                self._policy_pool,
+                Ne=n_eval,
+                num_workers=n_workers,
+                verbose=verbose,
+            )
             self._expl_history.append(expl)
 
-            # Train new best response
+            # Train new best response.  Every iteration gets its own seed
+            # (base + niter): the old code reused the same seed each round,
+            # so the Q init / exploration trajectory was identical and the
+            # best responses collapsed onto the seed policy (PSRO stopped
+            # after 2 pool members in the diagnosis run).  The best
+            # response trains BOTH seats (tabular_q alternates the target
+            # seat per episode), so the shared pool covers both colors.
+            base_seed = getattr(self.config, "seed", None)
+            br_seed = None if base_seed is None else int(base_seed) + niter
             beta = tabular_q_best_response(
                 self._gym,
                 num_steps=num_steps,
                 epsilon=eps,
                 alpha=alpha,
                 opponent_policy=self._nash_mixture,
-                seed=getattr(self.config, "seed", None),
+                seed=br_seed,
             )
 
             # Check for duplicate policy (tolerance-aware — exact float

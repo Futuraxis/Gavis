@@ -30,6 +30,7 @@ def _moon(seed: int = 42) -> GameEngine:
     with open(RULES_DIR / "moon_chess.json", "r", encoding="utf-8") as f:
         return GameEngine(json.load(f), seed=seed)
 
+
 # ── 路径遍历 ──────────────────────────────────────────────────────
 
 
@@ -158,7 +159,7 @@ class TestApiKeyResolution:
 
 class TestInfoSetKey:
     def test_compact_sha256_key(self):
-        
+
         adapter = _moon()
         state = adapter.create_initial_state()
         key = adapter.get_info_set_key(state, "p_black")
@@ -170,7 +171,7 @@ class TestInfoSetKey:
         assert adapter.get_info_set_key(state, "p_white") == key
 
     def test_key_changes_after_move(self):
-        
+
         adapter = _moon()
         state = adapter.create_initial_state()
         before = adapter.get_info_set_key(state, "p_black")
@@ -213,8 +214,8 @@ class TestPSROParallel:
 
 class TestBenchmarkJobPruning:
     def test_prune_drops_finished_jobs_only(self):
-        from train_cli import default_provider
         from layer4_interface.frontend.platform.benchmark import MAX_JOBS, BenchmarkJob, BenchmarkRunner
+        from train_cli import default_provider
 
         runner = BenchmarkRunner(provider=default_provider, seed=1)
         # 直接填充注册表：1 个运行中 + MAX_JOBS 个已完成

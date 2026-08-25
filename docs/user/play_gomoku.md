@@ -1,15 +1,21 @@
 # 随机五子棋 · 人机对弈（使用说明）
 
-人类与 AI 在浏览器里下随机五子棋。AI 使用 MCTS，与月亮棋应用共用
-同一套应用架构（独立目录、独立服务器、`frontend/common` 共享工具）。
+人类与 AI 在浏览器里下随机五子棋。AI 使用 MCTS（蒙特卡洛树搜索）。
+人机对弈入口已统一到平台前端（`layer4_interface/frontend/platform`，端口 8770），
+原独立应用 `play_gomoku` 已退役归档（见 `archive/legacy_play_apps/`）。
 
 ## 快速开始
 
 ```bash
-python -m layer4_interface.frontend.play_gomoku.server
+python -m layer4_interface.frontend.platform.server   # 8770（需先 npm run build）
 ```
 
-浏览器打开 **http://127.0.0.1:8767/**。
+启动后浏览器打开 **http://127.0.0.1:8770/**，在游戏大厅选择"随机五子棋"，
+设置执子与难度后开始。开发模式（热更新）：
+
+```bash
+cd platform-frontend && npm run dev                   # 5173（/api 代理到 8770）
+```
 
 ## 游戏规则
 
@@ -25,8 +31,8 @@ python -m layer4_interface.frontend.play_gomoku.server
 |------|------|
 | 执子选择 | 黑棋先手 / 白棋后手 / 随机。选白棋时 AI 先落子 |
 | AI 难度 | 简单 / 正常 / 困难（MCTS 预算 300 / 1500 / 4000） |
-| 落子 | 点击空格落子，AI 随后回应（AI 落子蓝色高亮） |
-| 消失提示 | 落子被抹去时：格子红色脉冲闪烁 + 状态栏提示 |
+| 落子 | 点击空格落子，AI 随后回应 |
+| 消失提示 | 落子被抹去时棋盘上相应提示 |
 | 再来一局 | 终局后点击重新开局 |
 
 ## 难度与耗时（9×9 棋盘，实测参考）
@@ -37,22 +43,7 @@ python -m layer4_interface.frontend.play_gomoku.server
 | 正常 | 1500 | ~2.4 秒 |
 | 困难 | 4000 | ~6.5 秒 |
 
-## API
+## 对局保存与恢复
 
-与月亮棋应用同构：
-
-- `POST /api/start` — `{playerColor, difficulty}` → session（`board` 为 81 元素数组）
-- `POST /api/move` — `{gameId, cellIndex}` → session（AI 回应 + vanish 结果）
-- `POST /api/state` — `{gameId}` → session
-
-session 字段：`board`、`turn`、`winner`、`over`、`round`、
-`last_ai_move`、**`last_vanish`**（最近一手消失的格子索引，`null`=未消失）。
-
-## 目录结构
-
-```
-layer4_interface/frontend/play_gomoku/
-├── server.py            # HTTP 入口
-├── session.py           # 对局会话（含 chance/vanish 处理）
-└── static/              # index.html + css/gomoku.css + js/gomoku.js
-```
+平台自动把每局写入本地历史（`data/matches/`），页面刷新后可恢复当前对局，
+结束后可在历史中回看。

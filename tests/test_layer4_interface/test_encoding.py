@@ -1,4 +1,4 @@
-﻿"""Tests for Encoding layer (Layer 4)."""
+"""Tests for Encoding layer (Layer 4)."""
 
 from __future__ import annotations
 

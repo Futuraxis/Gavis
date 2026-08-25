@@ -57,7 +57,9 @@ def belief_obs(obs: dict, viewer: str | None = None) -> dict:
     rows = obs.get("my_role") or []
     my_role = str(rows[0].get(ROLE_KEY)) if rows else ""
     alive = [r.get("alive") for r in (obs.get("alive") or [])]
-    dead_roles = {f"p{r.get('_index')}": r.get(ROLE_KEY) for r in (obs.get("dead_roles") or []) if r.get("_index") is not None}
+    dead_roles = {
+        f"p{r.get('_index')}": r.get(ROLE_KEY) for r in (obs.get("dead_roles") or []) if r.get("_index") is not None
+    }
     return {
         "my_role": my_role,
         "alive": alive,

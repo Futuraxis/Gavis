@@ -33,8 +33,8 @@ from typing import Callable
 import numpy as np
 import torch
 
-from layer2_engine.core.state_graph import State
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import State
 
 from .action_space import ActionSpace
 from .encoders import GameEncoder
@@ -118,8 +118,8 @@ def run_episode(
     rng: random.Random,
     encoder: GameEncoder,
     action_space: ActionSpace,
-    select_idx: SelectFn,
-    next_value_fn: NextValueFn | None = None,
+    select_idx: SelectFn | dict[int, SelectFn],
+    next_value_fn: NextValueFn | None | dict[int, NextValueFn] | None = None,
     max_steps: int = 0,
 ) -> EpisodeTrajectory:
     """Play one episode, returning the trajectory and terminal payoffs.
@@ -135,14 +135,24 @@ def run_episode(
         Observation / joint-state encoder.
     action_space : ActionSpace
         Fixed action space.
-    select_idx : SelectFn
-        ``select_idx(player_idx, state, mask) -> (idx, info)``.
-    next_value_fn : NextValueFn, optional
+    select_idx : SelectFn | dict[int, SelectFn]
+        ``select_idx(player_idx, state, mask) -> (idx, info)``; a dict maps
+        each acting seat to its own policy callback (对手编排：不同座位用
+        不同策略 —— 学习器用当前策略、对手座位用冻结快照）.
+    next_value_fn : NextValueFn | dict[int, NextValueFn] | None, optional
         Evaluates the successor state for the acting player; the result
         lands in ``info['next_value']`` (HAPPO critic; unused elsewhere).
+        A dict maps each acting seat to its own critic; seats missing from
+        the dict get no bootstrap value (对手座位不评估 critic）.
     max_steps : int
         Step guard (0 = unlimited) against pathological loops.
     """
+    selectors = select_idx if isinstance(select_idx, dict) else {i: select_idx for i in range(len(players))}
+    next_values = (
+        next_value_fn
+        if isinstance(next_value_fn, dict)
+        else ({i: next_value_fn for i in range(len(players))} if next_value_fn is not None else {})
+    )
     state = engine.create_initial_state()
     player_idx = {p: i for i, p in enumerate(players)}
     traj = EpisodeTrajectory()
@@ -180,7 +190,7 @@ def run_episode(
             _abort()
             break
         mask = action_space.legal_mask(state, legal)
-        action_idx, info = select_idx(pid, state, mask)
+        action_idx, info = selectors[pid](pid, state, mask)
         action = action_space.action_from_index(action_idx, legal)
         if action is None:
             _abort()
@@ -217,8 +227,9 @@ def run_episode(
             break
 
         done = engine.is_terminal(next_state)
-        if not done and next_value_fn is not None:
-            info["next_value"] = float(next_value_fn(next_state, pid))
+        nv = next_values.get(pid)
+        if not done and nv is not None:
+            info["next_value"] = float(nv(next_state, pid))
         reward = 0.0
         if done:
             reward = float(engine.get_utility(next_state, current))

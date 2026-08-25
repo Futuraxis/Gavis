@@ -1,4 +1,4 @@
-﻿"""Game engine — interprets v5.0 rules JSON as a stochastic game model.
+"""Game engine — interprets v5.0 rules JSON as a stochastic game model.
 
 GameEngine — the single solver-facing contract (Layer 2 to Layer 3): all solvers interact
 with the game exclusively through this engine.

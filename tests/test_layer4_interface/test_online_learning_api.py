@@ -15,12 +15,12 @@ from typing import Generator
 
 import pytest
 
-from train_cli import DefaultSolverProvider
 from layer4_interface.frontend.platform.benchmark import BenchmarkRunner
 from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.server import make_handler
 from layer4_interface.frontend.platform.session import PlayManager
 from layer4_interface.online_learning import LearningManager, LearningStore, OnlineModelStore
+from train_cli import DefaultSolverProvider
 
 _NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 

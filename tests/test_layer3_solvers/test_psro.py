@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 
 import numpy as np
@@ -293,3 +294,80 @@ def test_exploitability_measures_column_deviation():
     expl = exploitability(_RowAlwaysLosesEnv(), nash, pool, Ne=1, num_workers=1)
     # row loses every episode → values = [-1, -1] → expl = -mean = 1.0
     assert expl == pytest.approx(1.0)
+
+
+# ── 审查 2026-08: 视角相对编码 + 双座位最佳响应 ────────────────
+
+
+def test_perspective_encoding_is_color_symmetric() -> None:
+    """编码必须视角相对：颜色互换的两个局面（各自轮到行动）映射到同一个
+    状态码，一张共享表才对黑/白两个座位都有效。旧绝对编码（1=黑,2=白）下
+    白方座位的表项从未被训练，PSRO 池以白方行动时等价于随机。"""
+    adapter = _moon(3)
+    env = GymAdapter(adapter)
+
+    s_black = adapter.create_initial_state()
+    s_black["_arrays"]["board"] = ["p_black", None, None, None, "p_white", None, None, None, None]
+
+    s_white = adapter.create_initial_state()
+    s_white["env"]["turn"] = "p_white"
+    s_white["_arrays"]["board"] = ["p_white", None, None, None, "p_black", None, None, None, None]
+
+    assert env._encode_state(s_black) == env._encode_state(s_white)  # noqa: SLF001
+
+
+def _episode_utility(engine: GameEngine, owners: dict, rng: random.Random) -> float:
+    """Local episode runner: non-owned seats play uniformly random."""
+    state = engine.create_initial_state()
+    steps = 0
+    while not engine.is_terminal(state) and steps < 600:
+        node = engine.get_node_type(state)
+        if node == "chance":
+            outcomes = engine.get_chance_outcomes(state)
+            if not outcomes:
+                break
+            state = engine.apply_chance(state, rng.choice(outcomes))
+            steps += 1
+            continue
+        if node != "player":
+            break
+        current = engine.get_current_player(state)
+        solver = owners.get(current)
+        legal = engine.get_legal_actions(state)
+        if not legal:
+            break
+        action = solver.select_action(state) if solver is not None else rng.choice(legal)
+        if action is None:
+            action = rng.choice(legal)
+        state = engine.apply_action(state, action)
+        steps += 1
+    owned = next(iter(owners))
+    return float(engine.get_utility(state, owned))
+
+
+def test_best_response_trains_both_seats() -> None:
+    """双座位最佳响应：训练后的贪心表从两个座位对均匀随机都要超过各自的
+    随机基线（黑 0.57 / 白 0.425 @N=200；本测试 N=60 实测黑 42、白 33）。
+    旧单座位实现 + 视角绝对编码下白方表未训练，白方行动 ≈ 随机。"""
+    from layer3_solvers.psro.tabular_q import tabular_q_best_response
+
+    adapter = _moon(5)
+    env = GymAdapter(adapter)
+    pi = tabular_q_best_response(env, num_steps=4000, epsilon=0.1, alpha=0.1, seed=5)
+
+    solver = PSROSolver(adapter, PSROConfig(seed=5, num_iters=1, num_steps_per_iter=1))
+    solver._nash_mixture = pi  # noqa: SLF001
+
+    black_wins = sum(
+        _episode_utility(adapter, {"p_black": solver, "p_white": None}, random.Random(5 + ep * 31 + 7)) > 0
+        for ep in range(60)
+    )
+    white_wins = sum(
+        _episode_utility(adapter, {"p_white": solver, "p_black": None}, random.Random(5 + ep * 31 + 7)) > 0
+        for ep in range(60)
+    )
+    # 与 _scratch_test_calib 同一评估协议：budget 4000 / seed 5 / N=60
+    # 实测 black=42、white=33（均高于各自随机基线）。阈值留余量：
+    # 旧反训 bug 白方=0.275，此断言可一票否决。
+    assert black_wins >= 32, f"black seat weak after both-seat BR training: {black_wins}/60"
+    assert white_wins >= 25, f"white seat too weak after both-seat BR training: {white_wins}/60"

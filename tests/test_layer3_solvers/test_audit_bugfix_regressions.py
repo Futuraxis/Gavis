@@ -1,4 +1,4 @@
-﻿"""Regression tests for the architecture-audit bug fixes (2026-08-13).
+"""Regression tests for the architecture-audit bug fixes (2026-08-13).
 
 Each test pins one fixed bug from the audit report (C-xx / M-xx / minor
 items) so it cannot silently regress:
@@ -31,8 +31,7 @@ import numpy as np
 import pytest
 
 from layer2_engine.core.engine import GameEngine
-from layer2_engine.core.state_graph import clone_state
-from layer2_engine.core.state_graph import ActionInstance, ChanceOutcome
+from layer2_engine.core.state_graph import ActionInstance, ChanceOutcome, clone_state
 
 RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
 
@@ -40,6 +39,46 @@ RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
 def _moon(seed: int = 42) -> GameEngine:
     with open(RULES_DIR / "moon_chess.json", "r", encoding="utf-8") as f:
         return GameEngine(json.load(f), seed=seed)
+
+
+def _ppo_seat_wins(engine: GameEngine, solver, seat: str, episodes: int, base_seed: int) -> int:
+    """Wins of ``solver`` from the given seat vs a uniform-random opponent.
+
+    The other seat plays uniformly random (None owner), matching train-cli's
+    ``evaluate(..., opponents=("random",))`` semantics; the owned-seat utility
+    decides the win.
+    """
+    wins = 0
+    for ep in range(episodes):
+        rng = random.Random(base_seed + ep * 31 + 7)
+        state = engine.create_initial_state()
+        steps = 0
+        while not engine.is_terminal(state) and steps < 600:
+            node = engine.get_node_type(state)
+            if node == "chance":
+                outcomes = engine.get_chance_outcomes(state)
+                if not outcomes:
+                    break
+                state = engine.apply_chance(state, rng.choice(outcomes))
+                steps += 1
+                continue
+            if node != "player":
+                break
+            current = engine.get_current_player(state)
+            legal = engine.get_legal_actions(state)
+            if not legal:
+                break
+            if current == seat:
+                action = solver.select_action(state)
+                if action is None:
+                    action = rng.choice(legal)
+            else:
+                action = rng.choice(legal)
+            state = engine.apply_action(state, action)
+            steps += 1
+        wins += float(engine.get_utility(state, seat)) > 0
+    return wins
+
 
 try:
     import torch  # noqa: F401
@@ -477,6 +516,30 @@ class TestPPOFixes:
         assert action is not None
         legal_keys = {a.canonical_key for a in adapter.get_legal_actions(state)}
         assert action.canonical_key in legal_keys
+
+    def test_selfplay_rotation_trains_both_seats(self):
+        """审查 2026-08: 自博弈训练必须轮换受训座位 —— 旧实现固定受训 = black，
+        白方座位的决策从未进入 buffer，网络对白方局面未训练（自博弈评估中白方
+        胜率 ≈ 0.1）。轮换后两个座位都要显著高于"未训练白方"的水平。"""
+        from layer3_solvers.ppo.solver import PPOConfig, PPOSolver
+
+        adapter = _moon(42)
+        solver = PPOSolver(
+            adapter,
+            PPOConfig(seed=42, state_dim=38, action_dim=9, update_frequency=16, opponent="self"),
+        )
+        solver.train(episodes=300)
+        # 配置默认对手必须是 self（不再默认 random）
+        assert solver.config.opponent == "self"
+        assert solver._players == ["p_black", "p_white"]  # noqa: SLF001
+        assert solver._last_agent_step is not None  # 训练确实填充了 buffer
+
+        black_wins = _ppo_seat_wins(adapter, solver, "p_black", 60, 42)
+        white_wins = _ppo_seat_wins(adapter, solver, "p_white", 60, 42)
+        # 未训练白方 ≈ 0.1；修复后 seed 42 @ N=60 实测黑 52/白 47（高于随机
+        # 基线 0.57/0.425）。阈值留余量：旧"白方未训练"bug 可被一票否决。
+        assert white_wins >= 30, f"white seat still under-trained: {white_wins}/60"
+        assert black_wins >= 32, f"black seat weak: {black_wins}/60"
 
 
 # ── minor: PSRO save/load roundtrip without pickle ─────────────────

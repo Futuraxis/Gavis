@@ -20,7 +20,11 @@ from pathlib import Path
 
 from layer1_translator import translate_rules_json
 
+from ...agent import PERSONAS, DialogueEngine, OllamaClient
+from ...difficulty.adaptive import AdaptiveController
 from ...online_learning import LearningManager, LearningStore, OnlineModelStore
+from ...profile.store import ProfileStore
+from ...review import analyze as review_analyze
 from ..common.http_utils import BodyTooLargeError, read_json_body, send_error_json, send_json
 from .benchmark import SOLVER_OPTIONS, BenchmarkRunner
 from .games import GAMES, PlayError
@@ -39,6 +43,7 @@ def make_handler(
     benchmark: BenchmarkRunner,
     dist_dir: Path = DIST_DIR,
     learning: LearningManager | None = None,
+    profile_store: ProfileStore | None = None,
 ) -> type:
     """Build a handler class bound to the given platform services.
 
@@ -60,7 +65,7 @@ def make_handler(
 
         def _send_cors_headers(self) -> None:
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
         # CORS 只由 end_headers 统一发出一遍（审查 P2：双重 CORS 头移除）
@@ -83,6 +88,12 @@ def make_handler(
                     self._handle_history_list()
                 elif path.startswith("/api/history/"):
                     self._handle_history_get(path[len("/api/history/") :])
+                elif path == "/api/profile":
+                    self._handle_profile_get()
+                elif path.startswith("/api/review/"):
+                    self._handle_review_get(path[len("/api/review/") :])
+                elif path == "/api/match/active":
+                    self._handle_match_active()
                 elif path == "/api/benchmark":
                     self._handle_benchmark_list()
                 elif path == "/api/benchmark/status":
@@ -143,6 +154,31 @@ def make_handler(
                     self._handle_learning_apply()
                 elif path == "/api/learning/config":
                     self._handle_learning_config()
+                elif path == "/api/match/hint":
+                    self._handle_match_hint()
+                elif path == "/api/agent/say":
+                    self._handle_agent_say()
+                elif path == "/api/profile":
+                    self._handle_profile_save()
+                elif path == "/api/profile/clear":
+                    self._handle_profile_clear()
+                else:
+                    send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
+            except BodyTooLargeError as exc:
+                send_error_json(self, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
+            except (PlayError, HistoryError) as exc:
+                send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
+            except (KeyError, TypeError, ValueError) as exc:
+                send_error_json(self, HTTPStatus.BAD_REQUEST, f"参数错误: {exc}")
+            except Exception as exc:  # noqa: BLE001 - last-resort envelope for the client
+                self.log_error("internal error: %s", exc)
+                send_error_json(self, HTTPStatus.INTERNAL_SERVER_ERROR, "服务器内部错误")
+
+        def do_PUT(self) -> None:
+            path = urllib.parse.urlsplit(self.path).path
+            try:
+                if path == "/api/profile":
+                    self._handle_profile_save()
                 else:
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
             except BodyTooLargeError as exc:
@@ -183,6 +219,10 @@ def make_handler(
                 str(payload.get("player_pid", "random")),
                 str(payload.get("difficulty", "normal")),
                 int(payload.get("player_count", 2)),
+                persona=str(payload["persona"]) if payload.get("persona") else None,
+                hint_level=str(payload.get("hint_level", "off")),
+                pacing=str(payload.get("pacing", "standard")),
+                adaptive_enabled=bool(payload.get("adaptive", False)),
             )
             send_json(self, HTTPStatus.OK, {"ok": True, "session": session.snapshot()})
 
@@ -197,6 +237,51 @@ def make_handler(
         def _handle_match_state(self) -> None:
             payload = read_json_body(self)
             send_json(self, HTTPStatus.OK, {"ok": True, "session": manager.get(payload["game_id"]).snapshot()})
+
+        def _handle_match_active(self) -> None:
+            """List in-flight sessions (support 继续上一局 / resume on refresh)."""
+            send_json(self, HTTPStatus.OK, {"ok": True, "sessions": manager.active_sessions()})
+
+        # ── Companion agent / profile / review (D 节接线) ────────
+
+        def _handle_agent_say(self) -> None:
+            payload = read_json_body(self)
+            message = manager.say(payload["game_id"], str(payload.get("scenario", "idle")))
+            send_json(self, HTTPStatus.OK, {"ok": True, "message": message})
+
+        def _handle_match_hint(self) -> None:
+            payload = read_json_body(self)
+            hint = manager.hint(payload["game_id"], str(payload.get("level", "direction")))
+            send_json(self, HTTPStatus.OK, {"ok": True, "hint": hint})
+
+        def _handle_profile_get(self) -> None:
+            if profile_store is None:
+                send_error_json(self, HTTPStatus.NOT_FOUND, "档案存储未启用")
+                return
+            send_json(self, HTTPStatus.OK, {"ok": True, "profile": profile_store.load()})
+
+        def _handle_profile_save(self) -> None:
+            if profile_store is None:
+                send_error_json(self, HTTPStatus.NOT_FOUND, "档案存储未启用")
+                return
+            payload = read_json_body(self)
+            patch = payload.get("profile")
+            if not isinstance(patch, dict):
+                raise KeyError("缺少 profile 字段")
+            merged = {**profile_store.load(), **patch}
+            profile_store.save(merged)
+            send_json(self, HTTPStatus.OK, {"ok": True, "profile": merged})
+
+        def _handle_profile_clear(self) -> None:
+            if profile_store is None:
+                send_error_json(self, HTTPStatus.NOT_FOUND, "档案存储未启用")
+                return
+            profile_store.clear()
+            send_json(self, HTTPStatus.OK, {"ok": True, "profile": profile_store.load()})
+
+        def _handle_review_get(self, match_id: str) -> None:
+            report = review_analyze(history.get(urllib.parse.unquote(match_id)))
+            send_json(self, HTTPStatus.OK, {"ok": True, "report": asdict(report)})
 
         def _handle_history_list(self) -> None:
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
@@ -315,12 +400,30 @@ def main() -> None:
         gate_episodes=args.learning_gate_episodes,
         gate_budget=args.learning_gate_budget,
     )
-    manager = PlayManager(provider=default_provider, history=history, seed=42, learning=learning)
+    profiles = ProfileStore(args.data_dir.parent)
+    adaptive = AdaptiveController()
+
+    def _make_agent(persona_key: str) -> DialogueEngine | None:
+        persona = PERSONAS.get(persona_key)
+        if persona is None:
+            return None
+        llm = OllamaClient() if OllamaClient.available() else None
+        return DialogueEngine(persona, llm=llm)
+
+    manager = PlayManager(
+        provider=default_provider,
+        history=history,
+        seed=42,
+        learning=learning,
+        profiles=profiles,
+        adaptive=adaptive,
+        agent_factory=_make_agent,
+    )
     benchmark = BenchmarkRunner(provider=default_provider, seed=42)
     if args.learning_interval > 0:
         learning.start_auto(interval_seconds=args.learning_interval)
         print(f"在线学习 auto-apply 已启动: 每 {args.learning_interval}s 检查一次")
-    handler = make_handler(manager, history, benchmark, learning=learning)
+    handler = make_handler(manager, history, benchmark, learning=learning, profile_store=profiles)
     httpd = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Gavis 平台服务: http://{args.host}:{args.port}  (API 前缀 /api, 静态目录 {DIST_DIR})")
     try:

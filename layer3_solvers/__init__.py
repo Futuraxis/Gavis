@@ -1,4 +1,4 @@
-﻿"""Layer 3: Solvers — game-playing AI algorithms.
+"""Layer 3: Solvers — game-playing AI algorithms.
 
 All solvers implement ``SolverBase`` and consume games exclusively
 through the GameEngine contract from Layer 2.

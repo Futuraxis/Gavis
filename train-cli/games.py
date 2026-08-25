@@ -174,15 +174,36 @@ class GameSpec:
 
 # ── 注册表 ─────────────────────────────────────────────────────────
 # 默认超参/局数沿用既有实测标定（train_hybrid / train_marl / benchmark_all）：
-#   moon_chess:        CFR 800 iters ≈ 3 min；PSRO 5×2000 ≈ 35 s；MARL 600 局 ≈ 10 s
+#   moon_chess:        CFR 800 iters ≈ 3 min；PSRO 5×20000 ≈ 3-6 min（双座位 BR）；MARL 600 局 ≈ 10 s
 #   stochastic_gomoku: CFR 50 iters ≈ 5-8 min（9×9 深限）
 #   texas_holdem:      CFR 1000 iters ≈ 75 s；MARL 400 局 ≈ 30 s
 #   mahjong_*:         MARL 200 局 ≈ 12 min（约 3.5 s/局）；评估建议 4-8 局
 
+#: 麻将 MARL 默认对手编排配置（训练对手编排机制的一站式入口）。
+#: 开启 pfsp 优先虚构自博弈：每 ``checkpoint_interval`` 局把当前策略冻结入池
+#: （容量 ``pool_capacity``），学习器座位逐局轮换，对手座位按胜率加权采样池
+#: 快照；池空/warmup 阶段自动退化为纯自博弈（与旧行为兼容）。``eval_interval``
+#: 做 vs-random 固定基线曲线采样，直接产出"训练曲线平滑度"证据。
+_MAHJONG_OPPONENT_CFG: Mapping[str, Any] = {
+    "opponent_enabled": True,
+    "opponent_mode": "pfsp",  # self | uniform | pfsp | curriculum
+    "opponent_pool_capacity": 32,
+    "opponent_checkpoint_interval": 25,  # 每 25 局冻结一次当前策略入池
+    "opponent_warmup": 100,  # 起步 100 局纯自博弈（先有基础行为再入池）
+    "opponent_pfsp_alpha": 1.0,
+    "opponent_pfsp_floor": 0.1,
+    "opponent_pfsp_priority": "win",  # win → p∝win_rate^α；lose → p∝(1−win_rate)^α
+    "opponent_recency_decay": 0.9,
+    "opponent_win_memory": 50,
+    "opponent_role_alternate": True,
+    "eval_interval": 50,  # 每 50 局做一次 vs-random 曲线采样
+    "eval_episodes": 5,
+}
+
 _MAHJONG_SOLVERS: Mapping[str, SolverPipeline] = {
-    "qmix": SolverPipeline("qmix", episodes=200, save="qmix.pt"),
-    "happo": SolverPipeline("happo", episodes=200, save="happo.pt"),
-    "maac": SolverPipeline("maac", episodes=200, save="maac.pt"),
+    "qmix": SolverPipeline("qmix", episodes=200, config={**_MAHJONG_OPPONENT_CFG}, save="qmix.pt"),
+    "happo": SolverPipeline("happo", episodes=200, config={**_MAHJONG_OPPONENT_CFG}, save="happo.pt"),
+    "maac": SolverPipeline("maac", episodes=200, config={**_MAHJONG_OPPONENT_CFG}, save="maac.pt"),
 }
 
 
@@ -222,9 +243,31 @@ GAMES: dict[str, GameSpec] = {
                 },
             ),
             "cfr": SolverPipeline("cfr", entry="solve", config={"iterations": 800, "depth_limit": 6}),
-            "ppo": SolverPipeline("ppo", episodes=300, config={"state_dim": 38, "action_dim": 9}, save="ppo.pt"),
+            "ppo": SolverPipeline(
+                "ppo",
+                # 自博弈 + 双座位轮换 + 零和 bootstrap 取负（审查 2026-08: 旧默认
+                # 对手=random 且只训练黑方座位，next_value 又用了对手视角 → 自博弈
+                # 塌缩；修复后 seed 5 黑/白 vs random 0.88/0.77、seed 42 0.76/0.74
+                # @N=100，均高于随机基线 0.57/0.425）。局数 300 → 600、entropy
+                # 0.01 → 0.05 进一步抑制塌缩。
+                episodes=600,
+                config={
+                    "state_dim": 38,
+                    "action_dim": 9,
+                    "opponent": "self",
+                    "entropy_coef": 0.05,
+                },
+                save="ppo.pt",
+            ),
             "psro": SolverPipeline(
-                "psro", episodes=5, config={"num_iters": 5, "num_steps_per_iter": 2000}, save="psro_pool.npz"
+                "psro",
+                episodes=5,
+                # 训练对手不是随机：PSRO 的 BR 对着 Nash 混合训练且双座位交替
+                # （tabular_q 按局轮换训练座位，共享表对黑/白都有效）；预算
+                # 2000 → 20000 步、元博弈 Ne 10 → 30（审查 2026-08: 旧配置
+                # 在 19683 状态上只够 ~100 局，BR≈随机 → 池塌缩成 2）。
+                config={"num_iters": 5, "num_steps_per_iter": 20000, "evaluation_episodes": 30},
+                save="psro_pool.npz",
             ),
             "qmix": SolverPipeline("qmix", episodes=2000, save="qmix.pt"),
             "happo": SolverPipeline("happo", episodes=2000, save="happo.pt"),
@@ -390,6 +433,9 @@ class DefaultSolverProvider:
             table = self.online_models.current_table(game_id)
             if table is not None:
                 kwargs.setdefault("empirical_table", table)
+                # 注入经验表后必须同时把对手模型切到 "empirical"，否则
+                # HybridConfig.opponent_model 默认 "uniform"，经验表从未被读取。
+                kwargs.setdefault("opponent_model", "empirical")
         return create_solver(game_id, name, engine, seed, budget, **kwargs)
 
 

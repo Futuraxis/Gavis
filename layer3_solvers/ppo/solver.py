@@ -15,8 +15,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from layer2_engine.core.state_graph import ActionInstance, State
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import ActionInstance, State
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 from .networks import ActorCriticNetwork
@@ -38,6 +38,7 @@ class PPOConfig(SolverConfig):
     action_dim: int = 9  # default for 3×3 grid
     hidden_dim: int = 128  # ActorCriticNetwork 隐藏层宽度
     update_frequency: int = 16  # 每 N 局更新一次；0 表示每局更新（保持旧行为）
+    opponent: str = "self"  # 训练对手：'self'（自博弈，默认）/ 'random' / 'mcts'
 
 
 class PPOSolver(SolverBase):
@@ -61,6 +62,19 @@ class PPOSolver(SolverBase):
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(cfg.seed)
             np.random.seed(cfg.seed)
+
+        # Both seats in seat order, from the rules (fallback p_black/p_white).
+        # Training rotates the "controlled player" per episode so the shared
+        # policy network learns to act from BOTH colors (审查 2026-08: the old
+        # fixed p_black control meant the policy as white was never trained —
+        # in self-play eval the untrained white seat lost ~100% vs black).
+        raw_players = (getattr(engine, "rules", {}) or {}).get("players") or []
+        self._players = [str(p) if not isinstance(p, dict) else str(p.get("id", "")) for p in raw_players] or [
+            "p_black",
+            "p_white",
+        ]
+        if len(self._players) < 2:
+            self._players = ["p_black", "p_white"]
 
         self.device = self._resolve_device(cfg.device)
         self.network = ActorCriticNetwork(
@@ -100,24 +114,33 @@ class PPOSolver(SolverBase):
         return self._action_from_index(state, action)
 
     def train(self, episodes: int = 100, **kwargs) -> SolverMetrics:
-        """Train PPO via self-play or vs random opponent.
+        """Train PPO via self-play (default) or vs random / mcts opponent.
+
+        The controlled (trained) seat rotates every episode, so the shared
+        network learns to act from BOTH colors; the old fixed-``p_black``
+        control only ever trained one seat (审查 2026-08).
 
         Parameters
         ----------
         episodes : int
             Number of episodes to train.
         opponent : str, optional
-            'random' (default), 'self' (self-play), or 'mcts'
+            'self' (default), 'random', or 'mcts'.  Default comes from
+            ``PPOConfig.opponent``.
+        controlled_player : str, optional
+            Pin one seat as the trained player.  None (default) rotates
+            the trained seat per episode.
         """
-        opponent_type = kwargs.get("opponent", "random")
+        opponent_type = kwargs.get("opponent", getattr(self.config, "opponent", "self"))
         verbose = kwargs.get("verbose", False)
-        controlled_player = kwargs.get("controlled_player", "p_black")
+        controlled_player = kwargs.get("controlled_player")
 
         wins = 0
         total_reward = 0.0
         total_steps = 0
 
         for ep in range(episodes):
+            trained_player = controlled_player if controlled_player is not None else self._players[ep % 2]
             state = self.engine.create_initial_state()
             self._last_agent_step = None
             ep_reward = 0.0
@@ -127,7 +150,7 @@ class PPOSolver(SolverBase):
                 nt = self.engine.get_node_type(state)
                 if nt == "player":
                     cp = self.engine.get_current_player(state)
-                    if cp == controlled_player:
+                    if cp == trained_player:
                         action = self._select_action_train(state)
                         log_prob = self._last_log_prob
                         value = self._last_value
@@ -135,8 +158,13 @@ class PPOSolver(SolverBase):
 
                         next_state = self.engine.apply_action(state, action)
                         done = self.engine.is_terminal(next_state)
-                        reward = self._get_reward(next_state, controlled_player, done)
-                        next_value = 0.0 if done else self._evaluate_value(next_state)
+                        reward = self._get_reward(next_state, trained_player, done)
+                        # ``_evaluate_value(next_state)`` 返回的是下一个行动者
+                        # （对手）视角的局面对值；零和博弈里受训座位的延续值是其
+                        # 负值。旧代码直接当自己的 next_value 用 → 自博弈 bootstrap
+                        # 符号错误 → 训练塌缩（审查 2026-08: seed 5 上 600 局后
+                        # 黑/白均胜率仍 ~0.1-0.26，取负后收敛正常）。
+                        next_value = 0.0 if done else -self._evaluate_value(next_state)
 
                         self.buffer.add(
                             state=self._get_features(state),
@@ -160,7 +188,7 @@ class PPOSolver(SolverBase):
                         step += 1
                     else:
                         # Opponent move
-                        opp_action = self._opponent_action(state, opponent_type, controlled_player)
+                        opp_action = self._opponent_action(state, opponent_type, trained_player)
                         if opp_action is None:
                             break
                         state = self.engine.apply_action(state, opp_action)
@@ -171,7 +199,7 @@ class PPOSolver(SolverBase):
                                 action=act_idx,
                                 action_mask=m,
                                 log_prob=lp,
-                                reward=self._get_reward(state, controlled_player, True),
+                                reward=self._get_reward(state, trained_player, True),
                                 done=True,
                                 value=v,
                                 next_value=0.0,
@@ -186,10 +214,11 @@ class PPOSolver(SolverBase):
                     break
                 total_steps += 1  # 环境总步数（含对手/运气步）
 
-            # Episode end
+            # Episode end — count a win only when the TRAINED seat won
+            # (the seat rotates each episode, so this balances both colors).
             if self.engine.is_terminal(state):
                 winner = state["env"].get("winner")
-                if winner == controlled_player:
+                if winner == trained_player:
                     wins += 1
             total_reward += ep_reward
 

@@ -23,14 +23,13 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Literal
 
 from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import ActionInstance
 
-from ..engine_helpers import engine_from_rules, mahjong_tile_name, resolve_all_chance, texas_hand_name
 from ...solver_provider import SolverHandle, SolverProvider
+from ..engine_helpers import engine_from_rules, mahjong_tile_name, resolve_all_chance, texas_hand_name
 
 if TYPE_CHECKING:
     from .session import GameSession
@@ -372,8 +371,11 @@ def _make_mahjong_engine(variant: str) -> Callable[..., GameEngine]:
     return _create
 
 
-def _mahjong_create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
-    return provider.create_solver("mahjong", "mahjong", engine, seed, budget)
+def _make_mahjong_solver(game_id: str) -> Callable[[SolverProvider, GameEngine, int, int], SolverHandle]:
+    def _create(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
+        return provider.create_solver(game_id, "mahjong", engine, seed, budget)
+
+    return _create
 
 
 def _mahjong_resolve_start(session: GameSession) -> None:
@@ -584,7 +586,7 @@ GAMES: dict[str, GameSpec] = {
         # 启发式求解器与搜索预算无关，难度档仅作展示（审查 Minor 12）
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("guangdong"),
-        create_solver=_mahjong_create_solver,
+        create_solver=_make_mahjong_solver("mahjong_guangdong"),
         resolve_start=_mahjong_resolve_start,
         ai_opens=lambda session: session.player_pid != "p0",
         parse_human_action=_mahjong_parse_human_action,
@@ -604,7 +606,7 @@ GAMES: dict[str, GameSpec] = {
         player_counts=(2, 4),
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("hongzhong"),
-        create_solver=_mahjong_create_solver,
+        create_solver=_make_mahjong_solver("mahjong_hongzhong"),
         resolve_start=_mahjong_resolve_start,
         ai_opens=lambda session: session.player_pid != "p0",
         parse_human_action=_mahjong_parse_human_action,
@@ -624,7 +626,7 @@ GAMES: dict[str, GameSpec] = {
         player_counts=(2, 4),
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("blood"),
-        create_solver=_mahjong_create_solver,
+        create_solver=_make_mahjong_solver("mahjong_blood"),
         resolve_start=_mahjong_resolve_start,
         ai_opens=lambda session: session.player_pid != "p0",
         parse_human_action=_mahjong_parse_human_action,

@@ -7,13 +7,12 @@ target).  Action-space mapping is tested for all three games.
 
 from __future__ import annotations
 
+import json
 import random
+from pathlib import Path
 
 import numpy as np
 import pytest
-
-import json
-from pathlib import Path
 
 from layer2_engine.core.engine import GameEngine
 
@@ -38,6 +37,7 @@ def _mahjong_gd(seed: int = 42) -> GameEngine:
 def _mahjong_hz(seed: int = 42) -> GameEngine:
     with open(RULES_DIR / "mahjong.json", "r", encoding="utf-8") as f:
         return GameEngine(json.load(f), seed=seed, variant="hongzhong", player_count=2)
+
 
 try:
     from layer3_solvers.marl import (

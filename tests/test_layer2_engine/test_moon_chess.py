@@ -226,4 +226,3 @@ class TestGameEngineProtocol:
         assert state["_arrays"]["board"][1] == "p_black"
         assert state["_arrays"]["board"][6] == "p_white"
         assert engine.get_current_player(state) == "p_black"
-

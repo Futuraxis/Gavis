@@ -45,6 +45,14 @@ export function apiPost<T>(path: string, body: unknown): Promise<T> {
   })
 }
 
+export function apiPut<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
 // ── 在线学习 API ────────────────────────────────────────────────
 
 export function getLearningStatus(): Promise<{ learning: import('../types').LearningStatus[] }> {
@@ -60,4 +68,31 @@ export function applyLearning(gameId?: string): Promise<{ result: import('../typ
 
 export function setLearningConfig(gameId: string, enabled: boolean): Promise<{ learning: import('../types').LearningStatus }> {
   return apiPost<{ learning: import('../types').LearningStatus }>('/learning/config', { game_id: gameId, enabled })
+}
+
+// ── Agent 陪伴 / 偏好 / 复盘 API ────────────────────────────────
+// 这些路由由集成阶段接线 (D.1)；前端只按冻结契约的 JSON 结构调用。
+
+export function agentSay(scenario: string, extra?: Record<string, unknown>): Promise<import('../types').AgentMessage> {
+  return apiPost<import('../types').AgentMessage>('/agent/say', { scenario, ...(extra ?? {}) })
+}
+
+export function matchHint(level: import('../types').HintLevel): Promise<import('../types').AgentMessage> {
+  return apiPost<import('../types').AgentMessage>('/match/hint', { level })
+}
+
+export function getProfile(): Promise<import('../types').Profile> {
+  return apiGet<import('../types').Profile>('/profile')
+}
+
+export function saveProfile(profile: import('../types').Profile): Promise<import('../types').Profile> {
+  return apiPut<import('../types').Profile>('/profile', profile)
+}
+
+export function clearProfile(): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>('/profile/clear', {})
+}
+
+export function getReview(matchId: string): Promise<import('../types').ReviewReport> {
+  return apiGet<import('../types').ReviewReport>(`/review/${matchId}`)
 }

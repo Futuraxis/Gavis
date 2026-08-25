@@ -13,6 +13,7 @@ gitignored) and remove them afterwards.
 from __future__ import annotations
 
 import ast
+import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,9 +21,6 @@ from uuid import uuid4
 
 import pytest
 
-import json
-
-from train_cli import default_provider
 from layer2_engine.core.engine import GameEngine
 from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.session import PlayManager
@@ -34,6 +32,7 @@ from layer4_interface.online_learning import (
     jsonable,
     signal_from_match,
 )
+from train_cli import default_provider
 
 REPO = Path(__file__).resolve().parents[2]
 RULES_DIR = REPO / "rules"
@@ -607,8 +606,8 @@ class TestProviderInjection:
         return _texas(3)
 
     def test_published_table_served_to_new_sessions(self, store_dir: Path):
-        from train_cli import DefaultSolverProvider
         from layer4_interface.online_learning import OnlineModelStore
+        from train_cli import DefaultSolverProvider
 
         model_store = OnlineModelStore(store_dir / "models")
         model_store.publish("texas_holdem", {"k1": {"act:fold:0": 3}}, samples=3, coverage=1)
@@ -625,8 +624,8 @@ class TestProviderInjection:
         assert solver.config.opponent_model == "uniform"
 
     def test_explicit_kwarg_wins_over_published(self, store_dir: Path):
-        from train_cli import DefaultSolverProvider
         from layer4_interface.online_learning import OnlineModelStore
+        from train_cli import DefaultSolverProvider
 
         model_store = OnlineModelStore(store_dir / "models")
         model_store.publish("texas_holdem", {"published": {"a": 1}}, samples=1, coverage=1)
@@ -643,8 +642,8 @@ class TestProviderInjection:
 
 class TestEndToEnd:
     def test_play_then_apply_then_next_session_uses_model(self, store_dir: Path):
-        from train_cli import DefaultSolverProvider
         from layer4_interface.online_learning import LearningManager, OnlineModelStore
+        from train_cli import DefaultSolverProvider
 
         store = LearningStore(store_dir / "online_learning")
         model_store = OnlineModelStore(store_dir / "online_learning" / "models")

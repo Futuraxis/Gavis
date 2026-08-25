@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from train_cli import RandomSolver, create_solver, default_provider
 from layer2_engine.core.engine import GameEngine
 from layer4_interface.frontend.platform.benchmark import (
     BENCHMARK_BUDGETS,
@@ -16,6 +15,7 @@ from layer4_interface.frontend.platform.benchmark import (
     BenchmarkRunner,
 )
 from layer4_interface.frontend.platform.games import GAMES
+from train_cli import RandomSolver, create_solver, default_provider
 
 RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
 
@@ -34,7 +34,9 @@ class TestRandomSolver:
                 break
 
     def test_train_is_noop(self):
-        solver = RandomSolver(GameEngine(json.load(open(RULES_DIR / "moon_chess.json", encoding="utf-8")), seed=42), seed=42)
+        solver = RandomSolver(
+            GameEngine(json.load(open(RULES_DIR / "moon_chess.json", encoding="utf-8")), seed=42), seed=42
+        )
         metrics = solver.train(episodes=10)
         assert metrics.episodes == 10
 

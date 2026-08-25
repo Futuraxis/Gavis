@@ -50,6 +50,11 @@ class MatchHistory:
             "moves": len(match.get("moves", [])),
             "started_at": match.get("started_at"),
             "finished_at": match.get("finished_at"),
+            # 陪伴感扩展（PRD 4.1.5 / 4.4.4）：性格、是否用过提示、本局 AI 强度档
+            # （旧记录缺省 None，前端按可选字段处理）。
+            "persona": match.get("persona"),
+            "hinted": match.get("hinted"),
+            "ai_strength": match.get("ai_strength"),
         }
         path = self.data_dir / f"{match_id}.json"
         self._atomic_write(path, match)

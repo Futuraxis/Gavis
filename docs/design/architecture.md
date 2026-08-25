@@ -38,7 +38,7 @@
 │  Binding: ImageBinding / VisionLLMBinding / StateTracker   │
 │  Encoding: MoonStateEncoder → 特征向量                     │
 │  VisionBridge: Observation → Engine State                  │
-│  Frontend: play_* 单应用服务 + platform 平台前端           │
+│  Frontend: platform 平台前端（vision 视觉 P2 并入）        │
 │   (React 前端: 大厅/对战/评测/历史/在线学习,               │
 │    见 frontend/platform/)                                 │
 │  OnlineLearning: 捕获+持久化+经验表+门禁发布 (已实现,      │
@@ -105,13 +105,13 @@ layer4_interface/                   # 交互界面
 │   ├── moon_state_encoder.py        # 38 维特征向量
 │   └── game_state_adapter.py
 ├── solver_provider.py               # SolverHandle / SolverProvider 协议
-├── frontend/                        # Web 服务 (按应用分目录)
+├── agent/                           # 陪伴 Agent（persona/scenarios/skills/dialogue + 隐藏信息守卫）
+├── difficulty/                      # 自适应难度（胜率 → 搜索预算控制器）
+├── profile/                         # 偏好记忆（档案原子存 / 清除）
+├── review/                          # 赛后复盘（关键节点/胜负手/失误 + 建议）
+├── frontend/                        # Web 服务（platform 平台 + vision 视觉）
 │   ├── common/http_utils.py         # send_json / read_json_body
-│   ├── play_moon_chess/             # 月亮棋人机对弈 (8765)
-│   ├── play_gomoku/                 # 随机五子棋人机对弈 (8767)
-│   ├── play_texas_holdem/           # 德州扑克人机对弈 (8768)
-│   ├── play_werewolf/               # 狼人杀人机对弈 (8771, 需 ollama)
-│   ├── vision/                      # 视觉识别应用 (8766)
+│   ├── vision/                      # 视觉识别应用 (8766, P2 并入平台)
 │   └── platform/                    # 平台前端服务 (8770)
 │       ├── server.py                # HTTP 路由 + 静态服务 dist/
 │       ├── games.py                 # GameSpec 游戏注册表 (六游戏)
@@ -152,16 +152,16 @@ tests/                              # 测试 (558 用例, pytest)
 ```python
 engine = GameEngine(rules, seed=None, variant=None, player_count=None)
 state = engine.create_initial_state()
-engine.get_node_type(state)              # Literal['player','chance','terminal']
-engine.get_current_player(state)         # str | None（env.turn 推导）
-engine.get_legal_actions(state)          # list[ActionInstance]
-engine.apply_action(state, action)       # -> State
-engine.sample_chance(state)              # chance 采样（get_chance_outcomes + rng）
-engine.apply_chance(state, outcome)      # -> State
+engine.get_node_type(state)  # Literal['player','chance','terminal']
+engine.get_current_player(state)  # str | None（env.turn 推导）
+engine.get_legal_actions(state)  # list[ActionInstance]
+engine.apply_action(state, action)  # -> State
+engine.sample_chance(state)  # chance 采样（get_chance_outcomes + rng）
+engine.apply_chance(state, outcome)  # -> State
 engine.is_terminal(state) / engine.get_utility(state, player)
 engine.project_observation(state, player)  # -> Obs（visibility 声明式投影）
 engine.get_info_set_key(state, player)
-engine.eval_expr(expr, extra_ctx=None)   # 规则表达式求值（前端显示助手用）
+engine.eval_expr(expr, extra_ctx=None)  # 规则表达式求值（前端显示助手用）
 ```
 
 部分可观测、变体/人数/配比、轮转全部由规则 JSON 声明（`visibility` /
@@ -186,7 +186,7 @@ class SolverProvider(Protocol):
 # 实现与装配在 train-cli/games.py（唯一允许 import layer3_solvers 的
 # 装配点，全部由注册表数据驱动）；layer4_interface/ 内不存在
 # layer3_solvers 的 import。
-# 启动注入: play_* / platform 的 main() 将 default_provider 注入
+# 启动注入: platform 的 main() 将 default_provider 注入
 # PlayManager / BenchmarkRunner。
 ```
 

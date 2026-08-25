@@ -15,8 +15,7 @@ import numpy as np
 import pytest
 
 from layer2_engine.core.engine import GameEngine
-from layer2_engine.core.state_graph import clone_state
-from layer2_engine.core.state_graph import ActionInstance
+from layer2_engine.core.state_graph import ActionInstance, clone_state
 from layer3_solvers.cfr import CFR, CFRConfig
 
 RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
@@ -30,6 +29,7 @@ def _moon(seed: int = 1) -> GameEngine:
 def _mahjong_hz(seed: int = 42) -> GameEngine:
     with open(RULES_DIR / "mahjong.json", "r", encoding="utf-8") as f:
         return GameEngine(json.load(f), seed=seed, variant="hongzhong", player_count=2)
+
 
 try:
     import torch  # noqa: F401 — 仅探测可用性

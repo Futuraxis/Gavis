@@ -11,7 +11,7 @@ rules/                 游戏规则 JSON (v5.2, 零 BUILTIN + variants 声明式
 layer1_translator/    LLM 规则翻译层 (已实现: 模板 + LLM 编排 + schema 校验)
 layer2_engine/        游戏引擎核心 (GameEngine — 无 per-game 适配器, 无 interfaces/)
 layer3_solvers/       求解器 (MCTS/CFR/PPO/PSRO + mahjong/heuristic + marl/(QMix/HAPPO/MAAC))
-layer4_interface/     交互界面 (Binding/Encoding/Frontend/OnlineLearning 按应用分目录)
+layer4_interface/     交互界面 (Binding/Encoding/Frontend/OnlineLearning + agent/difficulty/profile/review)
 train-cli/            训练 CLI：games.py 游戏注册表（配置驱动，7 游戏）+ train.py 统一训练脚本
 train_cli.py          根目录导入桥 → train-cli/（使连字符目录可 import / python -m train_cli）
 tests/                测试 (610 cases)
@@ -91,15 +91,12 @@ docs/                 架构设计 + 六篇合并分析文档
 ```bash
 python -m pytest tests/ -v                          # 跑测试
 python train-cli/train.py --list                    # 查看游戏注册表一览
-python train-cli/train.py --game all                # 训练所有已登记游戏的默认管线
+python train-cli/train.py --game all                # 训练所有已登记游戏的默认管线 (完整训练)
 python train-cli/train.py --game moon_chess --solver hybrid   # Hybrid 训练 (产物 models/train/<game>/, 已 gitignore)
+python train-cli/train.py --game stochastic_gomoku --solver hybrid --preset quick  # 快速演示校准 (quick 预设: 0.2 缩放)
 python train-cli/train.py --game mahjong_guangdong --solver qmix,happo,maac  # MARL 训练
 python -m train_cli --game texas_holdem --solver hybrid         # 等价桥接入口
-python -m layer4_interface.frontend.play_moon_chess.server   # 月亮棋人机对弈 (8765)
-python -m layer4_interface.frontend.vision.server            # 视觉识别应用 (8766)
-python -m layer4_interface.frontend.play_gomoku.server       # 随机五子棋人机对弈 (8767)
-python -m layer4_interface.frontend.play_texas_holdem.server # 德州扑克人机对弈 (8768)
-python -m layer4_interface.frontend.play_werewolf.server      # 狼人杀人机对弈 (8771, 需本地 ollama qwen3:8b)
+python -m layer4_interface.frontend.vision.server            # 视觉识别应用 (8766, P2 并入平台)
 python -m layer4_interface.frontend.platform.server          # 平台前端服务 (8770, 需先 npm run build; --learning-interval N 开启在线学习 auto-apply)
 cd platform-frontend && npm install && npm run build         # 构建平台前端
 cd platform-frontend && npm run dev                          # 平台前端开发模式 (5173, /api 代理到 8770)

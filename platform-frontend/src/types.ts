@@ -109,6 +109,9 @@ export interface MatchMeta {
   moves: number
   started_at: string
   finished_at: string
+  persona?: PersonaKey | null
+  hinted?: boolean
+  ai_strength?: string | null
 }
 
 export interface MoveEntry {
@@ -130,6 +133,9 @@ export interface MatchLog {
   winner: string | null
   over: boolean
   moves: MoveEntry[]
+  persona?: PersonaKey | null
+  hinted?: boolean
+  ai_strength?: string | null
 }
 
 // ── 求解器评测 ─────────────────────────────────────────────────
@@ -205,4 +211,75 @@ export interface LearningApplyResult {
   samples: number
   coverage: number
   error: string | null
+}
+
+// ── Agent 陪伴 (C2 契约) ───────────────────────────────────────
+
+export type Mood = 'happy' | 'thinking' | 'sorry' | 'neutral'
+export type PersonaKey = 'gentle' | 'teacher' | 'banter' | 'cold'
+export type HintLevel = 'off' | 'direction' | 'specific' | 'demo'
+export type Pacing = 'fast' | 'standard' | 'slow'
+
+export interface AgentMessage {
+  text: string
+  mood: Mood
+}
+
+export interface ChatMessage {
+  id: string
+  role: 'agent' | 'player'
+  text: string
+  mood?: Mood
+  ts: number
+}
+
+export interface ChatState {
+  messages: ChatMessage[]
+  muted: boolean
+}
+
+// ── 活跃会话 (D 节接线: /api/match/active) ─────────────────────
+
+export interface ActiveSession {
+  game_id: string // 会话 id → 用于 ?game=<id> 恢复
+  game: string // 游戏注册 id（/battle/<game> 路由）
+  display_name: string
+  player_pid: string
+  difficulty: string
+  persona: PersonaKey | null
+  hint_level: HintLevel
+  step: number
+  started_at: string
+}
+
+// ── 偏好档案 (C3 契约) ─────────────────────────────────────────
+
+export interface Profile {
+  nickname: string
+  agent_call: string
+  default_persona: PersonaKey
+  default_difficulty: string
+  hint_level: HintLevel
+  pacing: Pacing
+  adaptive: boolean
+  difficulty_locked: boolean
+  learning_enabled: boolean
+  theme: 'light' | 'dark'
+  recent: Record<string, { wins: number; plays: number }>
+}
+
+// ── 复盘 (C4 契约) ─────────────────────────────────────────────
+
+export type KeyNodeKind = 'turning_point' | 'winning_move' | 'blunder'
+
+export interface KeyNode {
+  step: number
+  kind: KeyNodeKind
+  why: string
+}
+
+export interface ReviewReport {
+  key_nodes: KeyNode[]
+  improvement: string
+  summary: string
 }

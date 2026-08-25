@@ -11,7 +11,21 @@ from __future__ import annotations
 import pytest
 
 from train_cli import default_provider
-from layer4_interface.frontend.play_texas_holdem.session import PlayError, PlayManager
+
+#: 独立应用已退役归档（C6）；原模块不可用时整文件跳过（保留回归记录）。
+try:
+    from layer4_interface.frontend.play_texas_holdem.session import PlayError, PlayManager
+
+    _HAS_PLAY_TEXAS = True
+except ModuleNotFoundError:
+    PlayError = None  # type: ignore[misc]
+    PlayManager = None  # type: ignore[misc]
+    _HAS_PLAY_TEXAS = False
+
+pytestmark = pytest.mark.skipif(
+    not _HAS_PLAY_TEXAS,
+    reason="play_texas_holdem 已退役归档至 archive/legacy_play_apps/（平台功能见 layer4_interface.frontend.platform）",
+)
 
 
 @pytest.fixture
