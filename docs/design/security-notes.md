@@ -31,7 +31,7 @@
 
 | 条目 | 等级 | 位置 | 决策与前置条件 |
 |------|------|------|----------------|
-| `eval()`/`exec()` 直接使用（与 coding-standards §2.4 明文禁止冲突） | Major | `core/expr_eval.py:1084,1087`（`_eval_arithmetic` 算术串求值）；`core/state_graph.py:116`（`_eval_length_expr`）；`core/rules_compiler.py:479`（`_safe_eval`，noqa S307）、`:808`（`exec(compile(...))` codegen，noqa S102） | **保留**。缓解：输入为受信静态规则 JSON（`rules/` 顶层 + 生成的 v5.1 规则）；`eval` 均剥离 `__builtins__`；codegen 产物经 probe 验证兜底。**前置条件**：Layer 1（LLM 规则翻译，`layer1_translator/`）启用后「受信输入」前提失效——届时必须 (a) 对 Layer 1 产出规则强制 `schema_validator` 校验（已有模块，`layer1_translator/schema_validator.py`），(b) 提供 `GameEngine(rules, allow_codegen=False)` 类开关强制走纯解释器路径（解释器可处理全部 v5.1 表达式，`test_expr_eval.py::_assert_consistent` 已系统验证双路径一致）。长期方向：算术串求值替换为自研 tokenizer/求值器或 `ast` 节点白名单求值，彻底消除 `eval` |
+| `eval()`/`exec()` 直接使用（与 coding-standards §2.4 明文禁止冲突） | Major | `core/expr_eval.py:1084,1087`（`_eval_arithmetic` 算术串求值）；`core/state_graph.py:116`（`_eval_length_expr`）；`core/rules_compiler.py:479`（`_safe_eval`，noqa S307）、`:808`（`exec(compile(...))` codegen，noqa S102） | **保留**。缓解：输入为受信静态规则 JSON（`rules/` 顶层 + 生成的 v5.1 规则）；`eval` 均剥离 `__builtins__`；codegen 产物经 probe 验证兜底。**前置条件（已落地，本轮）**：Layer 1 纳入平台工作流后，自定义/变体规则不再属于「受信静态规则」——约束已生效：(a) Layer 1 产出强制 `schema_validator` + L2 冒烟校验（`layer1_translator/engine_validator.py`，schema 校验模块 `layer1_translator/schema_validator.py`）；(b) `GameEngine(rules, allow_codegen=False)` 开关已实现（`layer2_engine/core/engine.py`），平台自定义游戏族构造引擎一律 `allow_codegen=False` 强制纯解释器路径（`layer4_interface/frontend/platform/families/helpers.py::engine_from_rules_dict` 默认即关闭；解释器可处理全部 v5.1 表达式，`test_expr_eval.py::_assert_consistent` 已系统验证双路径一致）。长期方向：算术串求值替换为自研 tokenizer/求值器或 `ast` 节点白名单求值，彻底消除 `eval` |
 
 ## 未排期（P2 候选）
 

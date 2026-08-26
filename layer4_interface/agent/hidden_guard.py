@@ -73,6 +73,9 @@ _PATTERNS_BY_GAME: dict[str, tuple[re.Pattern[str], ...]] = {
     "mahjong_guangdong": _MAHJONG_PATTERNS,
     "mahjong_hongzhong": _MAHJONG_PATTERNS,
     "mahjong_blood": _MAHJONG_PATTERNS,
+    "mahjong_sichuan": _MAHJONG_PATTERNS,
+    "mahjong_changsha": _MAHJONG_PATTERNS,
+    "mahjong_taiwan": _MAHJONG_PATTERNS,
     "werewolf": _WEREWOLF_PATTERNS,
 }
 

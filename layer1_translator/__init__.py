@@ -38,6 +38,7 @@ from .rule_family_builder import RuleFamilyBuilder, RuleFamilySpec
 from .rule_parser import ParsedRuleRequest, RuleParser
 from .schema_validator import SchemaValidator
 from .template_translator import TemplateTranslator
+from .variant_translator import VariantTranslator, translate_variant_rules
 
 __all__ = [
     "TranslatorProtocol",
@@ -65,5 +66,7 @@ __all__ = [
     "RuleFamilySpec",
     "RuleParser",
     "TemplateTranslator",
+    "VariantTranslator",
     "translate_rules_json",
+    "translate_variant_rules",
 ]

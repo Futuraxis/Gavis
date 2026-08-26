@@ -22,8 +22,19 @@ from ...difficulty.adaptive import AdaptiveController, pacing_scale
 from ...online_learning.recorder import LearningHooks, TrajectoryRecorder
 from ...profile.store import ProfileStore
 from ...solver_provider import SolverHandle, SolverProvider
+from .custom_games import CustomGameRegistry
 from .games import GAMES, GameSpec, PlayError
 from .history import MatchHistory
+
+#: 内置游戏 → 规则族（对局记录/复盘元数据；自定义游戏由注册表提供）。
+_BUILTIN_FAMILY: dict[str, str] = {
+    "moon_chess": "grid",
+    "stochastic_gomoku": "grid",
+    "texas_holdem": "poker",
+    "mahjong_guangdong": "mahjong",
+    "mahjong_hongzhong": "mahjong",
+    "mahjong_blood": "mahjong",
+}
 
 
 def _now_iso() -> str:
@@ -55,6 +66,8 @@ class GameSession:
     ai_strength: int | None = field(default=None)
     agent: DialogueEngine | None = field(default=None)
     pending_chat: list[dict] = field(default_factory=list)  # 待投递的聊天增量
+    custom: bool = field(default=False)  # 自定义游戏（platform/custom_games.py 注册表条目）
+    family: str | None = field(default=None)  # 规则族（grid/poker/mahjong/social）
 
     def __post_init__(self) -> None:
         self.state = self.engine.create_initial_state()
@@ -148,6 +161,7 @@ class PlayManager:
         profiles: ProfileStore | None = None,
         adaptive: AdaptiveController | None = None,
         agent_factory: Callable[[str], DialogueEngine | None] | None = None,
+        custom: CustomGameRegistry | None = None,
     ) -> None:
         self._provider = provider
         self._history = history
@@ -157,6 +171,7 @@ class PlayManager:
         self._profiles = profiles
         self._adaptive = adaptive
         self._agent_factory = agent_factory
+        self._custom = custom
         self._sessions: dict[str, GameSession] = {}
         self._lock = threading.Lock()
 
@@ -187,8 +202,18 @@ class PlayManager:
         session for the start response.
         """
         spec = GAMES.get(game_id)
+        is_custom = False
+        family: str | None = None
+        if spec is None and self._custom is not None:
+            custom_spec = self._custom.spec_for(game_id)
+            if custom_spec is not None:
+                spec = custom_spec
+                is_custom = True
+                family = self._custom.family_of(game_id)
         if spec is None:
             raise PlayError(f"未知游戏: {game_id}")
+        if family is None:
+            family = _BUILTIN_FAMILY.get(game_id)
         if player_count not in spec.player_counts:
             raise PlayError(f"该游戏不支持 {player_count} 人")
         if player_pid == "random":
@@ -225,6 +250,8 @@ class PlayManager:
             hint_level=hint_level,
             ai_strength=budget,
             agent=self._agent_factory(persona_key) if self._agent_factory is not None else None,
+            custom=is_custom,
+            family=family,
         )
         if self._learning is not None:
             # Wrap the solver in a recording handle and attach a
@@ -424,6 +451,8 @@ class PlayManager:
             "persona": session.persona,
             "hinted": session.hinted,
             "ai_strength": session.ai_strength,
+            "family": session.family,
+            "custom": session.custom,
             "moves": session.log,
         }
 

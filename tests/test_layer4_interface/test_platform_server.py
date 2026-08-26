@@ -68,6 +68,9 @@ class TestGames:
             "mahjong_guangdong",
             "mahjong_hongzhong",
             "mahjong_blood",
+            "mahjong_sichuan",
+            "mahjong_changsha",
+            "mahjong_taiwan",
         }
         assert by_id["moon_chess"]["board_size"] == 3
         assert by_id["stochastic_gomoku"]["board_size"] == 9

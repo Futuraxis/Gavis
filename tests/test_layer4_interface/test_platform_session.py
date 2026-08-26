@@ -170,6 +170,9 @@ class TestGameSpecRegistry:
             "mahjong_guangdong",
             "mahjong_hongzhong",
             "mahjong_blood",
+            "mahjong_sichuan",
+            "mahjong_changsha",
+            "mahjong_taiwan",
         }
 
     def test_seat_options_consistent(self):

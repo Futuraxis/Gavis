@@ -11,6 +11,26 @@ export interface GameInfo {
   player_counts: number[]
   difficulties: string[]
   solver_options: string[]
+  family: string // 族: grid / poker / mahjong / social（渲染以 family 为准）
+  custom: boolean // 是否来自自定义游戏注册表
+}
+
+// ── 自定义游戏 (A2 后端契约 / A3 前端) ──────────────────────────
+
+export interface ValidationInfo {
+  valid: boolean
+  errors: string[]
+  warnings: string[]
+}
+
+export interface CustomCreateResult {
+  ok: boolean
+  game_id: string
+  game: GameInfo
+  confidence: number
+  family: string
+  diff_summary?: string
+  validation: ValidationInfo
 }
 
 // ── 快照 (snapshot) ────────────────────────────────────────────
@@ -20,6 +40,8 @@ export interface BoardSnapshot {
   player_pid: string
   difficulty: string
   board: (string | null)[]
+  board_size?: number // 自定义 grid 游戏: N×N 边长（既有 moon/gomoku 快照不含）
+  win_length?: number // 自定义 grid 游戏: 连珠长度（仅展示/信息用途）
   round_age?: Record<string, number> // moon chess: cell index → piece age
   turn: string | null
   winner: string | null
@@ -94,7 +116,34 @@ export interface MahjongSnapshot {
   last_ai_action: string | null
 }
 
-export type Snapshot = BoardSnapshot | PokerSnapshot | MahjongSnapshot
+// ── 社交推理族 (B3 契约) ─────────────────────────────────────────
+
+export interface SocialDiscourseEntry {
+  speaker: string
+  text: string
+  round?: number
+  intent?: string
+}
+
+export interface SocialSnapshot {
+  family: 'social'
+  game_id: string
+  player_pid: string
+  difficulty: string
+  over: boolean
+  winner: string | null
+  turn: string | null
+  phase: string | null
+  my_role: string | null
+  alive: string[]
+  discourse: SocialDiscourseEntry[]
+  last_action: string | null
+  winners: string[]
+  legal: { type: string; text?: string; target?: string }[]
+  ai_mode: 'ollama' | 'random'
+}
+
+export type Snapshot = BoardSnapshot | PokerSnapshot | MahjongSnapshot | SocialSnapshot
 
 // ── 历史与回放 ─────────────────────────────────────────────────
 
@@ -136,6 +185,7 @@ export interface MatchLog {
   persona?: PersonaKey | null
   hinted?: boolean
   ai_strength?: string | null
+  family?: string // 复盘快照渲染优先按 family 分发
 }
 
 // ── 求解器评测 ─────────────────────────────────────────────────

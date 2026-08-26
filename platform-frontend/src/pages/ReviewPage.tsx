@@ -7,6 +7,7 @@ import GomokuBoard from '../components/boards/GomokuBoard'
 import MahjongTable from '../components/boards/MahjongTable'
 import MoonBoard from '../components/boards/MoonBoard'
 import PokerTable from '../components/boards/PokerTable'
+import { FAMILY_BOARDS } from '../components/boards/familyBoards'
 
 const GAME_LABELS: Record<string, string> = {
   moon_chess: '月亮棋',
@@ -75,6 +76,9 @@ export default function ReviewPage() {
   const won = match.winner === match.player_pid
   const title = match.winner == null ? '🤝 平局' : won ? '🎉 胜利' : '😢 失败'
   const currentKey = entry ? keyNodesByStep.get(entry.step) : undefined
+  // 复盘快照渲染: 优先按 match.family 经 FAMILY_BOARDS（带 stepKey 的组件传 idx），
+  // 缺失时回退现有 game_id 判断; 其余不动。
+  const FamilyBoard = match.family != null ? FAMILY_BOARDS[match.family] ?? null : null
 
   const downloadReport = () => {
     if (!review) return
@@ -136,7 +140,9 @@ export default function ReviewPage() {
 
         <div className="review-board panel">
           {snapshot &&
-            (match.game_id.startsWith('mahjong_') ? (
+            (FamilyBoard ? (
+              <FamilyBoard snapshot={snapshot} interactive={false} stepKey={idx} />
+            ) : match.game_id.startsWith('mahjong_') ? (
               <MahjongTable snapshot={snapshot as MahjongSnapshot} interactive={false} />
             ) : match.game_id === 'texas_holdem' ? (
               <PokerTable snapshot={snapshot as PokerSnapshot} interactive={false} />

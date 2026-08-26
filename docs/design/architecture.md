@@ -58,7 +58,8 @@ rules/                              # 游戏规则 JSON (v5.2, 零 BUILTIN + var
 ├── moon_chess.json                  # 月亮棋 (3×3, FIFO 淘汰)
 ├── texas_holdem.json                # 德州扑克 (双人/多人)
 ├── mahjong.json                     # 麻将 (由 _gen_mahjong.py 生成)
-└── werewolf.json                    # 狼人杀 (由 _gen_werewolf.py 生成)
+├── werewolf.json                    # 狼人杀 (由 _gen_werewolf.py 生成)
+└── undercover.json                 # 谁是卧底 (由 _gen_undercover.py 生成)
 
 layer1_translator/                  # LLM 规则翻译 (已实现)
 ├── protocol.py                      # TranslatorProtocol + LLMTranslatorError
@@ -68,6 +69,8 @@ layer1_translator/                  # LLM 规则翻译 (已实现)
 ├── natural_language_translator.py   # 确定性模板翻译 (5 游戏)
 ├── rule_family_builder.py           # 规则族生成
 ├── schema_validator.py              # rules.json 格式校验
+├── variant_translator.py            # 变体翻译（确定性参数路径 + LLM 全模板
+│                                   #   改写修复循环，输出必过 engine_validator）
 ├── datasets.py / local_client.py    # 训练数据与本地 LLM 客户端
 └── engine_validator.py              # validate() = schema + L2 smoke 校验
                                     # (L1→L2 单一授权通道; 冒烟服务在 L2)
@@ -114,7 +117,10 @@ layer4_interface/                   # 交互界面
 │   ├── vision/                      # 视觉识别应用 (8766, P2 并入平台)
 │   └── platform/                    # 平台前端服务 (8770)
 │       ├── server.py                # HTTP 路由 + 静态服务 dist/
-│       ├── games.py                 # GameSpec 游戏注册表 (六游戏)
+│       ├── games.py                 # GameSpec 游戏注册表 (内置 11 游戏)
+│       ├── families/                # 规则族包 (grid/poker/mahjong/social，
+│       │                            #   pkgutil 自动发现: detect + build_spec)
+│       ├── custom_games.py          # 自定义游戏注册表 (L1 翻译→校验→族识别→注册)
 │       ├── session.py               # 通用 GameSession + PlayManager
 │       ├── history.py               # 对局记录 (data/matches/*.json)
 │       └── benchmark.py             # 求解器评测 (后台 job)
@@ -129,12 +135,13 @@ layer4_interface/                   # 交互界面
 └── vision_bridge.py                 # Observation → Engine State
 
 train-cli/                          # 训练 CLI + 求解器装配（游戏注册制）
-├── games.py                        # 游戏注册表 (7 游戏: 引擎/座位/训练管线/运行时求解器)
-│                                   #   + DefaultSolverProvider (L3 装配点, 数据驱动)
+├── games.py                        # 游戏注册表 (11 游戏: 引擎/座位/训练管线/运行时求解器)
+│                                   #   + DefaultSolverProvider (L3 装配点, 数据驱动;
+│                                   #     create_solver allow_unknown 支持未登记自定义游戏)
 └── train.py                        # 统一抽象训练脚本 (只读注册表, 无 per-game 分支)
 train_cli.py                        # 根目录导入桥 → train-cli/ (连字符目录模块化别名)
 
-tests/                              # 测试 (558 用例, pytest)
+tests/                              # 测试 (870+ 用例, pytest)
 ├── test_layer1_translator/
 ├── test_layer2_engine/
 ├── test_layer3_solvers/
@@ -150,7 +157,7 @@ tests/                              # 测试 (558 用例, pytest)
 ### 4.1 GameEngine 契约 (Layer 2 → 3)
 
 ```python
-engine = GameEngine(rules, seed=None, variant=None, player_count=None)
+engine = GameEngine(rules, seed=None, variant=None, player_count=None, allow_codegen=True)
 state = engine.create_initial_state()
 engine.get_node_type(state)  # Literal['player','chance','terminal']
 engine.get_current_player(state)  # str | None（env.turn 推导）
@@ -251,9 +258,12 @@ rules.json → GameEngine → SolverBase.train() → 策略
 ## 7. 效果路线图
 
 ```
-现在:     四层结构已建立, 8 类求解器 + 六游戏可跑, 610 测试通过,
-          在线学习 MVP 已上线 (德州扑克经验对手模型 + 门禁发布,
-          见 docs/design/online-learning.md)
+现在:     四层结构已建立, 8 类求解器 + 11 游戏 + 自定义游戏可跑,
+          870+ 测试通过, 在线学习 MVP 已上线 (德州扑克经验对手模型 +
+          门禁发布, 见 docs/design/online-learning.md);
+          Layer 1 已纳入平台工作流 (创建游戏页: 自然语言规则 /
+          模板变体 → 校验 → 规则族 grid/poker/mahjong/social → 注册
+          对弈, 引擎 allow_codegen=False 纯解释器路径)
 下阶段:   Layer 1 LLM 路由全量启用, 在线学习扩展到 MCTS/PPO/CFR,
           平台鉴权/工程化
 ```

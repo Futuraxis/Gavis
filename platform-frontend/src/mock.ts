@@ -33,6 +33,8 @@ export const MOCK_GAMES: GameInfo[] = [
     player_counts: [2],
     difficulties: ['easy', 'normal', 'hard'],
     solver_options: ['mcts', 'random'],
+    family: 'grid',
+    custom: false,
   },
   {
     game_id: 'stochastic_gomoku',
@@ -45,6 +47,8 @@ export const MOCK_GAMES: GameInfo[] = [
     player_counts: [2],
     difficulties: ['easy', 'normal', 'hard'],
     solver_options: ['mcts', 'random'],
+    family: 'grid',
+    custom: false,
   },
   {
     game_id: 'texas_holdem',
@@ -57,6 +61,8 @@ export const MOCK_GAMES: GameInfo[] = [
     player_counts: [2],
     difficulties: ['easy', 'normal', 'hard'],
     solver_options: ['hybrid', 'random'],
+    family: 'poker',
+    custom: false,
   },
 ]
 

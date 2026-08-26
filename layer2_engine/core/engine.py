@@ -51,7 +51,19 @@ class GameEngine:
         seed: int | None = None,
         variant: str | None = None,
         player_count: int | None = None,
+        allow_codegen: bool = True,
     ):
+        """Construct a game engine over ``rules``.
+
+        ``rules`` is a v5 rules JSON dict.  ``seed`` fixes the rng stream;
+        ``variant`` / ``player_count`` select a declared ``variants``
+        option (pure data resolution, nothing game-specific).  When
+        ``allow_codegen`` is False the ``RulesCompiler`` is skipped and
+        the engine stays on the pure interpreter path
+        (``self._compiled`` remains ``None``); when True the compiler
+        runs exactly as before, including probe validation with the rng
+        stream saved and restored so construction stays side-effect free.
+        """
         # Resolve the declarative ``variants`` section (pure data in the
         # JSON — choosing a variant / player count only selects declared
         # options; nothing game-specific is hardcoded here).
@@ -97,20 +109,23 @@ class GameEngine:
         self._visibility: dict = rules.get("visibility", {"default": "public"})
 
         # Compile the rules into native functions, probe-validated against
-        # the interpreter.  Any artifact failing validation is disabled.
-        # Validation samples chance nodes, so the rng stream is saved and
-        # restored to keep engine construction side-effect free.
-        try:
-            artifacts = RulesCompiler().compile(rules, engine=self)
-            rng_state = self.rng.getstate()
-            artifacts.validate(self)
-            self.rng.setstate(rng_state)
-            self._compiled = artifacts
-        except Exception as exc:
-            # Real codegen bugs (not just UnsupportedShapeError) must not be
-            # swallowed silently — log and fall back to the interpreter.
-            logger.warning("规则编译失败，回退纯解释器: %s: %s", type(exc).__name__, exc)
-            self._compiled = None
+        # the interpreter (``allow_codegen=False`` skips compilation and
+        # keeps the engine on the pure interpreter path; ``allow_codegen=True``
+        # behaves exactly as before).  Any artifact failing validation is
+        # disabled.  Validation samples chance nodes, so the rng stream is
+        # saved and restored to keep engine construction side-effect free.
+        if allow_codegen:
+            try:
+                artifacts = RulesCompiler().compile(rules, engine=self)
+                rng_state = self.rng.getstate()
+                artifacts.validate(self)
+                self.rng.setstate(rng_state)
+                self._compiled = artifacts
+            except Exception as exc:
+                # Real codegen bugs (not just UnsupportedShapeError) must not be
+                # swallowed silently — log and fall back to the interpreter.
+                logger.warning("规则编译失败，回退纯解释器: %s: %s", type(exc).__name__, exc)
+                self._compiled = None
 
     def _resolve_variants(self, rules: dict) -> dict:
         """Resolve the declarative ``variants`` section (pure data).
@@ -713,6 +728,11 @@ class GameEngine:
             if arr is None:
                 return
             state["_arrays"][arr_name] = _remove_matches(arr, value, count)
+            # Keep the ctx array var live — rebinding creates a NEW list object,
+            # and later ops in this same effector must read the fresh one
+            # (e.g. UNO's 7-swap snapshot / do_end_check read hands after a
+            # discard removed a card).
+            ctx[f"${arr_name}"] = state["_arrays"][arr_name]
             self._invalidate_views(state)
 
         elif op_type == "setArray":
@@ -726,6 +746,7 @@ class GameEngine:
             fresh = list(value) if isinstance(value, list) else []
             if isinstance(arr_name, str) and arr_name in state["_arrays"]:
                 state["_arrays"][arr_name] = fresh
+                ctx[f"${arr_name}"] = fresh
                 self._invalidate_views(state)
             elif isinstance(arr_name, str) and arr_name in state["env"]:
                 state["env"][arr_name] = fresh
@@ -767,6 +788,7 @@ class GameEngine:
                     for eop in on_evict:
                         self._execute_op(eop, evict_ctx, state)
             state["_arrays"][arr_name] = filtered + group
+            ctx[f"${arr_name}"] = state["_arrays"][arr_name]
             self._invalidate_views(state)
 
         # ── Environment ops ───────────────────────────────────────────
@@ -798,10 +820,16 @@ class GameEngine:
 
         elif op_type == "callEffect":
             effect_ref = op["effectRef"]
-            sub_ctx = {**ctx}
+            # Share the parent ctx (not a copy): array/rebind syncs made
+            # inside the sub-effector must be visible to the caller's NEXT
+            # ops (e.g. UNO do_play → do_play_card removes a card, then the
+            # wrapper's do_end_check must read the fresh hand).  Args are
+            # bound into the shared ctx and remain bound afterwards — UNO
+            # binds the same parameter values everywhere, so this is
+            # semantically inert.
             for k, v in op.get("args", {}).items():
-                sub_ctx[k] = self.expr.eval(v, ctx)
-            self._execute_effector(effect_ref, sub_ctx, state)
+                ctx[k] = self.expr.eval(v, ctx)
+            self._execute_effector(effect_ref, ctx, state)
 
         elif op_type == "forEach":
             items = self.expr.eval(op["list"], ctx)

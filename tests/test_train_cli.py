@@ -40,17 +40,33 @@ PLATFORM_GAME_IDS = (
     "mahjong_guangdong",
     "mahjong_hongzhong",
     "mahjong_blood",
+    "mahjong_sichuan",
+    "mahjong_changsha",
+    "mahjong_taiwan",
+)
+
+UNO_GAME_IDS = (
+    "uno",
+    "uno_seven_zero",
+    "uno_jump_in",
+    "uno_stacking",
+    "uno_draw_until",
+    "uno_strict_wild4",
 )
 
 
 # ── 注册表完整性 ──────────────────────────────────────────────────
 
 
-def test_registered_games_cover_platform_plus_werewolf() -> None:
+def test_registered_games_cover_platform_plus_deduction_games() -> None:
     assert "werewolf" in GAMES
+    assert "undercover" in GAMES  # 谁是卧底（text 发言 + 投票桌游）
     for game_id in PLATFORM_GAME_IDS:
         assert game_id in GAMES
-    assert len(GAMES) == 7
+    for game_id in UNO_GAME_IDS:
+        assert game_id in GAMES
+    #: 平台内置 3 + 麻将 6 变种 + 狼人杀 + 谁是卧底 + UNO 6 变种 = 17。
+    assert len(GAMES) == 17
 
 
 def test_every_game_rules_file_exists() -> None:
@@ -97,6 +113,9 @@ def test_mahjong_variants_select_variant_and_player_count() -> None:
         GAMES["mahjong_guangdong"],
         GAMES["mahjong_hongzhong"],
         GAMES["mahjong_blood"],
+        GAMES["mahjong_sichuan"],
+        GAMES["mahjong_changsha"],
+        GAMES["mahjong_taiwan"],
     ):
         assert spec.engine.rules == "mahjong.json"
         assert spec.engine.player_count == 2
@@ -108,6 +127,17 @@ def test_mahjong_variants_select_variant_and_player_count() -> None:
 
 
 # ── 通用运行时工厂（create_solver）────────────────────────────────
+
+
+def test_uno_variants_select_variant_and_player_count() -> None:
+    for spec in (GAMES[gid] for gid in UNO_GAME_IDS):
+        assert spec.engine.rules == "uno.json"
+        assert spec.engine.player_count == 4
+        engine = build_engine(spec, seed=42)
+        assert engine.variant == spec.engine.variant
+        assert engine.player_count == spec.engine.player_count
+        state = _resolve_to_player(engine, engine.create_initial_state())
+        assert engine.get_current_player(state) in spec.players
 
 
 def test_create_solver_moon_chess_all_runtime_solvers() -> None:

@@ -1,0 +1,5196 @@
+{
+  "meta": {
+    "name": "uno",
+    "version": "5.2",
+    "description": "UNO 108 牌 2-10 人（默认 4 人、每手 7 张）；六个声明式变体：classic / seven_zero(7-0) / jump_in(抢牌) / stacking(+2叠加) / draw_until(摸到能打) / strict_wild4(严格+4)。手牌部分可观测；回合由 env.turn/direction 纯数据驱动。"
+  },
+  "players": [
+    {
+      "id": "p0",
+      "type": "player"
+    },
+    {
+      "id": "p1",
+      "type": "player"
+    },
+    {
+      "id": "p2",
+      "type": "player"
+    },
+    {
+      "id": "p3",
+      "type": "player"
+    },
+    {
+      "id": "p4",
+      "type": "player"
+    },
+    {
+      "id": "p5",
+      "type": "player"
+    },
+    {
+      "id": "p6",
+      "type": "player"
+    },
+    {
+      "id": "p7",
+      "type": "player"
+    },
+    {
+      "id": "p8",
+      "type": "player"
+    },
+    {
+      "id": "p9",
+      "type": "player"
+    }
+  ],
+  "variants": {
+    "variant": "classic",
+    "player_count": 4,
+    "options": {
+      "classic": {},
+      "seven_zero": {
+        "constants": {
+          "seven_zero": true
+        }
+      },
+      "jump_in": {
+        "constants": {
+          "jump_in": true
+        }
+      },
+      "stacking": {
+        "constants": {
+          "stacking": true
+        }
+      },
+      "draw_until": {
+        "constants": {
+          "draw_until": true
+        }
+      },
+      "strict_wild4": {
+        "constants": {
+          "strict_wild4": true
+        }
+      }
+    },
+    "player_ids": {
+      "map": {
+        "list": {
+          "range": {
+            "from": {
+              "const": 0
+            },
+            "to": {
+              "var": "$player_count"
+            }
+          }
+        },
+        "as": "$node",
+        "expr": {
+          "template": "p{$node}"
+        }
+      }
+    },
+    "trim_players": true,
+    "trim_utility": true
+  },
+  "constants": {
+    "card_ids": [
+      "r0",
+      "r1a",
+      "r1b",
+      "r2a",
+      "r2b",
+      "r3a",
+      "r3b",
+      "r4a",
+      "r4b",
+      "r5a",
+      "r5b",
+      "r6a",
+      "r6b",
+      "r7a",
+      "r7b",
+      "r8a",
+      "r8b",
+      "r9a",
+      "r9b",
+      "rsa",
+      "rsb",
+      "rra",
+      "rrb",
+      "rda",
+      "rdb",
+      "b0",
+      "b1a",
+      "b1b",
+      "b2a",
+      "b2b",
+      "b3a",
+      "b3b",
+      "b4a",
+      "b4b",
+      "b5a",
+      "b5b",
+      "b6a",
+      "b6b",
+      "b7a",
+      "b7b",
+      "b8a",
+      "b8b",
+      "b9a",
+      "b9b",
+      "bsa",
+      "bsb",
+      "bra",
+      "brb",
+      "bda",
+      "bdb",
+      "g0",
+      "g1a",
+      "g1b",
+      "g2a",
+      "g2b",
+      "g3a",
+      "g3b",
+      "g4a",
+      "g4b",
+      "g5a",
+      "g5b",
+      "g6a",
+      "g6b",
+      "g7a",
+      "g7b",
+      "g8a",
+      "g8b",
+      "g9a",
+      "g9b",
+      "gsa",
+      "gsb",
+      "gra",
+      "grb",
+      "gda",
+      "gdb",
+      "y0",
+      "y1a",
+      "y1b",
+      "y2a",
+      "y2b",
+      "y3a",
+      "y3b",
+      "y4a",
+      "y4b",
+      "y5a",
+      "y5b",
+      "y6a",
+      "y6b",
+      "y7a",
+      "y7b",
+      "y8a",
+      "y8b",
+      "y9a",
+      "y9b",
+      "ysa",
+      "ysb",
+      "yra",
+      "yrb",
+      "yda",
+      "ydb",
+      "wild_1",
+      "wild4_1",
+      "wild_2",
+      "wild4_2",
+      "wild_3",
+      "wild4_3",
+      "wild_4",
+      "wild4_4"
+    ],
+    "card_symbol": {
+      "r0": "0",
+      "r1a": "1",
+      "r1b": "1",
+      "r2a": "2",
+      "r2b": "2",
+      "r3a": "3",
+      "r3b": "3",
+      "r4a": "4",
+      "r4b": "4",
+      "r5a": "5",
+      "r5b": "5",
+      "r6a": "6",
+      "r6b": "6",
+      "r7a": "7",
+      "r7b": "7",
+      "r8a": "8",
+      "r8b": "8",
+      "r9a": "9",
+      "r9b": "9",
+      "rsa": "skip",
+      "rsb": "skip",
+      "rra": "reverse",
+      "rrb": "reverse",
+      "rda": "draw2",
+      "rdb": "draw2",
+      "b0": "0",
+      "b1a": "1",
+      "b1b": "1",
+      "b2a": "2",
+      "b2b": "2",
+      "b3a": "3",
+      "b3b": "3",
+      "b4a": "4",
+      "b4b": "4",
+      "b5a": "5",
+      "b5b": "5",
+      "b6a": "6",
+      "b6b": "6",
+      "b7a": "7",
+      "b7b": "7",
+      "b8a": "8",
+      "b8b": "8",
+      "b9a": "9",
+      "b9b": "9",
+      "bsa": "skip",
+      "bsb": "skip",
+      "bra": "reverse",
+      "brb": "reverse",
+      "bda": "draw2",
+      "bdb": "draw2",
+      "g0": "0",
+      "g1a": "1",
+      "g1b": "1",
+      "g2a": "2",
+      "g2b": "2",
+      "g3a": "3",
+      "g3b": "3",
+      "g4a": "4",
+      "g4b": "4",
+      "g5a": "5",
+      "g5b": "5",
+      "g6a": "6",
+      "g6b": "6",
+      "g7a": "7",
+      "g7b": "7",
+      "g8a": "8",
+      "g8b": "8",
+      "g9a": "9",
+      "g9b": "9",
+      "gsa": "skip",
+      "gsb": "skip",
+      "gra": "reverse",
+      "grb": "reverse",
+      "gda": "draw2",
+      "gdb": "draw2",
+      "y0": "0",
+      "y1a": "1",
+      "y1b": "1",
+      "y2a": "2",
+      "y2b": "2",
+      "y3a": "3",
+      "y3b": "3",
+      "y4a": "4",
+      "y4b": "4",
+      "y5a": "5",
+      "y5b": "5",
+      "y6a": "6",
+      "y6b": "6",
+      "y7a": "7",
+      "y7b": "7",
+      "y8a": "8",
+      "y8b": "8",
+      "y9a": "9",
+      "y9b": "9",
+      "ysa": "skip",
+      "ysb": "skip",
+      "yra": "reverse",
+      "yrb": "reverse",
+      "yda": "draw2",
+      "ydb": "draw2",
+      "wild_1": "wild",
+      "wild4_1": "wild4",
+      "wild_2": "wild",
+      "wild4_2": "wild4",
+      "wild_3": "wild",
+      "wild4_3": "wild4",
+      "wild_4": "wild",
+      "wild4_4": "wild4"
+    },
+    "card_color": {
+      "r0": "r",
+      "r1a": "r",
+      "r1b": "r",
+      "r2a": "r",
+      "r2b": "r",
+      "r3a": "r",
+      "r3b": "r",
+      "r4a": "r",
+      "r4b": "r",
+      "r5a": "r",
+      "r5b": "r",
+      "r6a": "r",
+      "r6b": "r",
+      "r7a": "r",
+      "r7b": "r",
+      "r8a": "r",
+      "r8b": "r",
+      "r9a": "r",
+      "r9b": "r",
+      "rsa": "r",
+      "rsb": "r",
+      "rra": "r",
+      "rrb": "r",
+      "rda": "r",
+      "rdb": "r",
+      "b0": "b",
+      "b1a": "b",
+      "b1b": "b",
+      "b2a": "b",
+      "b2b": "b",
+      "b3a": "b",
+      "b3b": "b",
+      "b4a": "b",
+      "b4b": "b",
+      "b5a": "b",
+      "b5b": "b",
+      "b6a": "b",
+      "b6b": "b",
+      "b7a": "b",
+      "b7b": "b",
+      "b8a": "b",
+      "b8b": "b",
+      "b9a": "b",
+      "b9b": "b",
+      "bsa": "b",
+      "bsb": "b",
+      "bra": "b",
+      "brb": "b",
+      "bda": "b",
+      "bdb": "b",
+      "g0": "g",
+      "g1a": "g",
+      "g1b": "g",
+      "g2a": "g",
+      "g2b": "g",
+      "g3a": "g",
+      "g3b": "g",
+      "g4a": "g",
+      "g4b": "g",
+      "g5a": "g",
+      "g5b": "g",
+      "g6a": "g",
+      "g6b": "g",
+      "g7a": "g",
+      "g7b": "g",
+      "g8a": "g",
+      "g8b": "g",
+      "g9a": "g",
+      "g9b": "g",
+      "gsa": "g",
+      "gsb": "g",
+      "gra": "g",
+      "grb": "g",
+      "gda": "g",
+      "gdb": "g",
+      "y0": "y",
+      "y1a": "y",
+      "y1b": "y",
+      "y2a": "y",
+      "y2b": "y",
+      "y3a": "y",
+      "y3b": "y",
+      "y4a": "y",
+      "y4b": "y",
+      "y5a": "y",
+      "y5b": "y",
+      "y6a": "y",
+      "y6b": "y",
+      "y7a": "y",
+      "y7b": "y",
+      "y8a": "y",
+      "y8b": "y",
+      "y9a": "y",
+      "y9b": "y",
+      "ysa": "y",
+      "ysb": "y",
+      "yra": "y",
+      "yrb": "y",
+      "yda": "y",
+      "ydb": "y",
+      "wild_1": "none",
+      "wild4_1": "none",
+      "wild_2": "none",
+      "wild4_2": "none",
+      "wild_3": "none",
+      "wild4_3": "none",
+      "wild_4": "none",
+      "wild4_4": "none"
+    },
+    "number_symbols": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9"
+    ],
+    "jump_symbols": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "8",
+      "9"
+    ],
+    "colors": [
+      "r",
+      "b",
+      "g",
+      "y"
+    ],
+    "seven_zero": false,
+    "jump_in": false,
+    "stacking": false,
+    "draw_until": false,
+    "strict_wild4": false
+  },
+  "groundState": {
+    "hand_p0": {
+      "type": "array",
+      "mutable": true
+    },
+    "hand_p1": {
+      "type": "array",
+      "mutable": true
+    },
+    "hand_p2": {
+      "type": "array",
+      "mutable": true
+    },
+    "hand_p3": {
+      "type": "array",
+      "mutable": true
+    },
+    "hand_p4": {
+      "type": "array",
+      "mutable": true
+    },
+    "hand_p5": {
+      "type": "array",
+      "mutable": true
+    },
+    "hand_p6": {
+      "type": "array",
+      "mutable": true
+    },
+    "hand_p7": {
+      "type": "array",
+      "mutable": true
+    },
+    "hand_p8": {
+      "type": "array",
+      "mutable": true
+    },
+    "hand_p9": {
+      "type": "array",
+      "mutable": true
+    },
+    "discard": {
+      "type": "array",
+      "mutable": true
+    },
+    "env": {
+      "type": "env",
+      "fields": {
+        "phase": {
+          "initial": "deal"
+        },
+        "turn": {
+          "initial": "p0"
+        },
+        "direction": {
+          "initial": 1
+        },
+        "topColor": {
+          "initial": null
+        },
+        "topSymbol": {
+          "initial": null
+        },
+        "lastActor": {
+          "initial": null
+        },
+        "dealIdx": {
+          "initial": 0
+        },
+        "dealCount": {
+          "initial": 0
+        },
+        "dealTarget": {
+          "initial": null
+        },
+        "drawnCard": {
+          "initial": null
+        },
+        "penaltyTarget": {
+          "initial": null
+        },
+        "pendingDraw": {
+          "initial": 0
+        },
+        "nextTurn": {
+          "initial": null
+        },
+        "jumpQueue": {
+          "initial": []
+        },
+        "jumpIndex": {
+          "initial": 0
+        },
+        "turnCount": {
+          "initial": 0
+        },
+        "winner": {
+          "initial": null
+        },
+        "handsSnapshot": {
+          "initial": []
+        }
+      }
+    }
+  },
+  "derivedViews": {
+    "card": {
+      "from": {
+        "type": "literal",
+        "list": {
+          "var": "card_ids"
+        }
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "player": {
+      "from": {
+        "type": "literal",
+        "list": {
+          "var": "player_ids"
+        }
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "discard_view": {
+      "from": {
+        "type": "enum",
+        "array": "discard"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p0": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p0"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p1": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p1"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p2": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p2"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p3": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p3"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p4": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p4"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p5": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p5"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p6": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p6"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p7": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p7"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p8": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p8"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    },
+    "hand_view_p9": {
+      "from": {
+        "type": "enum",
+        "array": "hand_p9"
+      },
+      "fields": {
+        "id": {
+          "var": "$self.value"
+        }
+      }
+    }
+  },
+  "queries": {
+    "undrawn_cards": {
+      "view": "card",
+      "filter": {
+        "and": [
+          {
+            "not": {
+              "contains": [
+                {
+                  "var": "$discard"
+                },
+                {
+                  "get": [
+                    {
+                      "var": "$node"
+                    },
+                    "id"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "all": {
+              "list": {
+                "var": "$constants.player_ids"
+              },
+              "as": "$pid",
+              "where": {
+                "eq": [
+                  {
+                    "count": {
+                      "filter": {
+                        "list": {
+                          "call": [
+                            "hand_of",
+                            {
+                              "var": "$pid"
+                            }
+                          ]
+                        },
+                        "as": "$h",
+                        "where": {
+                          "eq": [
+                            {
+                              "var": "$h"
+                            },
+                            {
+                              "get": [
+                                {
+                                  "var": "$node"
+                                },
+                                "id"
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "functions": {
+    "seat_of": {
+      "description": "玩家 p 在 player_ids 中的座位索引",
+      "params": [
+        "p"
+      ],
+      "expr": {
+        "at": [
+          {
+            "filter": {
+              "list": {
+                "range": {
+                  "from": {
+                    "const": 0
+                  },
+                  "to": {
+                    "count": {
+                      "var": "$constants.player_ids"
+                    }
+                  }
+                }
+              },
+              "as": "$i",
+              "where": {
+                "eq": [
+                  {
+                    "at": [
+                      {
+                        "var": "$constants.player_ids"
+                      },
+                      {
+                        "var": "$i"
+                      }
+                    ]
+                  },
+                  {
+                    "var": "$p"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "const": 0
+          }
+        ]
+      }
+    },
+    "seat_after": {
+      "description": "player_ids[(seat + steps * dir) % n]——方向化推进",
+      "params": [
+        "seat",
+        "steps",
+        "dir"
+      ],
+      "expr": {
+        "expr": "($seat + $steps * $dir) % $player_count"
+      }
+    },
+    "rotate_src_seat": {
+      "description": "0 牌移交的源座位：(seat - dir) % n",
+      "params": [
+        "seat",
+        "dir"
+      ],
+      "expr": {
+        "expr": "($seat - $dir) % $player_count"
+      }
+    },
+    "hand_of": {
+      "description": "玩家 p 的手牌数组",
+      "params": [
+        "p"
+      ],
+      "expr": {
+        "switch": [
+          {
+            "case": "p0",
+            "then": {
+              "var": "$hand_p0"
+            }
+          },
+          {
+            "case": "p1",
+            "then": {
+              "var": "$hand_p1"
+            }
+          },
+          {
+            "case": "p2",
+            "then": {
+              "var": "$hand_p2"
+            }
+          },
+          {
+            "case": "p3",
+            "then": {
+              "var": "$hand_p3"
+            }
+          },
+          {
+            "case": "p4",
+            "then": {
+              "var": "$hand_p4"
+            }
+          },
+          {
+            "case": "p5",
+            "then": {
+              "var": "$hand_p5"
+            }
+          },
+          {
+            "case": "p6",
+            "then": {
+              "var": "$hand_p6"
+            }
+          },
+          {
+            "case": "p7",
+            "then": {
+              "var": "$hand_p7"
+            }
+          },
+          {
+            "case": "p8",
+            "then": {
+              "var": "$hand_p8"
+            }
+          },
+          {
+            "case": "p9",
+            "then": {
+              "var": "$hand_p9"
+            }
+          }
+        ],
+        "input": {
+          "var": "$p"
+        }
+      }
+    },
+    "color_of": {
+      "description": "牌的颜色（万能牌为 none）",
+      "params": [
+        "card"
+      ],
+      "expr": {
+        "at": [
+          {
+            "var": "$constants.card_color"
+          },
+          {
+            "var": "$card"
+          }
+        ]
+      }
+    },
+    "symbol_of": {
+      "description": "牌的符号（数字/skip/reverse/draw2/wild/wild4）",
+      "params": [
+        "card"
+      ],
+      "expr": {
+        "at": [
+          {
+            "var": "$constants.card_symbol"
+          },
+          {
+            "var": "$card"
+          }
+        ]
+      }
+    },
+    "matches_top": {
+      "description": "牌与台面匹配：同色或同符号",
+      "params": [
+        "card"
+      ],
+      "expr": {
+        "or": [
+          {
+            "eq": [
+              {
+                "call": [
+                  "color_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              },
+              {
+                "var": "$env.topColor"
+              }
+            ]
+          },
+          {
+            "eq": [
+              {
+                "call": [
+                  "symbol_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              },
+              {
+                "var": "$env.topSymbol"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "hand_has_color": {
+      "description": "手牌中是否存在颜色 color 的牌",
+      "params": [
+        "hand",
+        "color"
+      ],
+      "expr": {
+        "any": {
+          "list": {
+            "var": "$hand"
+          },
+          "as": "$node",
+          "where": {
+            "eq": [
+              {
+                "call": [
+                  "color_of",
+                  {
+                    "var": "$node"
+                  }
+                ]
+              },
+              {
+                "var": "$color"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "can_play": {
+      "description": "可打出：匹配台面，或任意万能，或（严格+4：手牌无台面颜色时）万能4",
+      "params": [
+        "card",
+        "hand"
+      ],
+      "expr": {
+        "or": [
+          {
+            "call": [
+              "matches_top",
+              {
+                "var": "$card"
+              }
+            ]
+          },
+          {
+            "eq": [
+              {
+                "call": [
+                  "symbol_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              },
+              {
+                "const": "wild"
+              }
+            ]
+          },
+          {
+            "and": [
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "symbol_of",
+                      {
+                        "var": "$card"
+                      }
+                    ]
+                  },
+                  {
+                    "const": "wild4"
+                  }
+                ]
+              },
+              {
+                "not": {
+                  "and": [
+                    {
+                      "eq": [
+                        {
+                          "var": "$constants.strict_wild4"
+                        },
+                        {
+                          "const": true
+                        }
+                      ]
+                    },
+                    {
+                      "call": [
+                        "hand_has_color",
+                        {
+                          "var": "$hand"
+                        },
+                        {
+                          "var": "$env.topColor"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "deck_count": {
+      "description": "牌堆剩余张数 = 108 − (所有手牌总数 + 弃牌数)",
+      "params": [],
+      "expr": {
+        "sub": [
+          {
+            "const": 108
+          },
+          {
+            "add": [
+              {
+                "count": {
+                  "concat": [
+                    {
+                      "var": "$hand_p0"
+                    },
+                    {
+                      "var": "$hand_p1"
+                    },
+                    {
+                      "var": "$hand_p2"
+                    },
+                    {
+                      "var": "$hand_p3"
+                    },
+                    {
+                      "var": "$hand_p4"
+                    },
+                    {
+                      "var": "$hand_p5"
+                    },
+                    {
+                      "var": "$hand_p6"
+                    },
+                    {
+                      "var": "$hand_p7"
+                    },
+                    {
+                      "var": "$hand_p8"
+                    },
+                    {
+                      "var": "$hand_p9"
+                    }
+                  ]
+                }
+              },
+              {
+                "count": {
+                  "var": "$discard"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "least_player": {
+      "description": "手牌最少的玩家（按座位序取首个；清空者必然唯一最小）",
+      "params": [],
+      "expr": {
+        "at": [
+          {
+            "sort": {
+              "list": {
+                "var": "$constants.player_ids"
+              },
+              "as": "$node",
+              "by": {
+                "count": {
+                  "call": [
+                    "hand_of",
+                    {
+                      "var": "$node"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "const": 0
+          }
+        ]
+      }
+    },
+    "game_ended": {
+      "description": "终局布尔（terminal / utility.when / env.winner 共用）",
+      "params": [],
+      "expr": {
+        "or": [
+          {
+            "and": [
+              {
+                "not": {
+                  "or": [
+                    {
+                      "eq": [
+                        {
+                          "var": "$env.phase"
+                        },
+                        {
+                          "const": "deal"
+                        }
+                      ]
+                    },
+                    {
+                      "eq": [
+                        {
+                          "var": "$env.phase"
+                        },
+                        {
+                          "const": "flip"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "any": {
+                  "list": {
+                    "var": "$constants.player_ids"
+                  },
+                  "as": "$node",
+                  "where": {
+                    "eq": [
+                      {
+                        "count": {
+                          "call": [
+                            "hand_of",
+                            {
+                              "var": "$node"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "and": [
+              {
+                "eq": [
+                  {
+                    "var": "$env.phase"
+                  },
+                  {
+                    "const": "play"
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "deck_count"
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "count": {
+                      "filter": {
+                        "list": {
+                          "call": [
+                            "hand_of",
+                            {
+                              "var": "$env.turn"
+                            }
+                          ]
+                        },
+                        "as": "$node",
+                        "where": {
+                          "call": [
+                            "can_play",
+                            {
+                              "var": "$node"
+                            },
+                            {
+                              "call": [
+                                "hand_of",
+                                {
+                                  "var": "$env.turn"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "and": [
+              {
+                "eq": [
+                  {
+                    "var": "$env.phase"
+                  },
+                  {
+                    "const": "penalty_pick"
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "deck_count"
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "gte": [
+              {
+                "var": "$env.turnCount"
+              },
+              {
+                "const": 2000
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "actions": [
+    {
+      "id": "play",
+      "type": "move",
+      "phases": [
+        "play"
+      ],
+      "params": {
+        "card": {
+          "domain": {
+            "array": {
+              "template": "hand_{$env.turn}"
+            }
+          },
+          "filter": {
+            "and": [
+              {
+                "not": {
+                  "or": [
+                    {
+                      "eq": [
+                        {
+                          "call": [
+                            "symbol_of",
+                            {
+                              "var": "$card"
+                            }
+                          ]
+                        },
+                        {
+                          "const": "wild"
+                        }
+                      ]
+                    },
+                    {
+                      "eq": [
+                        {
+                          "call": [
+                            "symbol_of",
+                            {
+                              "var": "$card"
+                            }
+                          ]
+                        },
+                        {
+                          "const": "wild4"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "and": [
+                    {
+                      "var": "$constants.seven_zero"
+                    },
+                    {
+                      "eq": [
+                        {
+                          "call": [
+                            "symbol_of",
+                            {
+                              "var": "$card"
+                            }
+                          ]
+                        },
+                        {
+                          "const": "7"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      },
+      "legal": {
+        "call": [
+          "can_play",
+          {
+            "var": "$card"
+          },
+          {
+            "call": [
+              "hand_of",
+              {
+                "var": "$env.turn"
+              }
+            ]
+          }
+        ]
+      },
+      "effectRef": "do_play",
+      "canonicalKey": {
+        "template": "play:{card}"
+      }
+    },
+    {
+      "id": "play_wild",
+      "type": "move",
+      "phases": [
+        "play"
+      ],
+      "params": {
+        "card": {
+          "domain": {
+            "array": {
+              "template": "hand_{$env.turn}"
+            }
+          },
+          "filter": {
+            "or": [
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "symbol_of",
+                      {
+                        "var": "$card"
+                      }
+                    ]
+                  },
+                  {
+                    "const": "wild"
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "symbol_of",
+                      {
+                        "var": "$card"
+                      }
+                    ]
+                  },
+                  {
+                    "const": "wild4"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "color": {
+          "domain": [
+            "r",
+            "b",
+            "g",
+            "y"
+          ]
+        }
+      },
+      "legal": {
+        "call": [
+          "can_play",
+          {
+            "var": "$card"
+          },
+          {
+            "call": [
+              "hand_of",
+              {
+                "var": "$env.turn"
+              }
+            ]
+          }
+        ]
+      },
+      "effectRef": "do_play_wild",
+      "canonicalKey": {
+        "template": "play:{card}:{color}"
+      }
+    },
+    {
+      "id": "play7",
+      "type": "move",
+      "phases": [
+        "play"
+      ],
+      "params": {
+        "card": {
+          "domain": {
+            "array": {
+              "template": "hand_{$env.turn}"
+            }
+          },
+          "filter": {
+            "eq": [
+              {
+                "call": [
+                  "symbol_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              },
+              {
+                "const": "7"
+              }
+            ]
+          }
+        },
+        "target": {
+          "domain": {
+            "expr": {
+              "var": "$constants.player_ids"
+            }
+          },
+          "filter": {
+            "neq": [
+              {
+                "var": "$target"
+              },
+              {
+                "var": "$env.turn"
+              }
+            ]
+          }
+        }
+      },
+      "legal": {
+        "and": [
+          {
+            "eq": [
+              {
+                "var": "$constants.seven_zero"
+              },
+              {
+                "const": true
+              }
+            ]
+          },
+          {
+            "call": [
+              "can_play",
+              {
+                "var": "$card"
+              },
+              {
+                "call": [
+                  "hand_of",
+                  {
+                    "var": "$env.turn"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "effectRef": "do_play7",
+      "canonicalKey": {
+        "template": "play7:{card}:{target}"
+      }
+    },
+    {
+      "id": "draw",
+      "type": "move",
+      "phases": [
+        "play"
+      ],
+      "params": {},
+      "legal": {
+        "gt": [
+          {
+            "call": [
+              "deck_count"
+            ]
+          },
+          {
+            "const": 0
+          }
+        ]
+      },
+      "effectRef": "do_draw",
+      "canonicalKey": {
+        "const": "draw"
+      }
+    },
+    {
+      "id": "play_drawn",
+      "type": "move",
+      "phases": [
+        "draw_result"
+      ],
+      "params": {
+        "card": {
+          "domain": {
+            "array": {
+              "template": "hand_{$env.turn}"
+            }
+          }
+        }
+      },
+      "legal": {
+        "and": [
+          {
+            "eq": [
+              {
+                "var": "$card"
+              },
+              {
+                "var": "$env.drawnCard"
+              }
+            ]
+          },
+          {
+            "call": [
+              "can_play",
+              {
+                "var": "$card"
+              },
+              {
+                "call": [
+                  "hand_of",
+                  {
+                    "var": "$env.turn"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "effectRef": "do_play_drawn",
+      "canonicalKey": {
+        "template": "play:{card}"
+      }
+    },
+    {
+      "id": "pass",
+      "type": "move",
+      "phases": [
+        "draw_result"
+      ],
+      "params": {},
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_pass",
+      "canonicalKey": {
+        "const": "pass"
+      }
+    },
+    {
+      "id": "jump_play",
+      "type": "move",
+      "phases": [
+        "jump"
+      ],
+      "params": {
+        "card": {
+          "domain": {
+            "array": {
+              "template": "hand_{$env.turn}"
+            }
+          }
+        }
+      },
+      "legal": {
+        "and": [
+          {
+            "eq": [
+              {
+                "call": [
+                  "color_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              },
+              {
+                "var": "$env.topColor"
+              }
+            ]
+          },
+          {
+            "eq": [
+              {
+                "call": [
+                  "symbol_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              },
+              {
+                "var": "$env.topSymbol"
+              }
+            ]
+          },
+          {
+            "contains": [
+              {
+                "var": "$constants.jump_symbols"
+              },
+              {
+                "call": [
+                  "symbol_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "effectRef": "do_jump",
+      "canonicalKey": {
+        "template": "jump:{card}"
+      }
+    },
+    {
+      "id": "jump_pass",
+      "type": "move",
+      "phases": [
+        "jump"
+      ],
+      "params": {},
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_jump_pass",
+      "canonicalKey": {
+        "const": "jump_pass"
+      }
+    },
+    {
+      "id": "stack2",
+      "type": "move",
+      "phases": [
+        "respond"
+      ],
+      "params": {
+        "card": {
+          "domain": {
+            "array": {
+              "template": "hand_{$env.turn}"
+            }
+          },
+          "filter": {
+            "and": [
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "symbol_of",
+                      {
+                        "var": "$card"
+                      }
+                    ]
+                  },
+                  {
+                    "const": "draw2"
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "color_of",
+                      {
+                        "var": "$card"
+                      }
+                    ]
+                  },
+                  {
+                    "var": "$env.topColor"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_stack2",
+      "canonicalKey": {
+        "template": "stack:{card}"
+      }
+    },
+    {
+      "id": "stack4",
+      "type": "move",
+      "phases": [
+        "respond"
+      ],
+      "params": {
+        "card": {
+          "domain": {
+            "array": {
+              "template": "hand_{$env.turn}"
+            }
+          },
+          "filter": {
+            "eq": [
+              {
+                "call": [
+                  "symbol_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              },
+              {
+                "const": "wild4"
+              }
+            ]
+          }
+        },
+        "color": {
+          "domain": [
+            "r",
+            "b",
+            "g",
+            "y"
+          ]
+        }
+      },
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_stack4",
+      "canonicalKey": {
+        "template": "stack:{card}:{color}"
+      }
+    },
+    {
+      "id": "take_penalty",
+      "type": "move",
+      "phases": [
+        "respond"
+      ],
+      "params": {},
+      "legal": {
+        "const": true
+      },
+      "effectRef": "do_take_penalty",
+      "canonicalKey": {
+        "const": "take"
+      }
+    }
+  ],
+  "effectors": {
+    "do_play_card": {
+      "description": "核心出牌结算（打出/抢牌/叠加/7-0 共用）",
+      "ops": [
+        {
+          "op": "remove",
+          "array": {
+            "template": "hand_{$player}"
+          },
+          "value": {
+            "var": "$card"
+          }
+        },
+        {
+          "op": "append",
+          "array": "discard",
+          "value": {
+            "var": "$card"
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "neq": [
+              {
+                "var": "$color"
+              },
+              {
+                "const": null
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "topColor",
+              "value": {
+                "var": "$color"
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "topColor",
+              "value": {
+                "call": [
+                  "color_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "op": "setEnv",
+          "key": "topSymbol",
+          "value": {
+            "call": [
+              "symbol_of",
+              {
+                "var": "$card"
+              }
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "lastActor",
+          "value": {
+            "var": "$player"
+          }
+        },
+        {
+          "op": "inc",
+          "key": "turnCount",
+          "by": 1
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "call": [
+                  "symbol_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              },
+              {
+                "const": "skip"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "branch",
+              "if": {
+                "var": "$advance"
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "turn",
+                  "value": {
+                    "at": [
+                      {
+                        "var": "$constants.player_ids"
+                      },
+                      {
+                        "call": [
+                          "seat_after",
+                          {
+                            "call": [
+                              "seat_of",
+                              {
+                                "var": "$player"
+                              }
+                            ]
+                          },
+                          {
+                            "const": 2
+                          },
+                          {
+                            "var": "$env.direction"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "play"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "call": [
+                  "symbol_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              },
+              {
+                "const": "reverse"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "branch",
+              "if": {
+                "var": "$advance"
+              },
+              "then": [
+                {
+                  "op": "branch",
+                  "if": {
+                    "eq": [
+                      {
+                        "var": "$constants.player_count"
+                      },
+                      {
+                        "const": 2
+                      }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "op": "setEnv",
+                      "key": "turn",
+                      "value": {
+                        "at": [
+                          {
+                            "var": "$constants.player_ids"
+                          },
+                          {
+                            "call": [
+                              "seat_after",
+                              {
+                                "call": [
+                                  "seat_of",
+                                  {
+                                    "var": "$player"
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 2
+                              },
+                              {
+                                "var": "$env.direction"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "phase",
+                      "value": {
+                        "const": "play"
+                      }
+                    }
+                  ],
+                  "else": [
+                    {
+                      "op": "setEnv",
+                      "key": "direction",
+                      "value": {
+                        "mul": [
+                          {
+                            "var": "$env.direction"
+                          },
+                          {
+                            "const": -1
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "turn",
+                      "value": {
+                        "at": [
+                          {
+                            "var": "$constants.player_ids"
+                          },
+                          {
+                            "call": [
+                              "seat_after",
+                              {
+                                "call": [
+                                  "seat_of",
+                                  {
+                                    "var": "$player"
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 1
+                              },
+                              {
+                                "var": "$env.direction"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "phase",
+                      "value": {
+                        "const": "play"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "call": [
+                  "symbol_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              },
+              {
+                "const": "draw2"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "branch",
+              "if": {
+                "var": "$constants.stacking"
+              },
+              "then": [
+                {
+                  "op": "inc",
+                  "key": "pendingDraw",
+                  "by": 2
+                },
+                {
+                  "op": "setEnv",
+                  "key": "turn",
+                  "value": {
+                    "at": [
+                      {
+                        "var": "$constants.player_ids"
+                      },
+                      {
+                        "call": [
+                          "seat_after",
+                          {
+                            "call": [
+                              "seat_of",
+                              {
+                                "var": "$player"
+                              }
+                            ]
+                          },
+                          {
+                            "const": 1
+                          },
+                          {
+                            "var": "$env.direction"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "respond"
+                  }
+                }
+              ],
+              "else": [
+                {
+                  "op": "branch",
+                  "if": {
+                    "var": "$advance"
+                  },
+                  "then": [
+                    {
+                      "op": "setEnv",
+                      "key": "penaltyTarget",
+                      "value": {
+                        "at": [
+                          {
+                            "var": "$constants.player_ids"
+                          },
+                          {
+                            "call": [
+                              "seat_after",
+                              {
+                                "call": [
+                                  "seat_of",
+                                  {
+                                    "var": "$player"
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 1
+                              },
+                              {
+                                "var": "$env.direction"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "turn",
+                      "value": {
+                        "var": "$env.penaltyTarget"
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "pendingDraw",
+                      "value": {
+                        "const": 2
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "phase",
+                      "value": {
+                        "const": "penalty_pick"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "call": [
+                  "symbol_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              },
+              {
+                "const": "wild4"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "branch",
+              "if": {
+                "var": "$constants.stacking"
+              },
+              "then": [
+                {
+                  "op": "inc",
+                  "key": "pendingDraw",
+                  "by": 4
+                },
+                {
+                  "op": "setEnv",
+                  "key": "turn",
+                  "value": {
+                    "at": [
+                      {
+                        "var": "$constants.player_ids"
+                      },
+                      {
+                        "call": [
+                          "seat_after",
+                          {
+                            "call": [
+                              "seat_of",
+                              {
+                                "var": "$player"
+                              }
+                            ]
+                          },
+                          {
+                            "const": 1
+                          },
+                          {
+                            "var": "$env.direction"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "respond"
+                  }
+                }
+              ],
+              "else": [
+                {
+                  "op": "branch",
+                  "if": {
+                    "var": "$advance"
+                  },
+                  "then": [
+                    {
+                      "op": "setEnv",
+                      "key": "penaltyTarget",
+                      "value": {
+                        "at": [
+                          {
+                            "var": "$constants.player_ids"
+                          },
+                          {
+                            "call": [
+                              "seat_after",
+                              {
+                                "call": [
+                                  "seat_of",
+                                  {
+                                    "var": "$player"
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 1
+                              },
+                              {
+                                "var": "$env.direction"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "turn",
+                      "value": {
+                        "var": "$env.penaltyTarget"
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "pendingDraw",
+                      "value": {
+                        "const": 4
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "phase",
+                      "value": {
+                        "const": "penalty_pick"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "call": [
+                  "symbol_of",
+                  {
+                    "var": "$card"
+                  }
+                ]
+              },
+              {
+                "const": "wild"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "branch",
+              "if": {
+                "var": "$advance"
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "turn",
+                  "value": {
+                    "at": [
+                      {
+                        "var": "$constants.player_ids"
+                      },
+                      {
+                        "call": [
+                          "seat_after",
+                          {
+                            "call": [
+                              "seat_of",
+                              {
+                                "var": "$player"
+                              }
+                            ]
+                          },
+                          {
+                            "const": 1
+                          },
+                          {
+                            "var": "$env.direction"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "play"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "and": [
+              {
+                "eq": [
+                  {
+                    "var": "$constants.seven_zero"
+                  },
+                  {
+                    "const": true
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "symbol_of",
+                      {
+                        "var": "$card"
+                      }
+                    ]
+                  },
+                  {
+                    "const": "0"
+                  }
+                ]
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "branch",
+              "if": {
+                "var": "$constants.seven_zero"
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "handsSnapshot",
+                  "value": {
+                    "map": {
+                      "list": {
+                        "range": {
+                          "from": {
+                            "const": 0
+                          },
+                          "to": {
+                            "var": "$constants.player_count"
+                          }
+                        }
+                      },
+                      "as": "$node",
+                      "expr": {
+                        "call": [
+                          "hand_of",
+                          {
+                            "at": [
+                              {
+                                "var": "$constants.player_ids"
+                              },
+                              {
+                                "var": "$node"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "op": "forEach",
+                  "list": {
+                    "var": "$constants.player_ids"
+                  },
+                  "as": "$pid",
+                  "do": [
+                    {
+                      "op": "callEffect",
+                      "effectRef": "do_set_one_hand",
+                      "args": {
+                        "pid": {
+                          "var": "$pid"
+                        },
+                        "hand": {
+                          "at": [
+                            {
+                              "var": "$env.handsSnapshot"
+                            },
+                            {
+                              "call": [
+                                "rotate_src_seat",
+                                {
+                                  "call": [
+                                    "seat_of",
+                                    {
+                                      "var": "$pid"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "var": "$env.direction"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "op": "branch",
+                  "if": {
+                    "var": "$advance"
+                  },
+                  "then": [
+                    {
+                      "op": "setEnv",
+                      "key": "turn",
+                      "value": {
+                        "at": [
+                          {
+                            "var": "$constants.player_ids"
+                          },
+                          {
+                            "call": [
+                              "seat_after",
+                              {
+                                "call": [
+                                  "seat_of",
+                                  {
+                                    "var": "$player"
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 1
+                              },
+                              {
+                                "var": "$env.direction"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "phase",
+                      "value": {
+                        "const": "play"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "and": [
+              {
+                "eq": [
+                  {
+                    "var": "$constants.seven_zero"
+                  },
+                  {
+                    "const": true
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "symbol_of",
+                      {
+                        "var": "$card"
+                      }
+                    ]
+                  },
+                  {
+                    "const": "7"
+                  }
+                ]
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "branch",
+              "if": {
+                "neq": [
+                  {
+                    "var": "$swapTarget"
+                  },
+                  {
+                    "const": null
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "handsSnapshot",
+                  "value": {
+                    "map": {
+                      "list": {
+                        "concat": [
+                          {
+                            "map": {
+                              "list": {
+                                "range": {
+                                  "from": {
+                                    "const": 0
+                                  },
+                                  "to": {
+                                    "const": 1
+                                  }
+                                }
+                              },
+                              "as": "$node",
+                              "expr": {
+                                "var": "$player"
+                              }
+                            }
+                          },
+                          {
+                            "map": {
+                              "list": {
+                                "range": {
+                                  "from": {
+                                    "const": 0
+                                  },
+                                  "to": {
+                                    "const": 1
+                                  }
+                                }
+                              },
+                              "as": "$node",
+                              "expr": {
+                                "var": "$swapTarget"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "as": "$node",
+                      "expr": {
+                        "call": [
+                          "hand_of",
+                          {
+                            "var": "$node"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "op": "setArray",
+                  "array": {
+                    "template": "hand_{$player}"
+                  },
+                  "value": {
+                    "at": [
+                      {
+                        "var": "$env.handsSnapshot"
+                      },
+                      {
+                        "const": 1
+                      }
+                    ]
+                  }
+                },
+                {
+                  "op": "setArray",
+                  "array": {
+                    "template": "hand_{$swapTarget}"
+                  },
+                  "value": {
+                    "at": [
+                      {
+                        "var": "$env.handsSnapshot"
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  }
+                },
+                {
+                  "op": "branch",
+                  "if": {
+                    "var": "$advance"
+                  },
+                  "then": [
+                    {
+                      "op": "setEnv",
+                      "key": "turn",
+                      "value": {
+                        "at": [
+                          {
+                            "var": "$constants.player_ids"
+                          },
+                          {
+                            "call": [
+                              "seat_after",
+                              {
+                                "call": [
+                                  "seat_of",
+                                  {
+                                    "var": "$player"
+                                  }
+                                ]
+                              },
+                              {
+                                "const": 1
+                              },
+                              {
+                                "var": "$env.direction"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "phase",
+                      "value": {
+                        "const": "play"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "op": "branch",
+          "if": {
+            "and": [
+              {
+                "contains": [
+                  {
+                    "var": "$constants.number_symbols"
+                  },
+                  {
+                    "call": [
+                      "symbol_of",
+                      {
+                        "var": "$card"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "not": {
+                  "and": [
+                    {
+                      "eq": [
+                        {
+                          "var": "$constants.seven_zero"
+                        },
+                        {
+                          "const": true
+                        }
+                      ]
+                    },
+                    {
+                      "eq": [
+                        {
+                          "call": [
+                            "symbol_of",
+                            {
+                              "var": "$card"
+                            }
+                          ]
+                        },
+                        {
+                          "const": "0"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "and": [
+                    {
+                      "eq": [
+                        {
+                          "var": "$constants.seven_zero"
+                        },
+                        {
+                          "const": true
+                        }
+                      ]
+                    },
+                    {
+                      "eq": [
+                        {
+                          "call": [
+                            "symbol_of",
+                            {
+                              "var": "$card"
+                            }
+                          ]
+                        },
+                        {
+                          "const": "7"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "branch",
+              "if": {
+                "var": "$advance"
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "nextTurn",
+                  "value": {
+                    "at": [
+                      {
+                        "var": "$constants.player_ids"
+                      },
+                      {
+                        "call": [
+                          "seat_after",
+                          {
+                            "call": [
+                              "seat_of",
+                              {
+                                "var": "$player"
+                              }
+                            ]
+                          },
+                          {
+                            "const": 1
+                          },
+                          {
+                            "var": "$env.direction"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "op": "branch",
+                  "if": {
+                    "and": [
+                      {
+                        "eq": [
+                          {
+                            "var": "$constants.jump_in"
+                          },
+                          {
+                            "const": true
+                          }
+                        ]
+                      },
+                      {
+                        "gt": [
+                          {
+                            "count": {
+                              "filter": {
+                                "list": {
+                                  "var": "$constants.player_ids"
+                                },
+                                "as": "$pid",
+                                "where": {
+                                  "and": [
+                                    {
+                                      "neq": [
+                                        {
+                                          "var": "$pid"
+                                        },
+                                        {
+                                          "var": "$player"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "any": {
+                                        "list": {
+                                          "call": [
+                                            "hand_of",
+                                            {
+                                              "var": "$pid"
+                                            }
+                                          ]
+                                        },
+                                        "as": "$node",
+                                        "where": {
+                                          "and": [
+                                            {
+                                              "eq": [
+                                                {
+                                                  "call": [
+                                                    "color_of",
+                                                    {
+                                                      "var": "$node"
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "var": "$env.topColor"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "eq": [
+                                                {
+                                                  "call": [
+                                                    "symbol_of",
+                                                    {
+                                                      "var": "$node"
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "var": "$env.topSymbol"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "contains": [
+                                                {
+                                                  "var": "$constants.jump_symbols"
+                                                },
+                                                {
+                                                  "call": [
+                                                    "symbol_of",
+                                                    {
+                                                      "var": "$node"
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "const": 0
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "op": "setEnv",
+                      "key": "jumpQueue",
+                      "value": {
+                        "filter": {
+                          "list": {
+                            "var": "$constants.player_ids"
+                          },
+                          "as": "$pid",
+                          "where": {
+                            "and": [
+                              {
+                                "neq": [
+                                  {
+                                    "var": "$pid"
+                                  },
+                                  {
+                                    "var": "$player"
+                                  }
+                                ]
+                              },
+                              {
+                                "any": {
+                                  "list": {
+                                    "call": [
+                                      "hand_of",
+                                      {
+                                        "var": "$pid"
+                                      }
+                                    ]
+                                  },
+                                  "as": "$node",
+                                  "where": {
+                                    "and": [
+                                      {
+                                        "eq": [
+                                          {
+                                            "call": [
+                                              "color_of",
+                                              {
+                                                "var": "$node"
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "var": "$env.topColor"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "eq": [
+                                          {
+                                            "call": [
+                                              "symbol_of",
+                                              {
+                                                "var": "$node"
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "var": "$env.topSymbol"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "contains": [
+                                          {
+                                            "var": "$constants.jump_symbols"
+                                          },
+                                          {
+                                            "call": [
+                                              "symbol_of",
+                                              {
+                                                "var": "$node"
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "jumpIndex",
+                      "value": {
+                        "const": 0
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "turn",
+                      "value": {
+                        "at": [
+                          {
+                            "filter": {
+                              "list": {
+                                "var": "$constants.player_ids"
+                              },
+                              "as": "$pid",
+                              "where": {
+                                "and": [
+                                  {
+                                    "neq": [
+                                      {
+                                        "var": "$pid"
+                                      },
+                                      {
+                                        "var": "$player"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "any": {
+                                      "list": {
+                                        "call": [
+                                          "hand_of",
+                                          {
+                                            "var": "$pid"
+                                          }
+                                        ]
+                                      },
+                                      "as": "$node",
+                                      "where": {
+                                        "and": [
+                                          {
+                                            "eq": [
+                                              {
+                                                "call": [
+                                                  "color_of",
+                                                  {
+                                                    "var": "$node"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "var": "$env.topColor"
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "eq": [
+                                              {
+                                                "call": [
+                                                  "symbol_of",
+                                                  {
+                                                    "var": "$node"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "var": "$env.topSymbol"
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "contains": [
+                                              {
+                                                "var": "$constants.jump_symbols"
+                                              },
+                                              {
+                                                "call": [
+                                                  "symbol_of",
+                                                  {
+                                                    "var": "$node"
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          {
+                            "const": 0
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "phase",
+                      "value": {
+                        "const": "jump"
+                      }
+                    }
+                  ],
+                  "else": [
+                    {
+                      "op": "setEnv",
+                      "key": "turn",
+                      "value": {
+                        "var": "$env.nextTurn"
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "phase",
+                      "value": {
+                        "const": "play"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "do_set_one_hand": {
+      "description": "把 $hand 重绑到 hand_{$pid}（0 牌移交循环用，克隆安全）",
+      "ops": [
+        {
+          "op": "setArray",
+          "array": {
+            "template": "hand_{$pid}"
+          },
+          "value": {
+            "var": "$hand"
+          }
+        }
+      ]
+    },
+    "do_play": {
+      "description": "打出普通牌",
+      "ops": [
+        {
+          "op": "callEffect",
+          "effectRef": "do_play_card",
+          "args": {
+            "player": {
+              "var": "$env.turn"
+            },
+            "card": {
+              "var": "$card"
+            },
+            "color": {
+              "const": null
+            },
+            "swapTarget": {
+              "const": null
+            },
+            "advance": {
+              "const": true
+            }
+          }
+        },
+        {
+          "op": "callEffect",
+          "effectRef": "do_end_check",
+          "args": {}
+        }
+      ]
+    },
+    "do_play_wild": {
+      "description": "打出万能牌（选色）",
+      "ops": [
+        {
+          "op": "callEffect",
+          "effectRef": "do_play_card",
+          "args": {
+            "player": {
+              "var": "$env.turn"
+            },
+            "card": {
+              "var": "$card"
+            },
+            "color": {
+              "var": "$color"
+            },
+            "swapTarget": {
+              "const": null
+            },
+            "advance": {
+              "const": true
+            }
+          }
+        },
+        {
+          "op": "callEffect",
+          "effectRef": "do_end_check",
+          "args": {}
+        }
+      ]
+    },
+    "do_play7": {
+      "description": "打出 7 并与目标换手",
+      "ops": [
+        {
+          "op": "callEffect",
+          "effectRef": "do_play_card",
+          "args": {
+            "player": {
+              "var": "$env.turn"
+            },
+            "card": {
+              "var": "$card"
+            },
+            "color": {
+              "const": null
+            },
+            "swapTarget": {
+              "var": "$target"
+            },
+            "advance": {
+              "const": true
+            }
+          }
+        },
+        {
+          "op": "callEffect",
+          "effectRef": "do_end_check",
+          "args": {}
+        }
+      ]
+    },
+    "do_jump": {
+      "description": "抢牌：抢先打出同色同数字牌（随后从抢牌者方向推进）",
+      "ops": [
+        {
+          "op": "callEffect",
+          "effectRef": "do_play_card",
+          "args": {
+            "player": {
+              "var": "$env.turn"
+            },
+            "card": {
+              "var": "$card"
+            },
+            "color": {
+              "const": null
+            },
+            "swapTarget": {
+              "const": null
+            },
+            "advance": {
+              "const": false
+            }
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "at": [
+              {
+                "var": "$constants.player_ids"
+              },
+              {
+                "call": [
+                  "seat_after",
+                  {
+                    "call": [
+                      "seat_of",
+                      {
+                        "var": "$env.turn"
+                      }
+                    ]
+                  },
+                  {
+                    "const": 1
+                  },
+                  {
+                    "var": "$env.direction"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "play"
+          }
+        },
+        {
+          "op": "callEffect",
+          "effectRef": "do_end_check",
+          "args": {}
+        }
+      ]
+    },
+    "do_jump_pass": {
+      "description": "放弃抢牌：轮到下一位候选或回到正常回合",
+      "ops": [
+        {
+          "op": "inc",
+          "key": "turnCount",
+          "by": 1
+        },
+        {
+          "op": "inc",
+          "key": "jumpIndex",
+          "by": 1
+        },
+        {
+          "op": "branch",
+          "if": {
+            "gte": [
+              {
+                "var": "$env.jumpIndex"
+              },
+              {
+                "count": {
+                  "var": "$env.jumpQueue"
+                }
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "var": "$env.nextTurn"
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "play"
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "at": [
+                  {
+                    "var": "$env.jumpQueue"
+                  },
+                  {
+                    "var": "$env.jumpIndex"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "op": "callEffect",
+          "effectRef": "do_end_check",
+          "args": {}
+        }
+      ]
+    },
+    "do_stack2": {
+      "description": "叠打同色 +2（罚牌数 +2，respond 窗口继续）",
+      "ops": [
+        {
+          "op": "callEffect",
+          "effectRef": "do_play_card",
+          "args": {
+            "player": {
+              "var": "$env.turn"
+            },
+            "card": {
+              "var": "$card"
+            },
+            "color": {
+              "const": null
+            },
+            "swapTarget": {
+              "const": null
+            },
+            "advance": {
+              "const": false
+            }
+          }
+        }
+      ]
+    },
+    "do_stack4": {
+      "description": "叠打 +4（选色，罚牌数 +4，respond 窗口继续）",
+      "ops": [
+        {
+          "op": "callEffect",
+          "effectRef": "do_play_card",
+          "args": {
+            "player": {
+              "var": "$env.turn"
+            },
+            "card": {
+              "var": "$card"
+            },
+            "color": {
+              "var": "$color"
+            },
+            "swapTarget": {
+              "const": null
+            },
+            "advance": {
+              "const": false
+            }
+          }
+        }
+      ]
+    },
+    "do_take_penalty": {
+      "description": "吃下累计罚牌（respond → penalty_pick 循环）",
+      "ops": [
+        {
+          "op": "inc",
+          "key": "turnCount",
+          "by": 1
+        },
+        {
+          "op": "setEnv",
+          "key": "penaltyTarget",
+          "value": {
+            "var": "$env.turn"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "penalty_pick"
+          }
+        }
+      ]
+    },
+    "do_draw": {
+      "description": "选择摸牌（进入 pick chance）",
+      "ops": [
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "pick"
+          }
+        }
+      ]
+    },
+    "do_pass": {
+      "description": "摸牌后过（回合移交）",
+      "ops": [
+        {
+          "op": "inc",
+          "key": "turnCount",
+          "by": 1
+        },
+        {
+          "op": "setEnv",
+          "key": "drawnCard",
+          "value": {
+            "const": null
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "at": [
+              {
+                "var": "$constants.player_ids"
+              },
+              {
+                "call": [
+                  "seat_after",
+                  {
+                    "call": [
+                      "seat_of",
+                      {
+                        "var": "$env.turn"
+                      }
+                    ]
+                  },
+                  {
+                    "const": 1
+                  },
+                  {
+                    "var": "$env.direction"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "phase",
+          "value": {
+            "const": "play"
+          }
+        },
+        {
+          "op": "callEffect",
+          "effectRef": "do_end_check",
+          "args": {}
+        }
+      ]
+    },
+    "do_play_drawn": {
+      "description": "打出刚摸的牌",
+      "ops": [
+        {
+          "op": "callEffect",
+          "effectRef": "do_play_card",
+          "args": {
+            "player": {
+              "var": "$env.turn"
+            },
+            "card": {
+              "var": "$card"
+            },
+            "color": {
+              "const": null
+            },
+            "swapTarget": {
+              "const": null
+            },
+            "advance": {
+              "const": true
+            }
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "drawnCard",
+          "value": {
+            "const": null
+          }
+        },
+        {
+          "op": "callEffect",
+          "effectRef": "do_end_check",
+          "args": {}
+        }
+      ]
+    },
+    "do_deal": {
+      "description": "发牌：摸 1 张给发牌座位（dealIdx / dealCount 驱动，7 张/人）",
+      "ops": [
+        {
+          "op": "setEnv",
+          "key": "dealTarget",
+          "value": {
+            "at": [
+              {
+                "var": "$constants.player_ids"
+              },
+              {
+                "var": "$env.dealIdx"
+              }
+            ]
+          }
+        },
+        {
+          "op": "append",
+          "array": {
+            "template": "hand_{$env.dealTarget}"
+          },
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "inc",
+          "key": "dealCount",
+          "by": 1
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "var": "$env.dealCount"
+              },
+              {
+                "const": 7
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "dealCount",
+              "value": {
+                "const": 0
+              }
+            },
+            {
+              "op": "inc",
+              "key": "dealIdx",
+              "by": 1
+            },
+            {
+              "op": "branch",
+              "if": {
+                "eq": [
+                  {
+                    "var": "$env.dealIdx"
+                  },
+                  {
+                    "var": "$constants.player_count"
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "flip"
+                  }
+                }
+              ],
+              "else": []
+            }
+          ],
+          "else": []
+        }
+      ]
+    },
+    "do_flip": {
+      "description": "翻开首张：设台面颜色/符号并处理首张特殊效果（p1 先手；反转=庄家先手）",
+      "ops": [
+        {
+          "op": "append",
+          "array": "discard",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "topColor",
+          "value": {
+            "call": [
+              "color_of",
+              {
+                "var": "outcome"
+              }
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "topSymbol",
+          "value": {
+            "call": [
+              "symbol_of",
+              {
+                "var": "outcome"
+              }
+            ]
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "turn",
+          "value": {
+            "at": [
+              {
+                "var": "$constants.player_ids"
+              },
+              {
+                "const": 1
+              }
+            ]
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "eq": [
+              {
+                "var": "$env.topSymbol"
+              },
+              {
+                "const": "reverse"
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "direction",
+              "value": {
+                "const": -1
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "at": [
+                  {
+                    "var": "$constants.player_ids"
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "play"
+              }
+            }
+          ],
+          "else": [
+            {
+              "op": "branch",
+              "if": {
+                "eq": [
+                  {
+                    "var": "$env.topSymbol"
+                  },
+                  {
+                    "const": "skip"
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "op": "setEnv",
+                  "key": "turn",
+                  "value": {
+                    "at": [
+                      {
+                        "var": "$constants.player_ids"
+                      },
+                      {
+                        "call": [
+                          "seat_after",
+                          {
+                            "const": 1
+                          },
+                          {
+                            "const": 1
+                          },
+                          {
+                            "const": 1
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "phase",
+                  "value": {
+                    "const": "play"
+                  }
+                }
+              ],
+              "else": [
+                {
+                  "op": "branch",
+                  "if": {
+                    "eq": [
+                      {
+                        "var": "$env.topSymbol"
+                      },
+                      {
+                        "const": "wild"
+                      }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "op": "setEnv",
+                      "key": "topColor",
+                      "value": {
+                        "const": "r"
+                      }
+                    },
+                    {
+                      "op": "setEnv",
+                      "key": "phase",
+                      "value": {
+                        "const": "play"
+                      }
+                    }
+                  ],
+                  "else": [
+                    {
+                      "op": "branch",
+                      "if": {
+                        "eq": [
+                          {
+                            "var": "$env.topSymbol"
+                          },
+                          {
+                            "const": "wild4"
+                          }
+                        ]
+                      },
+                      "then": [
+                        {
+                          "op": "setEnv",
+                          "key": "topColor",
+                          "value": {
+                            "const": "r"
+                          }
+                        },
+                        {
+                          "op": "setEnv",
+                          "key": "penaltyTarget",
+                          "value": {
+                            "var": "$env.turn"
+                          }
+                        },
+                        {
+                          "op": "setEnv",
+                          "key": "pendingDraw",
+                          "value": {
+                            "const": 4
+                          }
+                        },
+                        {
+                          "op": "setEnv",
+                          "key": "phase",
+                          "value": {
+                            "const": "penalty_pick"
+                          }
+                        }
+                      ],
+                      "else": [
+                        {
+                          "op": "branch",
+                          "if": {
+                            "eq": [
+                              {
+                                "var": "$env.topSymbol"
+                              },
+                              {
+                                "const": "draw2"
+                              }
+                            ]
+                          },
+                          "then": [
+                            {
+                              "op": "setEnv",
+                              "key": "penaltyTarget",
+                              "value": {
+                                "var": "$env.turn"
+                              }
+                            },
+                            {
+                              "op": "setEnv",
+                              "key": "pendingDraw",
+                              "value": {
+                                "const": 2
+                              }
+                            },
+                            {
+                              "op": "setEnv",
+                              "key": "phase",
+                              "value": {
+                                "const": "penalty_pick"
+                              }
+                            }
+                          ],
+                          "else": [
+                            {
+                              "op": "setEnv",
+                              "key": "phase",
+                              "value": {
+                                "const": "play"
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "do_pick": {
+      "description": "摸牌结算：进手牌；draw_until 摸到可打才停，否则 draw_result",
+      "ops": [
+        {
+          "op": "append",
+          "array": {
+            "template": "hand_{$env.turn}"
+          },
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "drawnCard",
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "branch",
+          "if": {
+            "and": [
+              {
+                "eq": [
+                  {
+                    "var": "$constants.draw_until"
+                  },
+                  {
+                    "const": true
+                  }
+                ]
+              },
+              {
+                "not": {
+                  "call": [
+                    "can_play",
+                    {
+                      "var": "outcome"
+                    },
+                    {
+                      "call": [
+                        "hand_of",
+                        {
+                          "var": "$env.turn"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "gt": [
+                  {
+                    "call": [
+                      "deck_count"
+                    ]
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "then": [],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "draw_result"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "do_penalty_pick": {
+      "description": "罚牌循环：摸 1 张给罚牌目标；累计未清零继续，否则移交回合",
+      "ops": [
+        {
+          "op": "append",
+          "array": {
+            "template": "hand_{$env.penaltyTarget}"
+          },
+          "value": {
+            "var": "outcome"
+          }
+        },
+        {
+          "op": "inc",
+          "key": "pendingDraw",
+          "by": -1
+        },
+        {
+          "op": "branch",
+          "if": {
+            "gt": [
+              {
+                "var": "$env.pendingDraw"
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          "then": [],
+          "else": [
+            {
+              "op": "setEnv",
+              "key": "turn",
+              "value": {
+                "at": [
+                  {
+                    "var": "$constants.player_ids"
+                  },
+                  {
+                    "call": [
+                      "seat_after",
+                      {
+                        "call": [
+                          "seat_of",
+                          {
+                            "var": "$env.penaltyTarget"
+                          }
+                        ]
+                      },
+                      {
+                        "const": 1
+                      },
+                      {
+                        "var": "$env.direction"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "op": "setEnv",
+              "key": "phase",
+              "value": {
+                "const": "play"
+              }
+            },
+            {
+              "op": "callEffect",
+              "effectRef": "do_end_check",
+              "args": {}
+            }
+          ]
+        }
+      ]
+    },
+    "do_end_check": {
+      "description": "终局检查：条件成立时把 env.winner 置为手牌最少者（展示/对局记录用）",
+      "ops": [
+        {
+          "op": "branch",
+          "if": {
+            "or": [
+              {
+                "and": [
+                  {
+                    "not": {
+                      "or": [
+                        {
+                          "eq": [
+                            {
+                              "var": "$env.phase"
+                            },
+                            {
+                              "const": "deal"
+                            }
+                          ]
+                        },
+                        {
+                          "eq": [
+                            {
+                              "var": "$env.phase"
+                            },
+                            {
+                              "const": "flip"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "any": {
+                      "list": {
+                        "var": "$constants.player_ids"
+                      },
+                      "as": "$node",
+                      "where": {
+                        "eq": [
+                          {
+                            "count": {
+                              "call": [
+                                "hand_of",
+                                {
+                                  "var": "$node"
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "const": 0
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "and": [
+                  {
+                    "eq": [
+                      {
+                        "var": "$env.phase"
+                      },
+                      {
+                        "const": "play"
+                      }
+                    ]
+                  },
+                  {
+                    "eq": [
+                      {
+                        "call": [
+                          "deck_count"
+                        ]
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  },
+                  {
+                    "eq": [
+                      {
+                        "count": {
+                          "filter": {
+                            "list": {
+                              "call": [
+                                "hand_of",
+                                {
+                                  "var": "$env.turn"
+                                }
+                              ]
+                            },
+                            "as": "$node",
+                            "where": {
+                              "call": [
+                                "can_play",
+                                {
+                                  "var": "$node"
+                                },
+                                {
+                                  "call": [
+                                    "hand_of",
+                                    {
+                                      "var": "$env.turn"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "and": [
+                  {
+                    "eq": [
+                      {
+                        "var": "$env.phase"
+                      },
+                      {
+                        "const": "penalty_pick"
+                      }
+                    ]
+                  },
+                  {
+                    "eq": [
+                      {
+                        "call": [
+                          "deck_count"
+                        ]
+                      },
+                      {
+                        "const": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "gte": [
+                  {
+                    "var": "$env.turnCount"
+                  },
+                  {
+                    "const": 2000
+                  }
+                ]
+              }
+            ]
+          },
+          "then": [
+            {
+              "op": "setEnv",
+              "key": "winner",
+              "value": {
+                "call": [
+                  "least_player"
+                ]
+              }
+            }
+          ],
+          "else": []
+        }
+      ]
+    }
+  },
+  "chance": [
+    {
+      "id": "deal",
+      "phases": [
+        "deal"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_deal",
+      "canonicalKey": {
+        "template": "deal:{outcome}"
+      }
+    },
+    {
+      "id": "flip",
+      "phases": [
+        "flip"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_flip",
+      "canonicalKey": {
+        "template": "flip:{outcome}"
+      }
+    },
+    {
+      "id": "pick",
+      "phases": [
+        "pick"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_pick",
+      "canonicalKey": {
+        "template": "pick:{outcome}"
+      }
+    },
+    {
+      "id": "penalty_pick",
+      "phases": [
+        "penalty_pick"
+      ],
+      "params": {
+        "card": {
+          "view": "card",
+          "domain": {
+            "ref": "undrawn_cards"
+          }
+        }
+      },
+      "probability": {
+        "uniform": {
+          "over": "card"
+        }
+      },
+      "effectRef": "do_penalty_pick",
+      "canonicalKey": {
+        "template": "penalty_pick:{outcome}"
+      }
+    }
+  ],
+  "phases": [
+    {
+      "id": "deal",
+      "actions": [],
+      "description": "发牌：每名玩家 7 张（chance）"
+    },
+    {
+      "id": "flip",
+      "actions": [],
+      "description": "翻开首张牌（chance）"
+    },
+    {
+      "id": "play",
+      "actions": [
+        "play",
+        "play_wild",
+        "play7",
+        "draw"
+      ],
+      "description": "玩家：出牌或摸牌"
+    },
+    {
+      "id": "pick",
+      "actions": [],
+      "description": "摸牌（chance）"
+    },
+    {
+      "id": "draw_result",
+      "actions": [
+        "play_drawn",
+        "pass"
+      ],
+      "description": "玩家：可打出刚摸的牌或过"
+    },
+    {
+      "id": "jump",
+      "actions": [
+        "jump_play",
+        "jump_pass"
+      ],
+      "description": "玩家：抢牌窗口"
+    },
+    {
+      "id": "respond",
+      "actions": [
+        "stack2",
+        "stack4",
+        "take_penalty"
+      ],
+      "description": "玩家：叠牌或吃罚牌"
+    },
+    {
+      "id": "penalty_pick",
+      "actions": [],
+      "description": "罚牌摸取（chance）"
+    }
+  ],
+  "visibility": {
+    "default": "partial",
+    "rules": [
+      {
+        "view": "hand_view_p0",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              {
+                "const": "p0"
+              }
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "hand_view_p1",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              {
+                "const": "p1"
+              }
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "hand_view_p2",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              {
+                "const": "p2"
+              }
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "hand_view_p3",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              {
+                "const": "p3"
+              }
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "hand_view_p4",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              {
+                "const": "p4"
+              }
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "hand_view_p5",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              {
+                "const": "p5"
+              }
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "hand_view_p6",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              {
+                "const": "p6"
+              }
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "hand_view_p7",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              {
+                "const": "p7"
+              }
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "hand_view_p8",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              {
+                "const": "p8"
+              }
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      },
+      {
+        "view": "hand_view_p9",
+        "filter": {
+          "not": {
+            "eq": [
+              {
+                "var": "$viewer"
+              },
+              {
+                "const": "p9"
+              }
+            ]
+          }
+        },
+        "fields": {
+          "id": "hidden"
+        }
+      }
+    ]
+  },
+  "terminal": [
+    {
+      "id": "hand_empty",
+      "condition": {
+        "and": [
+          {
+            "not": {
+              "or": [
+                {
+                  "eq": [
+                    {
+                      "var": "$env.phase"
+                    },
+                    {
+                      "const": "deal"
+                    }
+                  ]
+                },
+                {
+                  "eq": [
+                    {
+                      "var": "$env.phase"
+                    },
+                    {
+                      "const": "flip"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "any": {
+              "list": {
+                "var": "$constants.player_ids"
+              },
+              "as": "$node",
+              "where": {
+                "eq": [
+                  {
+                    "count": {
+                      "call": [
+                        "hand_of",
+                        {
+                          "var": "$node"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "const": 0
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "stuck",
+      "condition": {
+        "and": [
+          {
+            "eq": [
+              {
+                "var": "$env.phase"
+              },
+              {
+                "const": "play"
+              }
+            ]
+          },
+          {
+            "eq": [
+              {
+                "call": [
+                  "deck_count"
+                ]
+              },
+              {
+                "const": 0
+              }
+            ]
+          },
+          {
+            "eq": [
+              {
+                "count": {
+                  "filter": {
+                    "list": {
+                      "call": [
+                        "hand_of",
+                        {
+                          "var": "$env.turn"
+                        }
+                      ]
+                    },
+                    "as": "$node",
+                    "where": {
+                      "call": [
+                        "can_play",
+                        {
+                          "var": "$node"
+                        },
+                        {
+                          "call": [
+                            "hand_of",
+                            {
+                              "var": "$env.turn"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "const": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "stuck_penalty",
+      "condition": {
+        "and": [
+          {
+            "eq": [
+              {
+                "var": "$env.phase"
+              },
+              {
+                "const": "penalty_pick"
+              }
+            ]
+          },
+          {
+            "eq": [
+              {
+                "call": [
+                  "deck_count"
+                ]
+              },
+              {
+                "const": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "max_turns",
+      "condition": {
+        "gte": [
+          {
+            "var": "$env.turnCount"
+          },
+          {
+            "const": 2000
+          }
+        ]
+      }
+    }
+  ],
+  "utility": [
+    {
+      "player": "p0",
+      "value": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "const": "p0"
+              },
+              {
+                "call": [
+                  "least_player"
+                ]
+              }
+            ]
+          },
+          "then": 1,
+          "else": -1
+        }
+      },
+      "when": {
+        "call": [
+          "game_ended"
+        ]
+      }
+    },
+    {
+      "player": "p1",
+      "value": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "const": "p1"
+              },
+              {
+                "call": [
+                  "least_player"
+                ]
+              }
+            ]
+          },
+          "then": 1,
+          "else": -1
+        }
+      },
+      "when": {
+        "call": [
+          "game_ended"
+        ]
+      }
+    },
+    {
+      "player": "p2",
+      "value": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "const": "p2"
+              },
+              {
+                "call": [
+                  "least_player"
+                ]
+              }
+            ]
+          },
+          "then": 1,
+          "else": -1
+        }
+      },
+      "when": {
+        "call": [
+          "game_ended"
+        ]
+      }
+    },
+    {
+      "player": "p3",
+      "value": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "const": "p3"
+              },
+              {
+                "call": [
+                  "least_player"
+                ]
+              }
+            ]
+          },
+          "then": 1,
+          "else": -1
+        }
+      },
+      "when": {
+        "call": [
+          "game_ended"
+        ]
+      }
+    },
+    {
+      "player": "p4",
+      "value": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "const": "p4"
+              },
+              {
+                "call": [
+                  "least_player"
+                ]
+              }
+            ]
+          },
+          "then": 1,
+          "else": -1
+        }
+      },
+      "when": {
+        "call": [
+          "game_ended"
+        ]
+      }
+    },
+    {
+      "player": "p5",
+      "value": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "const": "p5"
+              },
+              {
+                "call": [
+                  "least_player"
+                ]
+              }
+            ]
+          },
+          "then": 1,
+          "else": -1
+        }
+      },
+      "when": {
+        "call": [
+          "game_ended"
+        ]
+      }
+    },
+    {
+      "player": "p6",
+      "value": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "const": "p6"
+              },
+              {
+                "call": [
+                  "least_player"
+                ]
+              }
+            ]
+          },
+          "then": 1,
+          "else": -1
+        }
+      },
+      "when": {
+        "call": [
+          "game_ended"
+        ]
+      }
+    },
+    {
+      "player": "p7",
+      "value": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "const": "p7"
+              },
+              {
+                "call": [
+                  "least_player"
+                ]
+              }
+            ]
+          },
+          "then": 1,
+          "else": -1
+        }
+      },
+      "when": {
+        "call": [
+          "game_ended"
+        ]
+      }
+    },
+    {
+      "player": "p8",
+      "value": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "const": "p8"
+              },
+              {
+                "call": [
+                  "least_player"
+                ]
+              }
+            ]
+          },
+          "then": 1,
+          "else": -1
+        }
+      },
+      "when": {
+        "call": [
+          "game_ended"
+        ]
+      }
+    },
+    {
+      "player": "p9",
+      "value": {
+        "if": {
+          "cond": {
+            "eq": [
+              {
+                "const": "p9"
+              },
+              {
+                "call": [
+                  "least_player"
+                ]
+              }
+            ]
+          },
+          "then": 1,
+          "else": -1
+        }
+      },
+      "when": {
+        "call": [
+          "game_ended"
+        ]
+      }
+    }
+  ]
+}

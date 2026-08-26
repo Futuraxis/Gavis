@@ -1,6 +1,7 @@
 import { HashRouter, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import BattlePage from './pages/BattlePage'
+import CreateGamePage from './pages/CreateGamePage'
 import BenchmarkPage from './pages/BenchmarkPage'
 import HistoryPage from './pages/HistoryPage'
 import HomePage from './pages/HomePage'
@@ -17,6 +18,7 @@ export default function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/lobby" element={<LobbyPage />} />
+          <Route path="/create" element={<CreateGamePage />} />
           <Route path="/battle/:gameId" element={<BattlePage />} />
           <Route path="/benchmark" element={<BenchmarkPage />} />
           <Route path="/learning" element={<LearningPage />} />

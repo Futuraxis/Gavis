@@ -27,9 +27,10 @@ from ...profile.store import ProfileStore
 from ...review import analyze as review_analyze
 from ..common.http_utils import BodyTooLargeError, read_json_body, send_error_json, send_json
 from .benchmark import SOLVER_OPTIONS, BenchmarkRunner
+from .custom_games import CustomGameError, CustomGameRegistry, CustomGameStore
 from .games import GAMES, PlayError
 from .history import HistoryError, MatchHistory
-from .session import PlayManager
+from .session import _BUILTIN_FAMILY, PlayManager
 
 ROOT = Path(__file__).resolve().parents[3]
 DIST_DIR = ROOT / "platform-frontend" / "dist"
@@ -44,6 +45,7 @@ def make_handler(
     dist_dir: Path = DIST_DIR,
     learning: LearningManager | None = None,
     profile_store: ProfileStore | None = None,
+    custom: CustomGameRegistry | None = None,
 ) -> type:
     """Build a handler class bound to the given platform services.
 
@@ -65,7 +67,7 @@ def make_handler(
 
         def _send_cors_headers(self) -> None:
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
         # CORS 只由 end_headers 统一发出一遍（审查 P2：双重 CORS 头移除）
@@ -84,6 +86,8 @@ def make_handler(
             try:
                 if path == "/api/games":
                     self._handle_games()
+                elif path == "/api/custom/games":
+                    self._handle_custom_games_list()
                 elif path == "/api/history":
                     self._handle_history_list()
                 elif path.startswith("/api/history/"):
@@ -118,7 +122,7 @@ def make_handler(
                         )
                         return
                     super().do_GET()
-            except (PlayError, HistoryError) as exc:
+            except (PlayError, HistoryError, CustomGameError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
             except (KeyError, TypeError, ValueError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, f"参数错误: {exc}")
@@ -140,7 +144,9 @@ def make_handler(
         def do_POST(self) -> None:
             path = urllib.parse.urlsplit(self.path).path
             try:
-                if path == "/api/match/start":
+                if path == "/api/custom/games":
+                    self._handle_custom_games_create()
+                elif path == "/api/match/start":
                     self._handle_match_start()
                 elif path == "/api/match/move":
                     self._handle_match_move()
@@ -166,7 +172,22 @@ def make_handler(
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
             except BodyTooLargeError as exc:
                 send_error_json(self, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
-            except (PlayError, HistoryError) as exc:
+            except (PlayError, HistoryError, CustomGameError) as exc:
+                send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
+            except (KeyError, TypeError, ValueError) as exc:
+                send_error_json(self, HTTPStatus.BAD_REQUEST, f"参数错误: {exc}")
+            except Exception as exc:  # noqa: BLE001 - last-resort envelope for the client
+                self.log_error("internal error: %s", exc)
+                send_error_json(self, HTTPStatus.INTERNAL_SERVER_ERROR, "服务器内部错误")
+
+        def do_DELETE(self) -> None:
+            path = urllib.parse.urlsplit(self.path).path
+            try:
+                if path.startswith("/api/custom/games/"):
+                    self._handle_custom_game_delete(path[len("/api/custom/games/") :])
+                else:
+                    send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
+            except (PlayError, HistoryError, CustomGameError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
             except (KeyError, TypeError, ValueError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, f"参数错误: {exc}")
@@ -183,7 +204,7 @@ def make_handler(
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
             except BodyTooLargeError as exc:
                 send_error_json(self, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
-            except (PlayError, HistoryError) as exc:
+            except (PlayError, HistoryError, CustomGameError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
             except (KeyError, TypeError, ValueError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, f"参数错误: {exc}")
@@ -202,6 +223,8 @@ def make_handler(
                         "display_name": spec.display_name,
                         "description": spec.description,
                         "kind": spec.kind,
+                        "family": _BUILTIN_FAMILY.get(spec.game_id),
+                        "custom": False,
                         "board_size": spec.board_size,
                         "seat_options": list(spec.seat_options),
                         "seat_label": spec.seat_label,
@@ -210,7 +233,80 @@ def make_handler(
                         "solver_options": list(SOLVER_OPTIONS.get(spec.game_id, ())),
                     }
                 )
+            if custom is not None:
+                games.extend(custom.list_games())
             send_json(self, HTTPStatus.OK, {"ok": True, "games": games})
+
+        # ── Custom games ─────────────────────────────────────────
+
+        def _handle_custom_games_list(self) -> None:
+            """List persisted custom games (``{}`` when the registry is off)."""
+            if custom is None:
+                send_json(self, HTTPStatus.OK, {"ok": True, "games": []})
+                return
+            send_json(self, HTTPStatus.OK, {"ok": True, "games": custom.list_games()})
+
+        def _handle_custom_games_create(self) -> None:
+            """Create a custom game from a translation (from-scratch / variant)."""
+            if custom is None:
+                send_error_json(self, HTTPStatus.SERVICE_UNAVAILABLE, "自定义游戏注册表未启用")
+                return
+            payload = read_json_body(self)
+            try:
+                entry = custom.create(
+                    mode=str(payload.get("mode", "from_scratch")),
+                    rule_text=payload.get("rule_text"),
+                    base_game_id=payload.get("base_game_id"),
+                    change_text=payload.get("change_text"),
+                    game_name=payload.get("game_name"),
+                    source_lang=str(payload.get("source_lang", "zh")),
+                    use_llm=bool(payload.get("use_llm", False)),
+                )
+            except CustomGameError as exc:
+                validation = (
+                    {
+                        "valid": exc.validation.valid,
+                        "errors": list(exc.validation.errors),
+                        "warnings": list(exc.validation.warnings),
+                    }
+                    if exc.validation is not None
+                    else None
+                )
+                send_json(
+                    self,
+                    HTTPStatus.BAD_REQUEST,
+                    {
+                        "ok": False,
+                        "error": str(exc),
+                        "validation": validation,
+                        "diff_summary": exc.diff_summary,
+                    },
+                )
+                return
+            send_json(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "game_id": entry["game_id"],
+                    "game": entry,
+                    "confidence": entry["confidence"],
+                    "family": entry["family"],
+                    "diff_summary": entry.get("diff_summary"),
+                    "validation": entry["validation"],
+                },
+            )
+
+        def _handle_custom_game_delete(self, game_id: str) -> None:
+            """Delete one custom game; 404 when it does not exist."""
+            if custom is None:
+                send_error_json(self, HTTPStatus.SERVICE_UNAVAILABLE, "自定义游戏注册表未启用")
+                return
+            deleted = custom.delete(urllib.parse.unquote(game_id))
+            if not deleted:
+                send_error_json(self, HTTPStatus.NOT_FOUND, f"自定义游戏不存在: {game_id}")
+                return
+            send_json(self, HTTPStatus.OK, {"ok": True})
 
         def _handle_match_start(self) -> None:
             payload = read_json_body(self)
@@ -402,6 +498,8 @@ def main() -> None:
     )
     profiles = ProfileStore(args.data_dir.parent)
     adaptive = AdaptiveController()
+    # 自定义游戏注册表（data/custom_games/，与 matches/online_learning 并列）。
+    custom_registry = CustomGameRegistry(CustomGameStore(args.data_dir.parent / "custom_games"))
 
     def _make_agent(persona_key: str) -> DialogueEngine | None:
         persona = PERSONAS.get(persona_key)
@@ -418,12 +516,20 @@ def main() -> None:
         profiles=profiles,
         adaptive=adaptive,
         agent_factory=_make_agent,
+        custom=custom_registry,
     )
     benchmark = BenchmarkRunner(provider=default_provider, seed=42)
     if args.learning_interval > 0:
         learning.start_auto(interval_seconds=args.learning_interval)
         print(f"在线学习 auto-apply 已启动: 每 {args.learning_interval}s 检查一次")
-    handler = make_handler(manager, history, benchmark, learning=learning, profile_store=profiles)
+    handler = make_handler(
+        manager,
+        history,
+        benchmark,
+        learning=learning,
+        profile_store=profiles,
+        custom=custom_registry,
+    )
     httpd = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Gavis 平台服务: http://{args.host}:{args.port}  (API 前缀 /api, 静态目录 {DIST_DIR})")
     try:

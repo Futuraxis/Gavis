@@ -132,6 +132,10 @@ RUNTIME_DEFAULTS: dict[str, Mapping[str, Any]] = {
 #: 调用期 budget 参数注入的配置字段名（按求解器）。
 _BUDGET_FIELD: Mapping[str, str] = {"mcts": "budget", "hybrid": "mcts_budget"}
 
+#: ``allow_unknown=True`` 时允许为未登记游戏实例化的运行时求解器名
+#: （平台自定义游戏族经 SolverProvider 装配使用；其余名字维持 ValueError）。
+_RUNTIME_UNKNOWN_ALLOWED: tuple[str, ...] = ("mcts", "random", "ollama", "mahjong", "hybrid")
+
 
 @dataclass(frozen=True)
 class EngineSpec:
@@ -218,6 +222,39 @@ def _mahjong_spec(game_id: str, display_name: str, variant: str) -> GameSpec:
         eval_opponents=("random", "mahjong"),  # 麻将启发式基线（已登记 runtime_solvers）
         solvers=_MAHJONG_SOLVERS,
         runtime_solvers=("mahjong", "random"),
+    )
+
+
+_UNO_SOLVERS: Mapping[str, SolverPipeline] = {
+    # UNO 手牌部分可观测（visibility 声明）→ 与德州同样的不完全信息配置。
+    "hybrid": SolverPipeline(
+        "hybrid",
+        episodes=1,
+        config={
+            "mode": "search",
+            "imperfect_information": True,
+            "mcts_budget": 300,
+            "cfr_iterations": 300,
+            "cfr_depth_limit": 6,
+            "opponent_model": "cfr",
+            "cfr_table_path": "$OUTDIR/cfr_table.json",
+        },
+    ),
+}
+
+
+def _uno_spec(game_id: str, display_name: str, variant: str) -> GameSpec:
+    """构造 UNO 变种登记条目（同一 rules 文件 + variants 声明选择，4 人默认）。"""
+    return GameSpec(
+        game_id=game_id,
+        display_name=display_name,
+        engine=EngineSpec(rules="uno.json", variant=variant, player_count=4),
+        players=("p0", "p1", "p2", "p3"),
+        eval_episodes=6,
+        eval_opponents=("random", "self", "mcts"),
+        solvers=_UNO_SOLVERS,
+        runtime_solvers=("mcts", "hybrid", "random"),
+        runtime_configs={"hybrid": {"imperfect_information": True}},
     )
 
 
@@ -334,6 +371,9 @@ GAMES: dict[str, GameSpec] = {
     "mahjong_guangdong": _mahjong_spec("mahjong_guangdong", "广东麻将（鸡胡）", "guangdong"),
     "mahjong_hongzhong": _mahjong_spec("mahjong_hongzhong", "红中麻将", "hongzhong"),
     "mahjong_blood": _mahjong_spec("mahjong_blood", "血战到底", "blood"),
+    "mahjong_sichuan": _mahjong_spec("mahjong_sichuan", "四川麻将（血战到底）", "sichuan"),
+    "mahjong_changsha": _mahjong_spec("mahjong_changsha", "长沙麻将（258将）", "changsha"),
+    "mahjong_taiwan": _mahjong_spec("mahjong_taiwan", "台湾麻将（16张）", "taiwan"),
     "werewolf": GameSpec(
         game_id="werewolf",
         display_name="狼人杀",
@@ -348,6 +388,24 @@ GAMES: dict[str, GameSpec] = {
         eval_opponents=("random", "self"),
         runtime_solvers=("ollama", "random"),
     ),
+    "undercover": GameSpec(
+        game_id="undercover",
+        display_name="谁是卧底",
+        # v5.2 声明式：scenario(词对) + 人数由 rules JSON 的 variants 选择
+        # （1卧底+1白板+N平民；人数 4..12 可用 player_count 覆盖）。
+        engine=EngineSpec(rules="undercover.json", variant="fruit", player_count=8),
+        players=("p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7"),
+        eval_episodes=4,
+        solvers={},  # 暂无专用可训练求解器（与狼人杀同类的自由发言桌游）
+        eval_opponents=("random", "self"),
+        runtime_solvers=("ollama", "random"),
+    ),
+    "uno": _uno_spec("uno", "UNO（经典）", "classic"),
+    "uno_seven_zero": _uno_spec("uno_seven_zero", "UNO 7-0（换手/移交）", "seven_zero"),
+    "uno_jump_in": _uno_spec("uno_jump_in", "UNO 抢牌", "jump_in"),
+    "uno_stacking": _uno_spec("uno_stacking", "UNO +2叠加", "stacking"),
+    "uno_draw_until": _uno_spec("uno_draw_until", "UNO 摸到能打", "draw_until"),
+    "uno_strict_wild4": _uno_spec("uno_strict_wild4", "UNO 严格+4", "strict_wild4"),
 }
 
 
@@ -379,11 +437,17 @@ def create_solver(
     engine: GameEngine,
     seed: int,
     budget: int,
+    *,
+    allow_unknown: bool = False,
     **kwargs: Any,
 ) -> SolverBase:
     """通用运行时求解器工厂 — 查注册表装配，无 per-game 分支。
 
     - 未知游戏 / 求解器不适用于该游戏 → ``ValueError``（数据驱动校验）。
+    - ``allow_unknown=True``：游戏未登记时仍按
+      ``RUNTIME_FACTORY[name]`` + ``RUNTIME_DEFAULTS`` + 预算注入实例化
+      （平台自定义游戏族装配用，仅限 ``_RUNTIME_UNKNOWN_ALLOWED`` 中的
+      通用运行时求解器名）。
     - ``budget`` 按 ``_BUDGET_FIELD`` 注入对应配置字段（如 mcts.budget /
       hybrid.mcts_budget）。
     - 额外 kwargs（``empirical_table`` / ``model`` / ``player_id`` …）合并进
@@ -394,10 +458,17 @@ def create_solver(
         raise ValueError(f"未知求解器: {name}（已注册: {', '.join(RUNTIME_FACTORY)}）")
     spec = GAMES.get(game_id)
     if spec is None:
+        if allow_unknown and name in _RUNTIME_UNKNOWN_ALLOWED:
+            cfg: dict[str, Any] = dict(RUNTIME_DEFAULTS.get(name, {}))
+            if name in _BUDGET_FIELD:
+                cfg[_BUDGET_FIELD[name]] = budget
+            cfg.update(kwargs)
+            cfg.setdefault("seed", seed)
+            return factory(engine, cfg)
         raise ValueError(f"未知游戏: {game_id}（已登记: {', '.join(GAMES)}）")
     if name not in spec.runtime_solvers:
         raise ValueError(f"求解器 {name} 不适用于 {game_id}（可选: {', '.join(spec.runtime_solvers)}）")
-    cfg: dict[str, Any] = dict(RUNTIME_DEFAULTS.get(name, {}))
+    cfg = dict(RUNTIME_DEFAULTS.get(name, {}))
     cfg.update(spec.runtime_configs.get(name, {}))
     if name in _BUDGET_FIELD:
         cfg[_BUDGET_FIELD[name]] = budget

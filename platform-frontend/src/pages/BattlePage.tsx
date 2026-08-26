@@ -21,6 +21,7 @@ import GomokuBoard from '../components/boards/GomokuBoard'
 import MahjongTable from '../components/boards/MahjongTable'
 import MoonBoard from '../components/boards/MoonBoard'
 import PokerTable from '../components/boards/PokerTable'
+import { FAMILY_BOARDS } from '../components/boards/familyBoards'
 
 const SEAT_SHORT: Record<string, string> = {
   p_black: '黑棋', p_white: '白棋', p_sb: '小盲位', p_bb: '大盲位',
@@ -180,29 +181,35 @@ export default function BattlePage() {
 
   const interactive = !session.over && session.turn === session.player_pid && !busy
 
-  const board =
-    game.kind === 'mahjong' ? (
-      <MahjongTable
-        snapshot={session as MahjongSnapshot}
-        interactive={interactive}
-        onAction={(action) => move(action)}
-      />
-    ) : game.kind === 'poker' ? (
-      <PokerTable
-        snapshot={session as PokerSnapshot}
-        interactive={interactive}
-        onAction={(action) => move(action)}
-      />
-    ) : game.board_size === 3 ? (
-      <MoonBoard snapshot={session as BoardSnapshot} interactive={interactive} onMove={(i) => move({ cell_index: i })} />
-    ) : (
-      <GomokuBoard
-        snapshot={session as BoardSnapshot}
-        interactive={interactive}
-        stepKey={stepKey}
-        onMove={(i) => move({ cell_index: i })}
-      />
-    )
+  // 渲染分发: 优先按 family（快照无 family 时按 game.family）经 FAMILY_BOARDS 查表，
+  // 查不到回退现有 kind 分支; 其余状态机不动。
+  const family = (session as { family?: string }).family ?? game.family ?? ''
+  const FamilyBoard = FAMILY_BOARDS[family]
+
+  const board = FamilyBoard ? (
+    <FamilyBoard snapshot={session} interactive={interactive} stepKey={stepKey} onMove={move} />
+  ) : game.kind === 'mahjong' ? (
+    <MahjongTable
+      snapshot={session as MahjongSnapshot}
+      interactive={interactive}
+      onAction={(action) => move(action)}
+    />
+  ) : game.kind === 'poker' ? (
+    <PokerTable
+      snapshot={session as PokerSnapshot}
+      interactive={interactive}
+      onAction={(action) => move(action)}
+    />
+  ) : game.board_size === 3 ? (
+    <MoonBoard snapshot={session as BoardSnapshot} interactive={interactive} onMove={(i) => move({ cell_index: i })} />
+  ) : (
+    <GomokuBoard
+      snapshot={session as BoardSnapshot}
+      interactive={interactive}
+      stepKey={stepKey}
+      onMove={(i) => move({ cell_index: i })}
+    />
+  )
 
   return (
     <div>

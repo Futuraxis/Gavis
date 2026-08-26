@@ -18,6 +18,7 @@ TEMPLATE_FILES = {
     "texas_holdem": "texas_holdem.json",
     "mahjong": "mahjong.json",
     "werewolf": "werewolf.json",
+    "uno": "uno.json",
 }
 
 ALIASES = {
@@ -44,6 +45,11 @@ ALIASES = {
     "狼人杀": "werewolf",
     "狼人": "werewolf",
     "werewolf": "werewolf",
+    "uno": "uno",
+    "UNO": "uno",
+    "尤诺": "uno",
+    "乌诺": "uno",
+    "优诺": "uno",
 }
 
 CHINESE_DIGITS = {
@@ -104,6 +110,8 @@ class RuleParser:
             return self._parse_mahjong(text)
         if game_id == "texas_holdem":
             return self._parse_texas_holdem(text)
+        if game_id == "uno":
+            return self._parse_uno(text)
         return {}
 
     def parse_grid_family_parameters(self, text: str) -> dict[str, Any]:
@@ -193,6 +201,55 @@ class RuleParser:
         player_count = self._extract_count_before(text, ("人", "家"), ("麻将", "局", "玩家"))
         if player_count in (2, 4):
             params["player_count"] = player_count
+        return params
+
+    def _parse_uno(self, text: str) -> dict[str, Any]:
+        """Parse UNO template parameters: player count (2..10) and variant.
+
+        Variant keywords map to the declared ``variants`` of
+        ``rules/uno.json`` (classic / seven_zero / jump_in / stacking /
+        draw_until / strict_wild4); only the first match wins.
+        """
+        params: dict[str, Any] = {}
+        player_count = self._extract_count_before(
+            text,
+            ("人", "名", "位", "玩家", "个"),
+            ("局", "游戏", "uno", "UNO"),
+        )
+        if player_count is not None and 2 <= player_count <= 10:
+            params["player_count"] = player_count
+        variant_map = {
+            "7-0": "seven_zero",
+            "7 0": "seven_zero",
+            "7和0": "seven_zero",
+            "7跟0": "seven_zero",
+            "换手": "seven_zero",
+            "移交": "seven_zero",
+            "seven_zero": "seven_zero",
+            "抢牌": "jump_in",
+            "抢出": "jump_in",
+            "抢": "jump_in",
+            "jump_in": "jump_in",
+            "叠加": "stacking",
+            "叠牌": "stacking",
+            "能叠": "stacking",
+            "stacking": "stacking",
+            "摸到能打": "draw_until",
+            "摸到可打": "draw_until",
+            "摸到能出": "draw_until",
+            "draw_until": "draw_until",
+            "严格加四": "strict_wild4",
+            "严格+4": "strict_wild4",
+            "严格4": "strict_wild4",
+            "strict_wild4": "strict_wild4",
+            "经典": "classic",
+            "classic": "classic",
+        }
+        normalized = self._normalize(text)
+        for key, variant in variant_map.items():
+            if key in text or key in normalized:
+                params["variant"] = variant
+                break
         return params
 
     def _parse_texas_holdem(self, text: str) -> dict[str, Any]:

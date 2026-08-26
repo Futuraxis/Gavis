@@ -96,3 +96,56 @@ export function clearProfile(): Promise<{ ok: boolean }> {
 export function getReview(matchId: string): Promise<import('../types').ReviewReport> {
   return apiGet<import('../types').ReviewReport>(`/review/${matchId}`)
 }
+
+// ── 自定义游戏 API (A2 后端契约 / A3 前端) ──────────────────────
+
+export interface CustomCreateBody {
+  mode: 'from_scratch' | 'variant'
+  rule_text?: string
+  base_game_id?: string
+  change_text?: string
+  game_name?: string
+  source_lang?: string
+  use_llm?: boolean
+}
+
+interface CustomCreateErrorBody {
+  ok: boolean
+  error?: string
+  validation?: { valid?: boolean; errors?: string[]; warnings?: string[] }
+}
+
+/** 创建自定义游戏 — 失败时把 validation errors 并入 ApiError 消息，便于页面展示。 */
+export async function createCustomGame(body: CustomCreateBody): Promise<import('../types').CustomCreateResult> {
+  let resp: Response
+  try {
+    resp = await fetch(BASE + '/custom/games', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new ApiError('无法连接服务器，请确认平台服务已启动 (python -m layer4_interface.frontend.platform.server)')
+  }
+  let data: import('../types').CustomCreateResult | CustomCreateErrorBody
+  try {
+    data = (await resp.json()) as import('../types').CustomCreateResult
+  } catch {
+    throw new ApiError(`服务器返回异常 (HTTP ${resp.status})`)
+  }
+  if (!data.ok) {
+    const err = data as CustomCreateErrorBody
+    const validationErrors = err.validation?.errors ?? []
+    const detail = validationErrors.length > 0 ? `：${validationErrors.join('；')}` : ''
+    throw new ApiError(`${err.error ?? `请求失败 (HTTP ${resp.status})`}${detail}`)
+  }
+  return data as import('../types').CustomCreateResult
+}
+
+export function listCustomGames(): Promise<{ games: import('../types').GameInfo[] }> {
+  return apiGet<{ games: import('../types').GameInfo[] }>('/custom/games')
+}
+
+export function deleteCustomGame(gameId: string): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/custom/games/${encodeURIComponent(gameId)}`, { method: 'DELETE' })
+}
