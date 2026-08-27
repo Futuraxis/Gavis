@@ -6,6 +6,9 @@ pydantic>=2.0
 httpx>=0.25
 torch>=2.0
 transformers>=4.40
+accelerate>=0.30
+peft>=0.11
+bitsandbytes>=0.43
 scipy>=1.10
 gymnasium>=0.28
 tqdm>=4.64
@@ -24,6 +27,9 @@ ruff>=0.1
 [llm]
 torch>=2.0
 transformers>=4.40
+accelerate>=0.30
+peft>=0.11
+bitsandbytes>=0.43
 
 [psro]
 scipy>=1.10

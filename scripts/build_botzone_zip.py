@@ -1,0 +1,84 @@
+"""Build a Botzone-uploadable Python zip bundle.
+
+The bundle follows Botzone's multi-file Python guidance: a zip archive
+with ``__main__.py`` at the root.  For Botzone's old python3 runtimes,
+the bundle is intentionally a tiny standalone Mahjong-Format-Test bot
+instead of the full Gavis source tree.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import zipfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_OUT = ROOT / "dist" / "gavis_botzone.zip"
+
+INCLUDE_PATHS = ()
+
+EXCLUDED_PARTS = {
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".git",
+    ".venv",
+    ".venv-1",
+    ".venv-2",
+    "node_modules",
+    "dist",
+    "models",
+    "data",
+    "tests",
+    "archive",
+}
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Build Gavis Botzone zip bundle")
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="output zip path")
+    args = parser.parse_args()
+    build(args.out)
+    print(args.out)
+
+
+def build(out_path: Path) -> None:
+    out_path = out_path.resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        # Botzone may run an old python3 (3.5/3.6).  The upload bundle
+        # therefore uses a tiny standalone Mahjong entrypoint instead of
+        # importing the full Gavis project, whose source targets Python 3.11+.
+        zf.write(ROOT / "layer4_interface" / "botzone" / "mahjong_format_py36.py", "__main__.py")
+        for include in INCLUDE_PATHS:
+            path = ROOT / include
+            if path.is_file():
+                _write_file(zf, path)
+            elif path.is_dir():
+                for file_path in sorted(path.rglob("*")):
+                    if file_path.is_file() and not _excluded(file_path):
+                        _write_file(zf, file_path)
+            else:
+                raise FileNotFoundError(path)
+
+
+def _write_file(zf: zipfile.ZipFile, file_path: Path) -> None:
+    rel = file_path.relative_to(ROOT).as_posix()
+    zf.write(file_path, rel)
+
+
+def _excluded(file_path: Path) -> bool:
+    rel_parts = file_path.relative_to(ROOT).parts
+    if any(part in EXCLUDED_PARTS for part in rel_parts):
+        return True
+    name = file_path.name
+    if name.startswith(".DS_Store"):
+        return True
+    if name.endswith((".pyc", ".pyo", ".so", ".dylib")):
+        return True
+    # Keep uploaded source compact and deterministic.
+    return os.path.getsize(file_path) == 0 and name != "__init__.py"
+
+
+if __name__ == "__main__":
+    main()

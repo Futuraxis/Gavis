@@ -23,13 +23,14 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Literal
 
 from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import ActionInstance
 
-from ...solver_provider import SolverHandle, SolverProvider
 from ..engine_helpers import engine_from_rules, mahjong_tile_name, resolve_all_chance, texas_hand_name
+from ...solver_provider import SolverHandle, SolverProvider
 
 if TYPE_CHECKING:
     from .session import GameSession
@@ -627,75 +628,6 @@ GAMES: dict[str, GameSpec] = {
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("blood"),
         create_solver=_make_mahjong_solver("mahjong_blood"),
-        resolve_start=_mahjong_resolve_start,
-        ai_opens=lambda session: session.player_pid != "p0",
-        parse_human_action=_mahjong_parse_human_action,
-        apply_human=_mahjong_apply_human,
-        run_ai=_mahjong_run_ai,
-        build_snapshot=_mahjong_snapshot,
-        describe_action=_mahjong_describe_action,
-    ),
-    "mahjong_sichuan": GameSpec(
-        game_id="mahjong_sichuan",
-        display_name="四川麻将（血战到底）",
-        description=(
-            "四川血战到底：108 张无字牌、缺一门才能胡、禁吃，"
-            "胡牌后继续至 N-1 家胡或牌墙摸空；对对胡/清一色/七对/龙七对/将对。"
-        ),
-        kind="mahjong",
-        board_size=None,
-        seat_options=("p0", "p1", "p2", "p3"),
-        seat_label="座位",
-        player_counts=(2, 4),
-        difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
-        create_engine=_make_mahjong_engine("sichuan"),
-        create_solver=_make_mahjong_solver("mahjong_sichuan"),
-        resolve_start=_mahjong_resolve_start,
-        ai_opens=lambda session: session.player_pid != "p0",
-        parse_human_action=_mahjong_parse_human_action,
-        apply_human=_mahjong_apply_human,
-        run_ai=_mahjong_run_ai,
-        build_snapshot=_mahjong_snapshot,
-        describe_action=_mahjong_describe_action,
-    ),
-    "mahjong_changsha": GameSpec(
-        game_id="mahjong_changsha",
-        display_name="长沙麻将（258将）",
-        description=(
-            "长沙 258将：108 张无字牌，小胡必须 2/5/8 为将；"
-            "碰碰胡/清一色/七对/将将胡大胡乱将，番上番 12 番。"
-        ),
-        kind="mahjong",
-        board_size=None,
-        seat_options=("p0", "p1", "p2", "p3"),
-        seat_label="座位",
-        player_counts=(2, 4),
-        difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
-        create_engine=_make_mahjong_engine("changsha"),
-        create_solver=_make_mahjong_solver("mahjong_changsha"),
-        resolve_start=_mahjong_resolve_start,
-        ai_opens=lambda session: session.player_pid != "p0",
-        parse_human_action=_mahjong_parse_human_action,
-        apply_human=_mahjong_apply_human,
-        run_ai=_mahjong_run_ai,
-        build_snapshot=_mahjong_snapshot,
-        describe_action=_mahjong_describe_action,
-    ),
-    "mahjong_taiwan": GameSpec(
-        game_id="mahjong_taiwan",
-        display_name="台湾麻将（16张）",
-        description=(
-            "台湾 16张（无花简化）：庄 17 张、闲 16 张，5 副+将成胡；"
-            "呖咕呖咕（八对半）判胡；平胡/门清/自摸/碰碰胡/混一色/清一色台数计分。"
-        ),
-        kind="mahjong",
-        board_size=None,
-        seat_options=("p0", "p1", "p2", "p3"),
-        seat_label="座位",
-        player_counts=(2, 4),
-        difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
-        create_engine=_make_mahjong_engine("taiwan"),
-        create_solver=_make_mahjong_solver("mahjong_taiwan"),
         resolve_start=_mahjong_resolve_start,
         ai_opens=lambda session: session.player_pid != "p0",
         parse_human_action=_mahjong_parse_human_action,
