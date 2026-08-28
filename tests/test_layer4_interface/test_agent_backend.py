@@ -9,7 +9,7 @@ from layer4_interface.agent import (
     SCENARIOS,
     AgentMessage,
     DialogueEngine,
-    OllamaClient,
+    LLMClient,
     SkillContext,
     Skills,
     assert_no_hidden,
@@ -37,7 +37,7 @@ class FakeLLM:
     def __init__(self, reply: str) -> None:
         self.reply = reply
 
-    def complete(self, system: str, user: str, max_tokens: int) -> str:
+    def complete_chat(self, system: str, user: str, max_tokens: int) -> str:
         return self.reply
 
 
@@ -152,7 +152,7 @@ class TestSkills:
         assert greet["nickname"] == "阿远"
 
 
-class TestOllamaClient:
+class TestLLMClient:
     def test_complete_fails_soft_when_unreachable(self):
-        client = OllamaClient(base_url="http://127.0.0.1:59999", timeout_s=0.5)
-        assert client.complete("sys", "usr", 8) == ""
+        client = LLMClient(base_url="http://127.0.0.1:59999", timeout_s=0.5)
+        assert client.complete_chat("sys", "usr", 8) == ""

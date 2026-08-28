@@ -8,15 +8,33 @@ interface Props {
 }
 
 const SUIT_GLYPHS: Record<string, string> = { S: '♠', H: '♥', D: '♦', C: '♣' }
+const SUIT_CHARS = ['s', 'h', 'd', 'c', 'S', 'H', 'D', 'C']
+const RANK_NAMES: Record<string, string> = { T: '10' }
 const SEAT_LABELS: Record<string, string> = { p_sb: '小盲位', p_bb: '大盲位' }
 
+/** 解析规则引擎的牌串（花⾊在前的小写形式如 `hA`/`d9`，兼容花⾊在后的 `Ah` 形式）。 */
+function parseCard(card: string): { suit: string; rank: string } | null {
+  if (!card) return null
+  if (SUIT_CHARS.includes(card[0])) return { suit: card[0].toUpperCase(), rank: card.slice(1) }
+  const last = card[card.length - 1]
+  if (SUIT_CHARS.includes(last)) return { suit: last.toUpperCase(), rank: card.slice(0, -1) }
+  return null
+}
+
 function CardView({ card }: { card: string }) {
-  const suit = card.slice(-1)
-  const red = suit === 'H' || suit === 'D'
+  const parsed = parseCard(card)
+  if (parsed === null) {
+    return (
+      <div className="poker-card">
+        <span style={{ fontSize: 13 }}>{card}</span>
+      </div>
+    )
+  }
+  const red = parsed.suit === 'H' || parsed.suit === 'D'
   return (
     <div className={`poker-card ${red ? 'red' : ''}`}>
-      <span style={{ fontSize: 18 }}>{SUIT_GLYPHS[suit] ?? suit}</span>
-      <span style={{ fontSize: 13 }}>{card.slice(0, -1)}</span>
+      <span style={{ fontSize: 18 }}>{SUIT_GLYPHS[parsed.suit] ?? parsed.suit}</span>
+      <span style={{ fontSize: 13 }}>{RANK_NAMES[parsed.rank] ?? parsed.rank}</span>
     </div>
   )
 }

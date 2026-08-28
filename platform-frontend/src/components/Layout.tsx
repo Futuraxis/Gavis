@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
+import { goChat } from '../chat/sessionStore'
 
 const NAV = [
   { to: '/', label: '首页', icon: '🏠', end: true },
@@ -30,6 +31,9 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
+      <button className="nav-item chat-back-btn" onClick={goChat} title="回到对话模式">
+          💬 回到对话
+        </button>
       </aside>
       <main className="content">
         <Outlet />

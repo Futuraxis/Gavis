@@ -27,6 +27,8 @@ from .games import GAMES, GameSpec, PlayError
 from .history import MatchHistory
 
 #: 内置游戏 → 规则族（对局记录/复盘元数据；自定义游戏由注册表提供）。
+#: 与 games.py 注册表保持全量覆盖：缺项会让 GameInfo.family / 快照 family 为
+#: None，前端按“未知”兜底、后端按 grid 兜底（LLM action 形态、正则落子解析）。
 _BUILTIN_FAMILY: dict[str, str] = {
     "moon_chess": "grid",
     "stochastic_gomoku": "grid",
@@ -34,6 +36,9 @@ _BUILTIN_FAMILY: dict[str, str] = {
     "mahjong_guangdong": "mahjong",
     "mahjong_hongzhong": "mahjong",
     "mahjong_blood": "mahjong",
+    "mahjong_sichuan": "mahjong",
+    "mahjong_changsha": "mahjong",
+    "mahjong_taiwan": "mahjong",
 }
 
 
@@ -117,11 +122,15 @@ class GameSession:
     def snapshot(self) -> dict:
         """Public view of the session for the API.
 
-        Extends the per-game snapshot with a ``chat`` list (incremental
-        agent messages pending delivery) and an ``evaluation`` dict
-        (mechanical position eval; ``None`` when the agent is disabled).
+        Extends the per-game snapshot with a ``family`` marker (the rule
+        family, self-describing for frontend dispatch — the frontend must
+        not depend on the games catalog being loaded), a ``chat`` list
+        (incremental agent messages pending delivery) and an
+        ``evaluation`` dict (mechanical position eval; ``None`` when the
+        agent is disabled).
         """
         snap = self.spec.build_snapshot(self)
+        snap["family"] = self.family
         snap["chat"] = self.drain_chat()
         snap["evaluation"] = self._evaluate_position()
         return snap

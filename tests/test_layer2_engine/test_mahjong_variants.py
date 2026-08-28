@@ -44,9 +44,9 @@ def _act(adapter: GameEngine, state: dict, template: str, **params) -> dict:
     raise AssertionError(f"not legal: {template} {params} at {state['env']['phase']}")
 
 
-def _eval_win(adapter: GameEngine, hand: list) -> bool:
+def _eval_win(adapter: GameEngine, hand: list, melds: list | None = None) -> bool:
     ctx = adapter._build_context(adapter.create_initial_state())  # noqa: SLF001
-    return bool(adapter.expr.eval({"call": ["is_win_hand", {"const": hand}]}, ctx))
+    return bool(adapter.expr.eval({"call": ["is_win_hand", {"const": hand}, {"const": melds or []}]}, ctx))
 
 
 def _tsumo_win(adapter: GameEngine, state: dict, hand: list, drawn: str, pid: str = "p0") -> dict:
@@ -128,11 +128,15 @@ class TestSichuan:
         assert s["env"]["done"] == ["p0"]
         # p1 tsumo (two-suit hand)
         s = _resolve(a, s)
-        s = _tsumo_win(a, s, ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p2", "p3", "p4", "p4", "p4"], "p4", pid="p1")
+        s = _tsumo_win(
+            a, s, ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p2", "p3", "p4", "p4", "p4"], "p4", pid="p1"
+        )
         assert not a.is_terminal(s)
         # p2 tsumo → three done → over (two-suit hand)
         s = _resolve(a, s)
-        s = _tsumo_win(a, s, ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "s1", "s2", "s3", "s3", "s3"], "s3", pid="p2")
+        s = _tsumo_win(
+            a, s, ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "s1", "s2", "s3", "s3", "s3"], "s3", pid="p2"
+        )
         assert a.is_terminal(s)
         assert s["env"]["done"] == ["p0", "p1", "p2"]
 
@@ -194,9 +198,7 @@ class TestChangsha:
         a = _engine(variant="changsha", player_count=2, seed=1)
         # 小胡 (平胡 1 番) → pay 10.
         s = _resolve(a, a.create_initial_state())
-        s = _tsumo_win(
-            a, s, ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p1", "p2", "p3", "m5", "m5"], "m5"
-        )
+        s = _tsumo_win(a, s, ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p1", "p2", "p3", "m5", "m5"], "m5")
         assert s["env"]["fan_pay"] == 10
         # 清一色 (6) + 七对 (6) = 12 → 番上番 120 (pair of m5, qidui exempt).
         a2 = _engine(variant="changsha", player_count=2, seed=1)
@@ -210,9 +212,7 @@ class TestChangsha:
         # 杠上开花: win right after a gang action (last_action = "gang").
         s = _resolve(a, a.create_initial_state())
         s["env"]["last_action"] = "gang"
-        s = _tsumo_win(
-            a, s, ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p1", "p2", "p3", "m5", "m5"], "m5"
-        )
+        s = _tsumo_win(a, s, ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p1", "p2", "p3", "m5", "m5"], "m5")
         # 平胡 1 + 杠上开花 6 = 7 → 单大胡 band 60.
         assert s["env"]["fan_pay"] == 60
         # 海底捞月: 小胡 with wall_count 0 → 1+6=7 → 60.
@@ -239,21 +239,41 @@ class TestTaiwan:
         a = _engine(variant="taiwan", player_count=2, seed=1)
         # 5 runs + pair = 17 tiles → win.
         hand = [
-            "m1", "m2", "m3",
-            "m4", "m5", "m6",
-            "m7", "m8", "m9",
-            "p1", "p2", "p3",
-            "p4", "p5", "p6",
-            "z1", "z1",
+            "m1",
+            "m2",
+            "m3",
+            "m4",
+            "m5",
+            "m6",
+            "m7",
+            "m8",
+            "m9",
+            "p1",
+            "p2",
+            "p3",
+            "p4",
+            "p5",
+            "p6",
+            "z1",
+            "z1",
         ]
         assert _eval_win(a, hand)
         # 4 runs + pair = 14 tiles → NOT a taiwan win.
         short = [
-            "m1", "m2", "m3",
-            "m4", "m5", "m6",
-            "m7", "m8", "m9",
-            "p1", "p2", "p3",
-            "z1", "z1",
+            "m1",
+            "m2",
+            "m3",
+            "m4",
+            "m5",
+            "m6",
+            "m7",
+            "m8",
+            "m9",
+            "p1",
+            "p2",
+            "p3",
+            "z1",
+            "z1",
         ]
         assert not _eval_win(a, short)
 
@@ -261,14 +281,23 @@ class TestTaiwan:
         a = _engine(variant="taiwan", player_count=2, seed=1)
         # 呖咕呖咕: 7 pairs + 1 triplet = 17 tiles.
         licu = [
-            "m1", "m1",
-            "m2", "m2",
-            "m3", "m3",
-            "p4", "p4",
-            "p5", "p5",
-            "s6", "s6",
-            "z2", "z2",
-            "z7", "z7", "z7",
+            "m1",
+            "m1",
+            "m2",
+            "m2",
+            "m3",
+            "m3",
+            "p4",
+            "p4",
+            "p5",
+            "p5",
+            "s6",
+            "s6",
+            "z2",
+            "z2",
+            "z7",
+            "z7",
+            "z7",
         ]
         assert _eval_win(a, licu)
 
@@ -290,7 +319,23 @@ class TestTaiwan:
         a = _engine(variant="taiwan", player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         hand = [
-            "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p1", "p2", "p3", "p4", "p5", "p6", "z1", "z1",
+            "m1",
+            "m2",
+            "m3",
+            "m4",
+            "m5",
+            "m6",
+            "m7",
+            "m8",
+            "m9",
+            "p1",
+            "p2",
+            "p3",
+            "p4",
+            "p5",
+            "p6",
+            "z1",
+            "z1",
         ]
         s = _tsumo_win(a, s, hand, "z1")
         assert s["env"]["fan_pay"] == 80
@@ -301,7 +346,22 @@ class TestTaiwan:
         s = _resolve(a, a.create_initial_state())
         s["_arrays"]["hand_p0"] = ["z1"] + s["_arrays"]["hand_p0"][1:]
         s["_arrays"]["hand_p1"] = [
-            "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p1", "p2", "p3", "p4", "p5", "p6", "z1",
+            "m1",
+            "m2",
+            "m3",
+            "m4",
+            "m5",
+            "m6",
+            "m7",
+            "m8",
+            "m9",
+            "p1",
+            "p2",
+            "p3",
+            "p4",
+            "p5",
+            "p6",
+            "z1",
         ]
         s = _act(a, s, "discard", tile="z1")
         assert s["env"]["phase"] == "claim"
@@ -314,7 +374,23 @@ class TestTaiwan:
         a = _engine(variant="taiwan", player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         hand = [
-            "m1", "m1", "m1", "m2", "m2", "m2", "p3", "p3", "p3", "s4", "s4", "s4", "z5", "z5", "z5", "m5", "m5",
+            "m1",
+            "m1",
+            "m1",
+            "m2",
+            "m2",
+            "m2",
+            "p3",
+            "p3",
+            "p3",
+            "s4",
+            "s4",
+            "s4",
+            "z5",
+            "z5",
+            "z5",
+            "m5",
+            "m5",
         ]
         s = _tsumo_win(a, s, hand, "m5")
         assert s["env"]["fan_pay"] == 320
@@ -322,7 +398,23 @@ class TestTaiwan:
         a2 = _engine(variant="taiwan", player_count=2, seed=1)
         s2 = _resolve(a2, a2.create_initial_state())
         qing = [
-            "m1", "m1", "m1", "m1", "m2", "m2", "m2", "m3", "m4", "m5", "m5", "m5", "m5", "m6", "m7", "m8", "m9",
+            "m1",
+            "m1",
+            "m1",
+            "m1",
+            "m2",
+            "m2",
+            "m2",
+            "m3",
+            "m4",
+            "m5",
+            "m5",
+            "m5",
+            "m5",
+            "m6",
+            "m7",
+            "m8",
+            "m9",
         ]
         s2 = _tsumo_win(a2, s2, qing, "m9")
         assert s2["env"]["fan_pay"] == 1280
@@ -332,7 +424,23 @@ class TestTaiwan:
         a = _engine(variant="taiwan", player_count=2, seed=1)
         s = _resolve(a, a.create_initial_state())
         licu = [
-            "m1", "m1", "m2", "m2", "m3", "m3", "p4", "p4", "p5", "p5", "s6", "s6", "z2", "z2", "z7", "z7", "z7",
+            "m1",
+            "m1",
+            "m2",
+            "m2",
+            "m3",
+            "m3",
+            "p4",
+            "p4",
+            "p5",
+            "p5",
+            "s6",
+            "s6",
+            "z2",
+            "z2",
+            "z7",
+            "z7",
+            "z7",
         ]
         s = _tsumo_win(a, s, licu, "z7")
         assert s["env"]["fan_pay"] == 20

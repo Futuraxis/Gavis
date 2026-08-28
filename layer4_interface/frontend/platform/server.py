@@ -20,13 +20,16 @@ from pathlib import Path
 
 from layer1_translator import translate_rules_json
 
-from ...agent import PERSONAS, DialogueEngine, OllamaClient
+from layer2_engine.core.llm import LLMClient
+
+from ...agent import PERSONAS, DialogueEngine
 from ...difficulty.adaptive import AdaptiveController
 from ...online_learning import LearningManager, LearningStore, OnlineModelStore
 from ...profile.store import ProfileStore
 from ...review import analyze as review_analyze
 from ..common.http_utils import BodyTooLargeError, read_json_body, send_error_json, send_json
 from .benchmark import SOLVER_OPTIONS, BenchmarkRunner
+from .chat import chat_turn
 from .custom_games import CustomGameError, CustomGameRegistry, CustomGameStore
 from .games import GAMES, PlayError
 from .history import HistoryError, MatchHistory
@@ -36,6 +39,16 @@ ROOT = Path(__file__).resolve().parents[3]
 DIST_DIR = ROOT / "platform-frontend" / "dist"
 DEFAULT_DATA_DIR = ROOT / "data" / "matches"
 PORT = 8770
+
+#: 聊天编排共享的统一 LLM 客户端（懒加载单例；不可用时自动走正则兜底）。
+_CHAT_LLM: LLMClient | None = None
+
+
+def _get_chat_llm() -> LLMClient | None:
+    global _CHAT_LLM
+    if _CHAT_LLM is None:
+        _CHAT_LLM = LLMClient() if LLMClient.available() else None
+    return _CHAT_LLM
 
 
 def make_handler(
@@ -164,6 +177,8 @@ def make_handler(
                     self._handle_match_hint()
                 elif path == "/api/agent/say":
                     self._handle_agent_say()
+                elif path == "/api/chat":
+                    self._handle_chat()
                 elif path == "/api/profile":
                     self._handle_profile_save()
                 elif path == "/api/profile/clear":
@@ -345,6 +360,39 @@ def make_handler(
             message = manager.say(payload["game_id"], str(payload.get("scenario", "idle")))
             send_json(self, HTTPStatus.OK, {"ok": True, "message": message})
 
+        def _handle_chat(self) -> None:
+            """Chat-first entry: one sentence → validated intent (LLM + tools, regex fallback).
+
+            ``history`` is optional prior ``user``/``assistant`` turns
+            (newest last) that the frontend sends for conversation
+            context; ``chat_turn`` sanitizes and bounds it.
+            """
+            payload = read_json_body(self)
+            text = str(payload.get("text", ""))
+            game_id = payload.get("game_id")
+            if game_id is not None:
+                game_id = str(game_id)
+            history = payload.get("history")
+            result = chat_turn(
+                manager,
+                text,
+                llm=_get_chat_llm(),
+                game_id=game_id,
+                custom=custom,
+                history=history if isinstance(history, list) else None,
+            )
+            send_json(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "intent": result.intent,
+                    "text": result.text,
+                    "mood": result.mood,
+                    "params": result.params,
+                },
+            )
+
         def _handle_match_hint(self) -> None:
             payload = read_json_body(self)
             hint = manager.hint(payload["game_id"], str(payload.get("level", "direction")))
@@ -421,6 +469,7 @@ def make_handler(
                 external_frontend=payload.get("external_frontend"),
                 run_engine_validation=bool(payload.get("run_engine_validation", True)),
                 use_llm=bool(payload.get("use_llm", False)),
+                llm_model=payload.get("llm_model"),
                 llm_model_path=payload.get("llm_model_path"),
             )
             validation = response.validation
@@ -505,7 +554,7 @@ def main() -> None:
         persona = PERSONAS.get(persona_key)
         if persona is None:
             return None
-        llm = OllamaClient() if OllamaClient.available() else None
+        llm = LLMClient() if LLMClient.available() else None
         return DialogueEngine(persona, llm=llm)
 
     manager = PlayManager(

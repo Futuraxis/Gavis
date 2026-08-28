@@ -7,11 +7,14 @@ end" tests below are reproducible.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from layer4_interface.frontend.platform.games import GAMES, PlayError
 from layer4_interface.frontend.platform.history import MatchHistory
-from layer4_interface.frontend.platform.session import PlayManager
+from layer4_interface.frontend.platform.session import _BUILTIN_FAMILY, PlayManager
 from train_cli import default_provider
 
 
@@ -179,6 +182,31 @@ class TestGameSpecRegistry:
         assert GAMES["moon_chess"].seat_options == ("p_black", "p_white")
         assert GAMES["texas_holdem"].seat_options == ("p_sb", "p_bb")
 
+    def test_registry_covers_all_declared_mahjong_variants(self):
+        """平台注册表必须覆盖 rules/mahjong.json 声明的全部变体（v5.2 声明式）。
+
+        防漂移守卫：注册清单由平台 games.py / train-cli/games.py / 文档各自
+        手工维护时，最容易漏挂新变体 —— 曾漏挂 sichuan/changsha/taiwan
+        （文档承诺六变种、大厅只有三个）。此断言把「注册表 ⊇ rules variants」
+        变成自动化约束：改 rules/mahjong.json 的 variants.options 而不同步
+        平台注册表，这里会立即变红。
+        """
+        rules = json.loads((Path("rules") / "mahjong.json").read_text(encoding="utf-8"))
+        declared = set(rules["variants"]["options"].keys())
+        platform_mahjong = {g for g in GAMES if g.startswith("mahjong_")}
+        assert platform_mahjong == {f"mahjong_{variant}" for variant in declared}
+
+    def test_builtin_family_covers_every_registry_game(self):
+        """`_BUILTIN_FAMILY` 必须全量覆盖平台注册表（家族映射防缺项回归）。
+
+        缺项会让 `GameInfo.family` 与快照 `family` 为 None：前端 InlineBoard
+        的分发曾因 mahjong_sichuan / changsha / taiwan 缺映射而把麻将快照
+        误路由到 grid 棋盘，在 `board.length` 上崩掉整个对话页。新增平台游戏
+        忘记登记家族时，此断言立即变红（与 ``test_all_games_present`` 的
+        9 游戏契约同步维护）。
+        """
+        assert set(_BUILTIN_FAMILY) == set(GAMES)
+
 
 # ── Mahjong ───────────────────────────────────────────────────────────
 
@@ -223,6 +251,26 @@ class TestMahjong:
         snap = session.snapshot()
         assert len(snap["my_hand"]) == 13  # AI (dealer) opened with a discard
         assert snap["ai_hand"] == []
+
+    def test_snapshot_carries_family_for_every_variant(self, manager: PlayManager):
+        """六个麻将变体的会话快照都必须携带 ``family == \"mahjong\"``。
+
+        防漂移守卫：快照 family 是前端渲染分发的第一优先来源（快照自描述，
+        不依赖游戏目录是否已加载）。sichuan/changsha/taiwan 曾因 `_BUILTIN_FAMILY`
+        缺项而 family 为 None，导致前端把麻将快照误路由到 grid 棋盘崩溃。
+        """
+        for game_id in (
+            "mahjong_guangdong",
+            "mahjong_hongzhong",
+            "mahjong_blood",
+            "mahjong_sichuan",
+            "mahjong_changsha",
+            "mahjong_taiwan",
+        ):
+            session = manager.start(game_id, "p0", "easy", player_count=2)
+            snap = session.snapshot()
+            assert snap["family"] == "mahjong", game_id
+            assert "board" not in snap, f"{game_id} 是非 grid 快照，不应含 board"
 
     def test_full_game_records(self, manager: PlayManager, tmp_path):
         session = manager.start("mahjong_guangdong", "p1", "easy", player_count=2)

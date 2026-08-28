@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getProfile } from '../api/client'
 import { DEFAULT_PROFILE } from '../mock'
+import { recentOf } from '../profile'
 import type { Profile } from '../types'
 
 const GAME_LABELS: Record<string, string> = {
@@ -22,7 +23,8 @@ export default function ProfilePage() {
       .catch(() => setProfile(DEFAULT_PROFILE))
   }, [])
 
-  const recentEntries = Object.entries(profile.recent)
+  // recent 可能缺失（旧档案/新契约）— recentOf 兜底为空表，避免整页崩溃
+  const recentEntries = Object.entries(recentOf(profile))
 
   return (
     <div>

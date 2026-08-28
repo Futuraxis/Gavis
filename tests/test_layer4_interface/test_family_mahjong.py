@@ -54,6 +54,7 @@ MAHJONG_SNAPSHOT_KEYS = frozenset(
         "discards",
         "wall_remaining",
         "last_discard",
+        "last_drawn",
         "last_action",
         "done",
         "winners",

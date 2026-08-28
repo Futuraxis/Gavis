@@ -169,6 +169,14 @@ body {
   color: #fff;
 }
 
+/* 紧凑删除按钮（大厅卡片 / 自定义游戏管理列表） */
+.lobby-delete-btn,
+.manage-delete-btn {
+  padding: 4px 10px;
+  font-size: 13px;
+  border-radius: 6px;
+}
+
 .badge {
   display: inline-block;
   padding: 2px 10px;
@@ -339,6 +347,41 @@ table.data tr.clickable:hover td {
 .piece.p_white {
   background: radial-gradient(circle at 35% 30%, #ffffff, #c9d1d9 70%);
   border: 2px solid #8b949e;
+}
+
+/* 人落子乐观渲染: 棋子落地一瞬间的弹出动画 — 即时反馈 */
+.piece-pending {
+  animation: piece-pop 0.4s ease-out;
+}
+
+@keyframes piece-pop {
+  0% {
+    transform: scale(0.35);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* 非法落子就地提示: 被拒绝的格子短暂红色闪烁, 提示该位置不能下 */
+.cell-invalid {
+  border-color: var(--lose);
+  animation: cell-invalid-shake 0.45s ease-in-out 2;
+}
+
+@keyframes cell-invalid-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  75% {
+    transform: translateX(3px);
+  }
 }
 
 .age-badge {
@@ -714,6 +757,42 @@ table.data tr.clickable:hover td {
   font-weight: 700;
   cursor: default;
   user-select: none;
+  position: relative;
+}
+
+/* 刚摸进的牌：金色描边 + 上浮 + 呼吸脉冲 + 「新」角标。 */
+@keyframes mahjong-draw-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px #ffd54f, 0 0 12px rgba(255, 213, 79, 0.8); }
+  50% { box-shadow: 0 0 0 3px #ffd54f, 0 0 20px rgba(255, 213, 79, 1); }
+}
+.mahjong-tile.drawn {
+  transform: translateY(-10px);
+  animation: mahjong-draw-pulse 1.2s ease-in-out 3;
+}
+.drawn-tag {
+  position: absolute;
+  top: -8px;
+  right: -6px;
+  background: #d32f2f;
+  color: #fff;
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-weight: 700;
+  z-index: 2;
+}
+.draw-msg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #ffd54f;
+  font-size: 13px;
+  font-weight: 700;
+}
+.draw-msg .mahjong-tile {
+  width: 22px;
+  height: 30px;
 }
 
 .mahjong-tile.suit-m { color: #c62828; }

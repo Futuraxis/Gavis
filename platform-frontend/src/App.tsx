@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import { HashRouter, Route, Routes } from 'react-router-dom'
+import ChatPage from './chat/ChatPage'
 import Layout from './components/Layout'
 import BattlePage from './pages/BattlePage'
 import CreateGamePage from './pages/CreateGamePage'
@@ -10,8 +12,27 @@ import LobbyPage from './pages/LobbyPage'
 import ProfilePage from './pages/ProfilePage'
 import ReviewPage from './pages/ReviewPage'
 import SettingsPage from './pages/SettingsPage'
+import { PLATFORM_EVENT, VIEW_EVENT, loadChatStore } from './chat/sessionStore'
 
 export default function App() {
+  const [viewMode, setViewMode] = useState<'chat' | 'platform'>(() => loadChatStore().viewMode)
+
+  // 全局切模式事件：ChatPage 头部按钮 → platform；Layout「回到对话」→ chat。
+  useEffect(() => {
+    const toChat = () => setViewMode('chat')
+    const toPlatform = () => setViewMode('platform')
+    window.addEventListener(VIEW_EVENT, toChat)
+    window.addEventListener(PLATFORM_EVENT, toPlatform)
+    return () => {
+      window.removeEventListener(VIEW_EVENT, toChat)
+      window.removeEventListener(PLATFORM_EVENT, toPlatform)
+    }
+  }, [])
+
+  if (viewMode === 'chat') {
+    return <ChatPage />
+  }
+
   return (
     <HashRouter>
       <Routes>

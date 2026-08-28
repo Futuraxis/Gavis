@@ -48,9 +48,9 @@ def _win_legal(adapter, state: dict) -> bool:
     return False
 
 
-def _eval_win(adapter, hand: list) -> bool:
+def _eval_win(adapter, hand: list, melds: list | None = None) -> bool:
     ctx = adapter._build_context(adapter.create_initial_state())  # noqa: SLF001
-    return bool(adapter.expr.eval({"call": ["is_win_hand", {"const": hand}]}, ctx))
+    return bool(adapter.expr.eval({"call": ["is_win_hand", {"const": hand}, {"const": melds or []}]}, ctx))
 
 
 # ── Dealing ───────────────────────────────────────────────────────────
@@ -118,7 +118,8 @@ class TestFlow:
         # Force a peng by p1: plant two copies into p1's hand
         s["_arrays"]["hand_p1"] = [tile, tile] + s["_arrays"]["hand_p1"][:-2]
         s = _act(a, s, "claim_peng", tile=tile)
-        assert s["env"]["phase"] == "draw"
+        # 标准麻将：碰后直接打牌（不摸牌），手牌 13 → 11。
+        assert s["env"]["phase"] == "discard"
         assert s["env"]["turn"] == "p1"
         melds = s["_arrays"]["melds_p1"]
         assert melds == [{"type": "peng", "tiles": [tile, tile, tile], "from": "p0"}]
@@ -137,10 +138,85 @@ class TestFlow:
         # p1 can chi m4+m6+m5
         s = _act(a, s, "claim_chi", tiles=["m4", "m5", "m6"])
         assert s["env"]["turn"] == "p1"
+        # 吃后直接打牌（不摸牌），保持 13 张在手的不变量。
+        assert s["env"]["phase"] == "discard"
         assert s["_arrays"]["melds_p1"][0]["type"] == "chi"
         assert s["_arrays"]["melds_p1"][0]["tiles"] == ["m4", "m5", "m6"]
         assert "m4" not in s["_arrays"]["hand_p1"]
         assert "m6" not in s["_arrays"]["hand_p1"]
+        # 只移除顺子里另外两张（m4/m6）；本家自己持有的 m5 必须保留
+        # （副露里的 m5 是打出方的弃牌，不是本家手牌）。
+        assert s["_arrays"]["hand_p1"].count("m5") == 1
+        assert len(s["_arrays"]["hand_p1"]) == 11  # 13 − 2（而非 −3）
+
+    def test_chi_requires_run_tiles_in_hand(self):
+        """Chi must not be legal when the two non-discard run tiles are
+        absent — the observed chaos (bogus chi conjured melds from thin
+        air and shrank hands erratically)."""
+        a = _engine(player_count=4, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        s["_arrays"]["hand_p0"] = ["m5"] + s["_arrays"]["hand_p0"][1:]
+        s["_arrays"]["hand_p1"] = [t for t in s["_arrays"]["hand_p1"] if t not in ("m4", "m6")][:13]
+        s = _act(a, s, "discard", tile="m5")
+        chi = [x for x in a.get_legal_actions(s) if x.template_id == "claim_chi"]
+        assert chi == []
+
+    def test_chi_only_valid_run_offered(self):
+        """Only runs whose two non-discard tiles are in hand are offered."""
+        a = _engine(player_count=4, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        s["_arrays"]["hand_p0"] = ["m5"] + s["_arrays"]["hand_p0"][1:]
+        hand = s["_arrays"]["hand_p1"]
+        rest = [t for t in hand if t not in ("m4", "m6")][:11]
+        s["_arrays"]["hand_p1"] = ["m4", "m6"] + rest  # has m4, m6; no m3/m7
+        s = _act(a, s, "discard", tile="m5")
+        chi = [x.params.get("tiles") for x in a.get_legal_actions(s) if x.template_id == "claim_chi"]
+        assert chi == [["m4", "m5", "m6"]]
+
+    def test_win_with_open_meld_tsumo_and_ron(self):
+        """Meld-aware wins: open melds count toward the 14-tile structure
+        (a chi holder can tsumo and ron — previously claims made winning
+        impossible)."""
+        # Tsumo: chi meld + 11-tile ready hand (drawing already included).
+        a = _engine(player_count=2, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        s["_arrays"]["melds_p0"] = [{"type": "chi", "tiles": ["m2", "m3", "m4"]}]
+        s["_arrays"]["hand_p0"] = ["m5", "m6", "m7", "p1", "p2", "p3", "s1", "s2", "s3", "z1", "z1"]
+        s["env"]["last_drawn"] = "z1"
+        assert _win_legal(a, s)
+        s = _act(a, s, "win_self")
+        assert a.is_terminal(s)
+        assert s["env"]["winner"] == "p0"
+        # Ron: chi meld + 10-tile hand, the discard completes the 14th.
+        a = _engine(player_count=2, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        s["_arrays"]["hand_p1"] = ["m6", "m7", "p1", "p2", "p3", "s1", "s2", "s3", "z1", "z1"]
+        s["_arrays"]["melds_p1"] = [{"type": "chi", "tiles": ["m2", "m3", "m4"]}]
+        s["_arrays"]["hand_p0"] = ["m5"] + s["_arrays"]["hand_p0"][1:]
+        s = _act(a, s, "discard", tile="m5")
+        s = _act(a, s, "claim_win", tile="m5")
+        assert a.is_terminal(s)
+        assert s["env"]["winner"] == "p1"
+
+    def test_qidui_requires_concealed(self):
+        """七对 stays concealed-only: open melds must not enable it."""
+        a = _engine(player_count=2, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        s["_arrays"]["melds_p0"] = [{"type": "chi", "tiles": ["m1", "m2", "m3"]}]
+        s["_arrays"]["hand_p0"] = ["z1", "z1", "z2", "z2", "z3", "z3", "z4", "z4", "z5", "z5", "z6", "z6"]
+        s["env"]["last_drawn"] = "z6"
+        assert not _win_legal(a, s)
+
+    def test_eval_win_meld_aware(self):
+        a = _engine(player_count=2, seed=1)
+        # 11-tile ready hand + chi meld → complete 14-tile structure.
+        assert _eval_win(
+            a,
+            ["m5", "m6", "m7", "p1", "p2", "p3", "s1", "s2", "s3", "z1", "z1"],
+            [{"type": "chi", "tiles": ["m2", "m3", "m4"]}],
+        )
+        # Same tiles but no melds → not a win (only 11 tiles).
+        assert not _eval_win(a, ["m5", "m6", "m7", "p1", "p2", "p3", "s1", "s2", "s3", "z1", "z1"])
 
     def test_concealed_gang_draws_replacement(self):
         a = _engine(player_count=2, seed=1)
@@ -246,6 +322,39 @@ class TestWins:
         s = _act(a, s, "win_self")
         # 鸡胡(1) + 平胡(2, 无刻子) = 3 番 → 10 × 2^2 = 40
         assert s["env"]["fan_pay"] == 40
+
+    def test_observation_hides_win_hand(self):
+        """env.win_hand (the winner's full hand, written by do_win) must never
+        appear in any player's projected observation — hidden_guard's
+        blacklist rejects it (``visibility.env`` filter, v5.2)."""
+        a = _engine(player_count=2, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        s["_arrays"]["hand_p0"] = ["m1", "m2", "m3", "m4", "m5", "m6", "p1", "p2", "p3", "s1", "s2", "s3", "p3", "p3"]
+        s["env"]["last_drawn"] = "p3"
+        s = _act(a, s, "win_self")
+        assert a.is_terminal(s)
+        # do_win still records the winning hand on the raw state (fan_sum
+        # needs it) …
+        assert s["env"]["win_hand"] == [
+            "m1",
+            "m2",
+            "m3",
+            "m4",
+            "m5",
+            "m6",
+            "p1",
+            "p2",
+            "p3",
+            "s1",
+            "s2",
+            "s3",
+            "p3",
+            "p3",
+        ]
+        # …but no viewer's observation carries it.
+        for pid in ("p0", "p1"):
+            obs = a.project_observation(s, pid)
+            assert "win_hand" not in obs["env"]
 
 
 # ── Variants ──────────────────────────────────────────────────────────

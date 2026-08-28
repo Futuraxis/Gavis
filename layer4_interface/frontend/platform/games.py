@@ -466,6 +466,9 @@ def _mahjong_snapshot(session: GameSession) -> dict:
         "discards": {pid: _discards(pid) for pid in seats},
         "wall_remaining": int(env.get("wall_count", 0)),
         "last_discard": env.get("last_discard"),
+        #: 刚摸进的牌（do_draw 写 env.last_drawn）：轮到你且 phase=action 时
+        #: 就是你这手刚摸的那张，前端用于高亮「新摸的牌」。
+        "last_drawn": env.get("last_drawn"),
         "last_action": env.get("last_action"),
         "done": list(env.get("done", [])),
         "winners": list(env.get("winners", [])),
@@ -517,6 +520,13 @@ def _poker_ai_opens(session: GameSession) -> bool:
     return True
 
 
+# 注意：平台注册表应覆盖 rules/mahjong.json 声明的**全部六种变体**
+# （guangdong / hongzhong / blood / sichuan / changsha / taiwan，v5.2 variants）。
+# 三个消费注册点必须同步，否则各自漂移（曾漏挂四川/长沙/台湾，导致
+# 文档承诺六变种但大厅只有三个；两个测试断言已按 9 游戏锁定）：
+#   - 平台：本文件（平台 /api/games → 大厅）
+#   - 训练：train-cli/games.py `_mahjong_spec`（六变体 × MARL 管线）
+#   - 文档：docs/user/play_mahjong.md（六变体 × 2/4 人）
 GAMES: dict[str, GameSpec] = {
     "moon_chess": GameSpec(
         game_id="moon_chess",
@@ -628,6 +638,66 @@ GAMES: dict[str, GameSpec] = {
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("blood"),
         create_solver=_make_mahjong_solver("mahjong_blood"),
+        resolve_start=_mahjong_resolve_start,
+        ai_opens=lambda session: session.player_pid != "p0",
+        parse_human_action=_mahjong_parse_human_action,
+        apply_human=_mahjong_apply_human,
+        run_ai=_mahjong_run_ai,
+        build_snapshot=_mahjong_snapshot,
+        describe_action=_mahjong_describe_action,
+    ),
+    "mahjong_sichuan": GameSpec(
+        game_id="mahjong_sichuan",
+        display_name="四川麻将（血战到底）",
+        description="二人/四人四川麻将（血战到底）：108 张无字牌，缺一门才能胡（硬门槛），禁吃，胡牌后继续至两家胡或牌墙摸空；番种：平胡 1/对对胡 2/清一色 4/七对 4/龙七对 8/将对 8。",
+        kind="mahjong",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(2, 4),
+        difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
+        create_engine=_make_mahjong_engine("sichuan"),
+        create_solver=_make_mahjong_solver("mahjong_sichuan"),
+        resolve_start=_mahjong_resolve_start,
+        ai_opens=lambda session: session.player_pid != "p0",
+        parse_human_action=_mahjong_parse_human_action,
+        apply_human=_mahjong_apply_human,
+        run_ai=_mahjong_run_ai,
+        build_snapshot=_mahjong_snapshot,
+        describe_action=_mahjong_describe_action,
+    ),
+    "mahjong_changsha": GameSpec(
+        game_id="mahjong_changsha",
+        display_name="长沙麻将（258将）",
+        description="二人/四人长沙麻将（258将）：108 张无字牌，小胡必须 2/5/8 为将，大胡（碰碰胡/清一色/七对/将将胡）乱将豁免；番制：小胡 1 番→10 / 大胡 6 番→60 / 番上番 12 番→120。",
+        kind="mahjong",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(2, 4),
+        difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
+        create_engine=_make_mahjong_engine("changsha"),
+        create_solver=_make_mahjong_solver("mahjong_changsha"),
+        resolve_start=_mahjong_resolve_start,
+        ai_opens=lambda session: session.player_pid != "p0",
+        parse_human_action=_mahjong_parse_human_action,
+        apply_human=_mahjong_apply_human,
+        run_ai=_mahjong_run_ai,
+        build_snapshot=_mahjong_snapshot,
+        describe_action=_mahjong_describe_action,
+    ),
+    "mahjong_taiwan": GameSpec(
+        game_id="mahjong_taiwan",
+        display_name="台湾麻将（16张）",
+        description="二人/四人台湾麻将（16张）：无花简化 136 张，庄 17 张闲 16 张，5 副+将成胡，呖咕呖咕（八对半）可胡；台数：平胡 2/门清 1/自摸 1/碰碰胡 4/混一色 4/清一色 8。",
+        kind="mahjong",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(2, 4),
+        difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
+        create_engine=_make_mahjong_engine("taiwan"),
+        create_solver=_make_mahjong_solver("mahjong_taiwan"),
         resolve_start=_mahjong_resolve_start,
         ai_opens=lambda session: session.player_pid != "p0",
         parse_human_action=_mahjong_parse_human_action,

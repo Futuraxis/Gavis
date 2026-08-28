@@ -25,14 +25,15 @@ function tileLabel(tile: string): string {
   return `${rank}${SUIT_NAMES[suit] ?? suit}`
 }
 
-/** 麻将牌 — 万红 / 筒蓝 / 条绿 / 字黑。 */
-function TileView({ tile, selected, onClick }: { tile: string; selected?: boolean; onClick?: () => void }) {
+/** 麻将牌 — 万红 / 筒蓝 / 条绿 / 字黑；``drawn`` 高亮刚摸进的牌。 */
+function TileView({ tile, selected, onClick, drawn }: { tile: string; selected?: boolean; onClick?: () => void; drawn?: boolean }) {
   const suit = tile[0]
-  const cls = `mahjong-tile ${suit === 'm' ? 'suit-m' : suit === 'p' ? 'suit-p' : suit === 's' ? 'suit-s' : 'suit-z'}${selected ? ' selected' : ''}`
+  const cls = `mahjong-tile ${suit === 'm' ? 'suit-m' : suit === 'p' ? 'suit-p' : suit === 's' ? 'suit-s' : 'suit-z'}${selected ? ' selected' : ''}${drawn ? ' drawn' : ''}`
   return (
     <div className={cls} onClick={onClick} role="button">
       <span className="tile-rank">{tile.slice(1)}</span>
       <span className="tile-suit">{SUIT_NAMES[suit] ?? suit}</span>
+      {drawn && <span className="drawn-tag">新</span>}
     </div>
   )
 }
@@ -76,6 +77,11 @@ function Seat({ pid, label, snapshot, interactive, onAction, isHuman, isTurn }: 
   const [selected, setSelected] = useState<string | null>(null)
 
   const canAct = interactive && isHuman && isTurn
+  // 刚摸进的牌：行动阶段里手牌末尾那张（do_draw 总是 append 到最后）。
+  const drawnIndex =
+    isHuman && isTurn && snapshot.phase === 'action' && snapshot.last_drawn
+      ? hand.lastIndexOf(snapshot.last_drawn)
+      : -1
 
   function discard(tile: string) {
     onAction?.({ type: 'discard', tile })
@@ -99,6 +105,7 @@ function Seat({ pid, label, snapshot, interactive, onAction, isHuman, isTurn }: 
               key={i}
               tile={t}
               selected={selected === t}
+              drawn={i === drawnIndex}
               onClick={canAct ? () => setSelected(selected === t ? null : t) : undefined}
             />
           ))}
@@ -170,6 +177,11 @@ export default function MahjongTable({ snapshot, interactive, onAction }: Props)
           />
           <div className="mahjong-center">
             <div className="wall-info">🀫 牌墙 {snapshot.wall_remaining} 张</div>
+            {!over && snapshot.turn === snapshot.player_pid && snapshot.phase === 'action' && snapshot.last_drawn && (
+              <div className="draw-msg">
+                🀄 你摸到了 <TileView tile={snapshot.last_drawn} drawn />
+              </div>
+            )}
             <div className="last-discard">
               {snapshot.last_discard ? (
                 <>

@@ -201,6 +201,7 @@ class CustomGameRegistry:
         source_lang: str = "zh",
         use_llm: bool = False,
         llm_client: Any | None = None,
+        llm_model: str | None = None,
         llm_model_path: str | None = None,
     ) -> dict:
         """Translate, validate, classify, spec-build and persist a game.
@@ -233,6 +234,7 @@ class CustomGameRegistry:
                 run_engine_validation=True,
                 use_llm=use_llm,
                 llm_client=llm_client,
+                llm_model=llm_model,
                 llm_model_path=llm_model_path,
             )
             diff_summary: str | None = None
@@ -249,6 +251,7 @@ class CustomGameRegistry:
                 source_lang,
                 use_llm,
                 llm_client,
+                llm_model,
                 llm_model_path,
             )
             diff_summary = _diff_summary(base_rules, response.rules_json)
@@ -335,6 +338,7 @@ class CustomGameRegistry:
         source_lang: str,
         use_llm: bool,
         llm_client: Any | None,
+        llm_model: str | None,
         llm_model_path: str | None,
     ) -> Any:
         """Invoke ``translate_variant_rules`` (lazy import — A1 parallel delivery)."""
@@ -349,6 +353,7 @@ class CustomGameRegistry:
             game_name=game_name,
             use_llm=use_llm,
             llm_client=llm_client,
+            llm_model=llm_model,
             llm_model_path=llm_model_path,
             run_engine_validation=True,
         )

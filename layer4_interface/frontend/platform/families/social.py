@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Callable
 from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import ActionInstance
 
-from ....agent.llm_client import OllamaClient
+from layer2_engine.core.llm import LLMClient
 from ....solver_provider import SolverHandle, SolverProvider
 from ..games import GameSpec, PlayError
 from .helpers import (
@@ -338,7 +338,7 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
         return engine_from_rules_dict(rules, seed, player_count=player_count)
 
     def _create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
-        mode = "ollama" if OllamaClient.available() else "random"
+        mode = "ollama" if LLMClient.available() else "random"
         assembly = _SocialSolverAssembly(provider, game_id, engine, seed, budget, mode, seats)
         return _SocialSolverHandle(assembly)
 

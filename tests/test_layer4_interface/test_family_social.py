@@ -12,7 +12,7 @@ Covers the B3 deliverables:
   to a terminal state;
 - the hidden-information red line: every snapshot is built only from the
   projected observation — other players' roles/words never appear;
-- ``OllamaClient.available()`` probing: True → per-seat ``ollama``
+- ``LLMClient.available()`` probing: True → per-seat ``ollama``
   solvers (captured via a recording ``SolverProvider``), False →
   ``random``;
 - illegal / out-of-turn human actions raise ``PlayError``.
@@ -29,7 +29,7 @@ from layer2_engine.core.engine import GameEngine
 from layer4_interface.frontend.engine_helpers import load_rules
 from layer4_interface.frontend.platform.custom_games import CustomGameRegistry, CustomGameStore
 from layer4_interface.frontend.platform.families import detect_family
-from layer4_interface.frontend.platform.families.social import OllamaClient, build_spec, detect
+from layer4_interface.frontend.platform.families.social import LLMClient, build_spec, detect
 from layer4_interface.frontend.platform.games import GameSpec, PlayError
 from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.session import PlayManager
@@ -225,7 +225,7 @@ class TestBuildSpec:
 @pytest.fixture
 def manager(tmp_path, monkeypatch):
     # Ollama 探测按 CI 环境强制不可用 → 每 AI 座位回退 random 求解器。
-    monkeypatch.setattr(OllamaClient, "available", staticmethod(lambda: False))
+    monkeypatch.setattr(LLMClient, "available", staticmethod(lambda: False))
     registry = _registry(tmp_path, "undercover")
     return PlayManager(
         provider=default_provider,
@@ -312,7 +312,7 @@ class TestUndercoverSession:
 
 class TestOllamaProbe:
     def test_ollama_available_uses_per_seat_ollama(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(OllamaClient, "available", staticmethod(lambda: True))
+        monkeypatch.setattr(LLMClient, "available", staticmethod(lambda: True))
         provider = _RecordingProvider()
         manager = PlayManager(provider=provider, seed=42, custom=_registry(tmp_path, "undercover"))
         session = manager.start("undercover", "p0", "easy", player_count=8)
@@ -326,7 +326,7 @@ class TestOllamaProbe:
         assert result["ai_mode"] == "ollama"
 
     def test_ollama_unavailable_falls_back_random(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(OllamaClient, "available", staticmethod(lambda: False))
+        monkeypatch.setattr(LLMClient, "available", staticmethod(lambda: False))
         provider = _RecordingProvider()
         manager = PlayManager(provider=provider, seed=42, custom=_registry(tmp_path, "undercover"))
         session = manager.start("undercover", "p0", "easy", player_count=8)
@@ -341,7 +341,7 @@ class TestOllamaProbe:
 
 class TestWerewolfSmoke:
     def test_start_and_snapshot_red_line(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(OllamaClient, "available", staticmethod(lambda: False))
+        monkeypatch.setattr(LLMClient, "available", staticmethod(lambda: False))
         registry = _registry(tmp_path, "werewolf")
         manager = PlayManager(
             provider=default_provider,

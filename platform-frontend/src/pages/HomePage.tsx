@@ -4,6 +4,7 @@ import { apiGet, getProfile } from '../api/client'
 import { DEFAULT_PROFILE, MOCK_GAMES } from '../mock'
 import type { ActiveSession, GameInfo, PersonaKey, Profile } from '../types'
 import AgentAvatar from '../components/AgentAvatar'
+import { recentOf } from '../profile'
 
 const PERSONA_NAMES: Record<PersonaKey, string> = {
   gentle: '温柔陪伴',
@@ -30,7 +31,9 @@ export default function HomePage() {
   }, [])
 
   const call = profile.agent_call || profile.nickname || '朋友'
-  const recentGames = games.filter((g) => profile.recent[g.game_id] != null)
+  // recent 可能缺失（旧档案/新契约）— recentOf 兜底为空表，避免整页崩溃
+  const recent = recentOf(profile)
+  const recentGames = games.filter((g) => recent[g.game_id] != null)
   const lastGameId = recentGames[0]?.game_id ?? 'moon_chess'
   // 有未结束会话 → 真·继续上一局（恢复 ?game=<id>）；否则按最近游戏新开
   const resume = active[0]
@@ -43,7 +46,7 @@ export default function HomePage() {
         <div className="home-hero-text">
           <h1 className="page-title">你好，{call} 👋</h1>
           <p className="page-sub" style={{ marginBottom: 0 }}>
-            我是 Gavis，今天想玩点什么？{PERSONA_NAMES[profile.default_persona]}模式已就绪。
+            我是 Gavis，今天想玩点什么？{PERSONA_NAMES[profile.default_persona] ?? '默认'}模式已就绪。
           </p>
         </div>
       </div>
@@ -89,7 +92,7 @@ export default function HomePage() {
           <h2 className="home-section-title">最近玩过的游戏</h2>
           <div className="home-grid">
             {recentGames.map((g) => {
-              const r = profile.recent[g.game_id]
+              const r = recent[g.game_id]
               return (
                 <Link key={g.game_id} className="card" to={`/battle/${g.game_id}`}>
                   <h3>{g.display_name}</h3>

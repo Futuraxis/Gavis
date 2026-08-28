@@ -13,6 +13,7 @@ export interface GameInfo {
   solver_options: string[]
   family: string // 族: grid / poker / mahjong / social（渲染以 family 为准）
   custom: boolean // 是否来自自定义游戏注册表
+  created_at?: string // 自定义游戏创建时间（自定义条目携带）
 }
 
 // ── 自定义游戏 (A2 后端契约 / A3 前端) ──────────────────────────
@@ -37,6 +38,7 @@ export interface CustomCreateResult {
 
 export interface BoardSnapshot {
   game_id: string
+  family?: string // 族（后端 session 统一注入，快照自描述；social 快照为必填）
   player_pid: string
   difficulty: string
   board: (string | null)[]
@@ -50,10 +52,13 @@ export interface BoardSnapshot {
   last_vanish?: number | null // gomoku: vanished cell, if any
   last_vanish_color?: string | null // gomoku: color of the vanished piece
   round?: number
+  pending_cell?: number | null // 前端乐观落子标记: 人落子即时反馈（仅渲染层临时叠加）
+  invalid_cell?: number | null // 前端非法落子标记: 被拒绝的格子就地闪烁提示（仅渲染层临时叠加）
 }
 
 export interface PokerSnapshot {
   game_id: string
+  family?: string // 族（后端 session 统一注入，快照自描述）
   player_pid: string
   ai_pid: string
   difficulty: string
@@ -93,6 +98,7 @@ export interface MahjongMeld {
 
 export interface MahjongSnapshot {
   game_id: string
+  family?: string // 族（后端 session 统一注入，快照自描述）
   player_pid: string
   ai_pid: string
   difficulty: string
@@ -107,6 +113,7 @@ export interface MahjongSnapshot {
   discards: Record<string, string[]>
   wall_remaining: number
   last_discard: string | null
+  last_drawn: string | null
   last_action: string | null
   done: string[]
   winners: string[]
@@ -275,12 +282,45 @@ export interface AgentMessage {
   mood: Mood
 }
 
+// ── Chat-first (对话即一切, agent 聊天模式) ──────────────────────
+// 意图契约与后端 layer4_interface/frontend/platform/chat.py 对齐。
+
+export type ChatIntent =
+  | 'play'
+  | 'resume'
+  | 'move'
+  | 'hint'
+  | 'restart'
+  | 'history'
+  | 'review'
+  | 'create'
+  | 'settings'
+  | 'platform'
+  | 'benchmark'
+  | 'learning'
+  | 'help'
+  | 'chat'
+  | 'clarify'
+
+export interface ChatTurnResult {
+  intent: ChatIntent
+  text: string
+  mood: Mood
+  params: Record<string, unknown>
+}
+
 export interface ChatMessage {
   id: string
   role: 'agent' | 'player'
   text: string
   mood?: Mood
   ts: number
+  /** 后端意图（agent 消息携带；用于消息内联卡片渲染与 chips）。 */
+  intent?: ChatIntent
+  /** 意图执行参数（如 play.game_id、clarify.chips、history.matches…）。 */
+  params?: Record<string, unknown>
+  /** 发送/执行中占位标记。 */
+  pending?: boolean
 }
 
 export interface ChatState {

@@ -3,7 +3,9 @@
 ``LLMPolicy`` turns a :class:`LanguageObservation` into a prompt and
 asks an LLM client for the utterance/vote.  The client is injected so
 any OpenAI-compatible endpoint works (Qwen, DeepSeek, local vLLM, ...);
-``OpenAICompatibleClient`` is the default HTTP implementation.
+the default concrete implementation is the project's unified LLM client
+(``layer2_engine.core.llm.LLMClient``) — the former local
+``OpenAICompatibleClient`` copy was removed in the LLM unification.
 
 No LLM available?  ``TemplatePolicy`` (template_policy.py) keeps the
 game playable.
@@ -12,70 +14,26 @@ game playable.
 from __future__ import annotations
 
 import json
-import re
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
-from layer2_engine.core.api_key import resolve_api_key
+from layer2_engine.core.llm import LLMClient as _UnifiedLLMClient, sanitize_text
 
 from .base import LanguageObservation
 
-#: 发言清洗（审计 3.6 prompt 注入）：长度上限与控制字符剔除。
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+#: 发言清洗（审计 3.6 prompt 注入）：长度上限与控制字符剔除（统一清洗）。
 MAX_SPEECH_LEN = 200
 
 
 class LLMClient(Protocol):
-    """Minimal chat-completion surface."""
+    """Minimal chat-completion surface (injection point for fakes)."""
 
     def complete(self, messages: list[dict], max_tokens: int = 200) -> str:
         """Return the assistant's reply text for ``messages``."""
 
 
-@dataclass
-class OpenAICompatibleClient:
-    """OpenAI-compatible ``/chat/completions`` HTTP client.
-
-    api_key 走统一读取流程（audit 3.6 决策 6）：
-    显式参数 > ``LLM_API_KEY`` 环境变量 > 本地 ollama 默认值 ``'ollama'``。
-    注意：``resolve_api_key`` 的 default 使 key 恒非空，Authorization 头
-    总是携带（本地端点忽略鉴权；远程端点若要求真实 key，由环境变量提供）。
-    """
-
-    base_url: str = "http://127.0.0.1:11434/v1"  # ollama-style default
-    api_key: str = ""
-    model: str = "qwen2.5:7b"
-    timeout_s: float = 30.0
-
-    def __post_init__(self) -> None:
-        self.api_key = resolve_api_key(self.api_key, "LLM_API_KEY", default="ollama")
-
-    def complete(self, messages: list[dict], max_tokens: int = 200) -> str:
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0.8,
-        }
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        req = urllib.request.Request(
-            f"{self.base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise LLMError(f"LLM request failed: {exc}") from exc
-        try:
-            return body["choices"][0]["message"]["content"].strip()
-        except (KeyError, IndexError, TypeError) as exc:
-            raise LLMError(f"Unexpected LLM response: {body!r}") from exc
+# 兼容别名：旧 ``OpenAICompatibleClient`` 实现已并入统一客户端。
+OpenAICompatibleClient = _UnifiedLLMClient
 
 
 class LLMError(Exception):
@@ -124,6 +82,6 @@ class LLMPolicy:
 
     def _complete(self, messages: list[dict]) -> str:
         text = self._client.complete(messages)
-        text = _CONTROL_CHARS_RE.sub("", text)[:MAX_SPEECH_LEN].strip()
+        text = sanitize_text(text, MAX_SPEECH_LEN).strip()
         # 空结果返回 "" — LanguagePolicy 空值契约："" = 沉默/弃权
         return text

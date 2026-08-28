@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { agentSay, apiGet, apiPost, matchHint } from '../api/client'
 import { getStoredMuted, setStoredMuted } from '../settings'
@@ -42,6 +42,18 @@ function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
 }
 
+/** 从 grid 落子动作中取出落点; 非棋盘动作返回 null（用于乐观即时反馈）。 */
+function gridCellOf(action: unknown): number | null {
+  if (typeof action !== 'object' || action === null) return null
+  const v = (action as Record<string, unknown>).cell_index
+  if (typeof v === 'number') return Number.isInteger(v) ? v : null
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v)
+    return Number.isInteger(n) ? n : null
+  }
+  return null
+}
+
 export default function BattlePage() {
   const { gameId = '' } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -52,6 +64,11 @@ export default function BattlePage() {
   const [stepKey, setStepKey] = useState(0)
   const [persona, setPersona] = useState<PersonaKey>('gentle')
   const [chat, setChat] = useState<ChatMessage[]>([])
+  // 乐观落子: 人下棋后立即本地摆放棋子, 服务端权威快照返回后清除
+  const [pendingCell, setPendingCell] = useState<number | null>(null)
+  // 非法落子就地提示: 服务端拒绝后在对应格子上短暂闪烁, 随后自动清除
+  const [invalidCell, setInvalidCell] = useState<number | null>(null)
+  const invalidTimer = useRef<number | null>(null)
   const [muted, setMuted] = useState<boolean>(() => getStoredMuted())
   const navigate = useNavigate()
 
@@ -103,6 +120,9 @@ export default function BattlePage() {
         adaptive: config.adaptive,
       })
       setSession(data.session)
+      setPendingCell(null)
+      setInvalidCell(null)
+      if (invalidTimer.current != null) window.clearTimeout(invalidTimer.current)
       setPersona(config.persona)
       setChat([])
       setSearchParams({ game: data.session.game_id })
@@ -118,15 +138,30 @@ export default function BattlePage() {
     if (!session || session.over || busy) return
     setBusy(true)
     setError(null)
+    if (invalidTimer.current != null) window.clearTimeout(invalidTimer.current)
+    setInvalidCell(null)
+    // 棋类即时反馈: 人落子先本地乐观摆放自己的棋子, 服务端权威快照返回后再覆盖。
+    // 服务端 /match/move 在一趟请求里同时执行人 + AI 两步, 若不乐观渲染,
+    // 人点击后要等 AI 思考完才一次性看到两个子 —— 这正是本修复要消除的体验。
+    const cell = gridCellOf(action)
+    if (cell != null && 'board' in session) setPendingCell(cell)
     try {
       const data = await apiPost<{ session: Snapshot }>('/match/move', {
         game_id: session.game_id,
         action: action,
       })
       setSession(data.session)
+      setPendingCell(null)
       setStepKey((k) => k + 1)
     } catch (err) {
       setError((err as Error).message)
+      setPendingCell(null)
+      // 非法落子就地提示: 在被拒绝的格子上闪烁, 短暂后自动消失
+      if (cell != null) {
+        setInvalidCell(cell)
+        if (invalidTimer.current != null) window.clearTimeout(invalidTimer.current)
+        invalidTimer.current = window.setTimeout(() => setInvalidCell(null), 1400)
+      }
     } finally {
       setBusy(false)
     }
@@ -134,6 +169,9 @@ export default function BattlePage() {
 
   function restart() {
     setSession(null)
+    setPendingCell(null)
+    setInvalidCell(null)
+    if (invalidTimer.current != null) window.clearTimeout(invalidTimer.current)
     setSearchParams({})
     setError(null)
     setChat([])
@@ -147,8 +185,9 @@ export default function BattlePage() {
 
   async function handleSend(text: string) {
     pushPlayer(text)
+    if (!session) return
     try {
-      const data = await agentSay('chat', { message: text })
+      const data = await agentSay(session.game_id, 'chat', { message: text })
       pushAgent(data.text, data.mood)
     } catch {
       pushAgent('我在的，你继续说。', 'neutral')
@@ -161,9 +200,10 @@ export default function BattlePage() {
       return
     }
     if (phrase === '这步为什么？') {
+      if (!session) return
       pushPlayer(phrase)
       try {
-        const data = await matchHint('direction')
+        const data = await matchHint(session.game_id, 'direction')
         pushAgent(data.text, data.mood)
       } catch {
         pushAgent('这一步…我建议先看看空位更多的方向。', 'thinking')
@@ -186,8 +226,23 @@ export default function BattlePage() {
   const family = (session as { family?: string }).family ?? game.family ?? ''
   const FamilyBoard = FAMILY_BOARDS[family]
 
+  // 棋类乐观/就地提示视图: 落子后把 pendingCell 的棋子临时叠加到快照上,
+  // 被拒绝时在 invalidCell 格子就地闪烁; 服务端权威快照返回后全部清空。
+  const boardView: Snapshot =
+    (pendingCell != null || invalidCell != null) && 'board' in session
+      ? {
+          ...session,
+          board:
+            pendingCell != null
+              ? session.board.map((p, i) => (i === pendingCell ? session.player_pid : p))
+              : session.board,
+          pending_cell: pendingCell,
+          invalid_cell: invalidCell,
+        }
+      : session
+
   const board = FamilyBoard ? (
-    <FamilyBoard snapshot={session} interactive={interactive} stepKey={stepKey} onMove={move} />
+    <FamilyBoard snapshot={boardView} interactive={interactive} stepKey={stepKey} onMove={move} />
   ) : game.kind === 'mahjong' ? (
     <MahjongTable
       snapshot={session as MahjongSnapshot}
@@ -201,10 +256,10 @@ export default function BattlePage() {
       onAction={(action) => move(action)}
     />
   ) : game.board_size === 3 ? (
-    <MoonBoard snapshot={session as BoardSnapshot} interactive={interactive} onMove={(i) => move({ cell_index: i })} />
+    <MoonBoard snapshot={boardView as BoardSnapshot} interactive={interactive} onMove={(i) => move({ cell_index: i })} />
   ) : (
     <GomokuBoard
-      snapshot={session as BoardSnapshot}
+      snapshot={boardView as BoardSnapshot}
       interactive={interactive}
       stepKey={stepKey}
       onMove={(i) => move({ cell_index: i })}

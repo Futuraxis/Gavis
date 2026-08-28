@@ -51,6 +51,21 @@ _NODE_KEYS = ("node", "self", "cell")
 _NODE_VALUE_FIELDS = ("occupant", "value")
 
 
+def _loop_var(as_name: str) -> str:
+    """Per-binding loop identifier for a comprehension.
+
+    The default ``$node`` keeps ``_it`` (unchanged legacy behavior); any
+    other as-var maps to a distinct ``_it_<name>``.  Without this, nested
+    iterators with different as-vars all bound to ``_it``, so e.g.
+    ``eq($h, $ct)`` compiled to the tautology ``_it == _it`` while the
+    interpreter compared the two distinct loop items — a silent
+    compiled-vs-interpreter divergence the probe could miss when the
+    shape never appears in sampled states (e.g. the mahjong claim phase).
+    Same-name nesting still shadows, matching interpreter semantics.
+    """
+    return "_it" if as_name == "node" else f"_it_{as_name}"
+
+
 class UnsupportedShapeError(Exception):
     """Construct outside the codegen-supported subset; caller falls back."""
 
@@ -95,12 +110,13 @@ class _Gen:
         return f"(({list_py}) if isinstance(({list_py}), (list, tuple, range)) else [])"
 
     def _gen_expr(self, spec: Any, as_var: str) -> str:
-        """Compile ``spec`` with ``as_var`` bound to the loop item ``_it``."""
+        """Compile ``spec`` with ``as_var`` bound to the loop item."""
+        name = as_var.lstrip("$")
         sub = _Gen(
             self.constants,
             self.view_fns,
             self.view_defs,
-            {**self.binder, as_var.lstrip("$"): "_it"},
+            {**self.binder, name: _loop_var(name)},
             functions=self.functions,
         )
         return sub.expr(spec)
@@ -110,8 +126,10 @@ class _Gen:
         if "filter" in spec:
             fspec = spec["filter"]
             list_py = self._list_guard(self.expr(fspec["list"]))
-            pred = self._gen_expr(fspec["where"], fspec.get("as", "$node"))
-            return f"[_it for _it in {list_py} if {pred}]"
+            as_name = fspec.get("as", "$node").lstrip("$")
+            head = _loop_var(as_name)
+            pred = self._gen_expr(fspec["where"], f"${as_name}")
+            return f"[{head} for {head} in {list_py} if {pred}]"
 
         if "concat" in spec:
             return "(" + " + ".join(self.expr(s) for s in spec["concat"]) + ")"
@@ -123,8 +141,10 @@ class _Gen:
         if "map" in spec:
             mspec = spec["map"]
             list_py = self._list_guard(self.expr(mspec["list"]))
-            body = self._gen_expr(mspec["expr"], mspec.get("as", "$node"))
-            return f"[{body} for _it in {list_py}]"
+            as_name = mspec.get("as", "$node").lstrip("$")
+            head = _loop_var(as_name)
+            body = self._gen_expr(mspec["expr"], f"${as_name}")
+            return f"[{body} for {head} in {list_py}]"
 
         if "range" in spec:
             rspec = spec["range"]
@@ -134,8 +154,10 @@ class _Gen:
             key = "any" if "any" in spec else "all"
             aspec = spec[key]
             list_py = self._list_guard(self.expr(aspec["list"]))
-            pred = self._gen_expr(aspec["where"], aspec.get("as", "$node"))
-            return f"({key}(bool({pred}) for _it in {list_py}))"
+            as_name = aspec.get("as", "$node").lstrip("$")
+            head = _loop_var(as_name)
+            pred = self._gen_expr(aspec["where"], f"${as_name}")
+            return f"({key}(bool({pred}) for {head} in {list_py}))"
 
         if "group" in spec:
             # {'group': {'list': ..., 'by': ...}} → [{'key','count','items'}...]
@@ -215,22 +237,26 @@ class _Gen:
             return "(" + " + ".join(parts) + ")"
 
         if "switch" in spec:
-            # Single-evaluation if/elif/else chain: the input expression is
-            # bound once via the walrus operator in the first branch, and a
-            # matched branch's ``then`` is returned even when it evaluates to
-            # a falsy value (0/""/[]/None) -- the old ``or``-chain let falsy
-            # branch values fall through to the next case.  Default semantics
-            # mirror the interpreter (expr_eval.py): a case with a "default"
-            # key, or any case without a "case" key that has a "then".
+            # First-match if/elif/else chain (interpreter semantics: input is
+            # evaluated once, then matched case-by-case; a matched branch's
+            # ``then`` is returned even when it evaluates to a falsy value
+            # (0/""/[]/None) -- the old ``or``-chain let falsy branch values
+            # fall through to the next case).  The input expression is a pure
+            # function of the state, so re-evaluating it once per case is
+            # equivalent to the interpreter's single evaluation.  Deliberately
+            # walrus-free: ``:=`` is a SyntaxError inside a comprehension
+            # *iterable* expression, and rule switches routinely appear as
+            # comprehension sources (e.g. a hand_of alias used as a
+            # filter/map/any list), which previously broke compilation of the
+            # whole ruleset.  Default semantics mirror expr_eval.py: a case
+            # with a "default" key, or any case without a "case" key that has
+            # a "then".
             input_py = self.expr(spec.get("input", {"var": "$input"}))
             cases = [case for case in spec["switch"] if "case" in case]
             defaults = [case for case in spec["switch"] if "default" in case or ("case" not in case and "then" in case)]
             out = f"({self.expr(defaults[0]['then'])})" if defaults else "None"
-            for case in reversed(cases[1:]):
-                out = f"({self.expr(case['then'])} if _sw_in == {repr(case['case'])} else {out})"
-            if cases:
-                first = cases[0]
-                out = f"({self.expr(first['then'])} if (_sw_in := {input_py}) == {repr(first['case'])} else {out})"
+            for case in reversed(cases):
+                out = f"({self.expr(case['then'])} if {input_py} == {repr(case['case'])} else {out})"
             return out
 
         for op, pyop in _CMP_OPS.items():

@@ -206,6 +206,9 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
             "discards": {pid: _discards(pid) for pid in seats},
             "wall_remaining": int(env.get("wall_count", 0)),
             "last_discard": env.get("last_discard"),
+            #: 刚摸进的牌（do_draw 写 env.last_drawn）：轮到你且 phase=action
+            #: 时就是你这手刚摸的那张，前端用于高亮「新摸的牌」。
+            "last_drawn": env.get("last_drawn"),
             "last_action": env.get("last_action"),
             "done": list(env.get("done", [])),
             "winners": list(env.get("winners", [])),

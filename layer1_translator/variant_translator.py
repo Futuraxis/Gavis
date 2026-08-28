@@ -31,13 +31,10 @@ import re
 from pathlib import Path
 from typing import Any
 
+from layer2_engine.core.llm import LLMClient
+
 from .engine_validator import EngineValidator
-from .local_client import (
-    DEFAULT_LOCAL_MODEL_DIR,
-    LLMTranslatorError,
-    LocalTransformersRuleClient,
-    RuleLLMClient,
-)
+from .local_client import LLMTranslatorError, RuleLLMClient
 from .prompt_builder import CONTROL_CHARS_RE, sanitize_rule_text
 from .protocol import TranslateResponse, ValidationResult
 from .rule_parser import ALIASES, TEMPLATE_FILES, RuleParser
@@ -105,15 +102,22 @@ class VariantTranslator:
         game_name: str | None = None,
         use_llm: bool = True,
         llm_client: RuleLLMClient | None = None,
+        llm_model: str | None = None,
         llm_model_path: str | Path | None = None,
     ) -> TranslateResponse:
         """Translate ``change_text`` into a validated variant ``rules.json``.
 
-        The LLM path is attempted first when ``use_llm`` is True; the
-        deterministic parameter path is the fallback for any LLM
-        unavailability or failed output.  A total failure returns
-        ``rules_json={}`` with the merged reasons in ``validation.errors``.
+        ``llm_model`` names the model for the unified LLM client (e.g.
+        ``"qwen3:8b"``); ``llm_model_path`` is a deprecated alias (echoed
+        as the model name with a warning).  The LLM path is attempted first
+        when ``use_llm`` is True; the deterministic parameter path is the
+        fallback for any LLM unavailability or failed output.  A total
+        failure returns ``rules_json={}`` with the merged reasons in
+        ``validation.errors``.
         """
+        if llm_model_path is not None:
+            logger.warning("VariantTranslator: llm_model_path 已废弃，请改用 llm_model（模型名）")
+            llm_model = llm_model or str(llm_model_path)
         warnings: list[str] = []
         errors: list[str] = []
         if use_llm:
@@ -123,7 +127,7 @@ class VariantTranslator:
                 source_lang=source_lang,
                 game_name=game_name,
                 llm_client=llm_client,
-                llm_model_path=llm_model_path,
+                llm_model=llm_model,
             )
             warnings.extend(llm_warnings)
             errors.extend(llm_errors)
@@ -366,7 +370,7 @@ class VariantTranslator:
         source_lang: str,
         game_name: str | None,
         llm_client: RuleLLMClient | None,
-        llm_model_path: str | Path | None,
+        llm_model: str | None,
     ) -> tuple[TranslateResponse | None, list[str], list[str]]:
         """Attempt the LLM path; return (response, warnings, errors).
 
@@ -382,11 +386,7 @@ class VariantTranslator:
         if template_id is None:
             errors.append(f"基础模板不可识别（base_game_id={base_game_id!r}），LLM 路径无基线可改")
             return None, warnings, errors
-        try:
-            client = llm_client or LocalTransformersRuleClient(model_path=llm_model_path or DEFAULT_LOCAL_MODEL_DIR)
-        except Exception as exc:  # noqa: BLE001 — LLM 基础设施异常（torch 缺失/路径不存在等）统一走确定性兜底
-            warnings.append(f"LLM 不可用，已使用确定性变体翻译: {type(exc).__name__}: {exc}")
-            return None, warnings, errors
+        client = llm_client or LLMClient(model=llm_model)
 
         template = self._load_template(template_id)
         messages = self._build_messages(
@@ -397,11 +397,14 @@ class VariantTranslator:
         for attempt in range(attempts):
             try:
                 raw = client.complete(messages, max_tokens=_MAX_LLM_TOKENS)
-                rules = self._parse_rules(raw)
             except Exception as exc:  # noqa: BLE001 — 网络/推理异常同样进入确定性兜底
                 errors.append(f"LLM 生成失败: {type(exc).__name__}: {exc}")
                 warnings.append("LLM 生成失败，尝试确定性变体翻译")
                 return None, warnings, errors
+            if not raw:
+                warnings.append("LLM 不可用（未返回内容），尝试确定性变体翻译")
+                return None, warnings, errors
+            rules = self._parse_rules(raw)
 
             last_validation = self._validate(rules)
             if last_validation.valid:
@@ -553,10 +556,15 @@ def translate_variant_rules(
     game_name: str | None = None,
     use_llm: bool = True,
     llm_client: RuleLLMClient | None = None,
+    llm_model: str | None = None,
     llm_model_path: str | Path | None = None,
     run_engine_validation: bool = True,
 ) -> TranslateResponse:
     """Translate a variant change request over a base game template.
+
+    ``llm_model`` names the model for the unified LLM client (e.g.
+    ``"qwen3:8b"``); ``llm_model_path`` is a deprecated alias (echoed as
+    the model name with a warning).
 
     ``base_game_id`` is a template id (``TEMPLATE_FILES`` key, e.g.
     ``"stochastic_gomoku"``) or a known alias (``"五子棋"``);
@@ -578,6 +586,7 @@ def translate_variant_rules(
         game_name=game_name,
         use_llm=use_llm,
         llm_client=llm_client,
+        llm_model=llm_model,
         llm_model_path=llm_model_path,
     )
 

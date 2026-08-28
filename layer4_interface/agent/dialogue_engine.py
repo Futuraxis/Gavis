@@ -14,8 +14,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from layer2_engine.core.llm import LLMClient, sanitize_text
+
 from .hidden_guard import infer_game_id, scan
-from .llm_client import OllamaClient
 from .persona import Persona
 from .skills import SkillContext
 
@@ -35,10 +36,6 @@ _SCENARIO_MOODS = {
     "game_over": "neutral",
 }
 
-#: 需要剔除的控制字符码点（C0 + DEL）。
-_CONTROL_CHARS = frozenset(range(0, 32)) | {127}
-
-
 @dataclass
 class AgentMessage:
     """一条 Agent 消息."""
@@ -53,7 +50,7 @@ class DialogueEngine:
     def __init__(
         self,
         persona: Persona,
-        llm: OllamaClient | None = None,
+        llm: LLMClient | None = None,
         *,
         max_len: int = 100,
         dedup_window_s: float = 300,
@@ -105,7 +102,7 @@ class DialogueEngine:
             system = self._system_prompt()
             user = self._user_prompt(ctx, scenario)
             try:
-                text = self.llm.complete(system, user, self.max_len)
+                text = self.llm.complete_chat(system, user, self.max_len)
             except Exception:
                 text = ""
             if text:
@@ -137,9 +134,8 @@ class DialogueEngine:
         return lines[index]
 
     def _clean(self, text: str) -> str:
-        """剔除控制字符并截断到 ``max_len`` 字符."""
-        cleaned = "".join(ch for ch in text if ord(ch) not in _CONTROL_CHARS)
-        return cleaned.strip()[: self.max_len]
+        """剔除控制字符并截断到 ``max_len`` 字符（统一清洗，layer2_engine.core.llm）。"""
+        return sanitize_text(text, self.max_len).strip()
 
 
 def _state_hash(ctx: SkillContext) -> str:

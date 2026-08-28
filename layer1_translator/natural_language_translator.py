@@ -56,20 +56,30 @@ def translate_rules_json(
     run_engine_validation: bool = True,
     use_llm: bool = False,
     llm_client: RuleLLMClient | None = None,
+    llm_model: str | None = None,
     llm_model_path: str | Path | None = None,
 ) -> TranslateResponse:
     """Translate natural-language rule input into a ``rules.json`` response.
 
-    When ``use_llm`` is False, ``llm_client`` and ``llm_model_path`` are
-    ignored; a log warning is emitted so callers are not silently misled.
+    ``llm_model`` names the model for the unified LLM client (e.g.
+    ``"qwen3:8b"``).  ``llm_model_path`` is a deprecated alias (previously
+    a local model directory); when provided it is echoed as the model name
+    and a warning is logged.
+
+    When ``use_llm`` is False, ``llm_client`` / ``llm_model`` / legacy
+    ``llm_model_path`` are ignored; a log warning is emitted so callers are
+    not silently misled.
     """
-    if not use_llm and (llm_client is not None or llm_model_path is not None):
-        logger.warning("translate_rules_json: use_llm=False，忽略传入的 llm_client/llm_model_path")
+    if llm_model_path is not None:
+        logger.warning("translate_rules_json: llm_model_path 已废弃，请改用 llm_model（模型名）")
+        llm_model = llm_model or str(llm_model_path)
+    if not use_llm and (llm_client is not None or llm_model is not None):
+        logger.warning("translate_rules_json: use_llm=False，忽略传入的 llm_client/llm_model")
     if use_llm:
         translator = NaturalLanguageRuleTranslator(
             LLMRuleTranslator(
                 llm_client,
-                model_path=llm_model_path,
+                llm_model=llm_model,
                 run_engine_validation=run_engine_validation,
             )
         )

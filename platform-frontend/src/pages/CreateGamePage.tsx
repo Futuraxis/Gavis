@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createCustomGame } from '../api/client'
-import type { CustomCreateResult } from '../types'
+import { createCustomGame, deleteCustomGame, listCustomGames } from '../api/client'
+import type { CustomCreateResult, GameInfo } from '../types'
 
 /** 变体翻译的 base 模板（layer1_translator TEMPLATE_FILES 对应规则 id）。 */
 const BASE_TEMPLATES = [
@@ -29,6 +29,40 @@ export default function CreateGamePage() {
   const [result, setResult] = useState<CustomCreateResult | null>(null)
   const navigate = useNavigate()
 
+  // ── 我的自定义游戏（含变体）管理列表 ────────────────────────────
+  const [customGames, setCustomGames] = useState<GameInfo[]>([])
+  const [listError, setListError] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  const loadCustomGames = useCallback(async () => {
+    setListError(null)
+    try {
+      const data = await listCustomGames()
+      setCustomGames(data.games)
+    } catch (err) {
+      setListError((err as Error).message)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadCustomGames()
+  }, [loadCustomGames])
+
+  async function removeCustom(game: GameInfo) {
+    if (deletingId !== null) return
+    if (!window.confirm(`确定删除「${game.display_name}」（id: ${game.game_id}）吗？\n删除后不可恢复。`)) return
+    setDeletingId(game.game_id)
+    setListError(null)
+    try {
+      await deleteCustomGame(game.game_id)
+      setCustomGames((prev) => prev.filter((g) => g.game_id !== game.game_id))
+    } catch (err) {
+      setListError((err as Error).message)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   const requiredText = mode === 'from_scratch' ? ruleText : changeText
   const canSubmit = requiredText.trim().length > 0 && !busy
 
@@ -48,6 +82,7 @@ export default function CreateGamePage() {
         use_llm: useLlm,
       })
       setResult(res)
+      await loadCustomGames() // 新游戏/变体创建成功 → 刷新管理列表
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -58,7 +93,7 @@ export default function CreateGamePage() {
   return (
     <div>
       <h1 className="page-title">创建游戏</h1>
-      <p className="page-sub">用一句话描述规则，或基于已有游戏生成变体</p>
+      <p className="page-sub">用一句话描述规则，或基于已有游戏生成变体；已创建的游戏可在下方管理（删除）</p>
       {error && <div className="error-banner">{error}</div>}
 
       <div className="panel create-card">
@@ -214,6 +249,53 @@ export default function CreateGamePage() {
           </div>
         </div>
       )}
+
+      {/* ── 我的自定义游戏（含变体）管理 ─────────────────────────── */}
+      <div className="panel" style={{ marginTop: 24 }}>
+        <h3 style={{ marginBottom: 4 }}>我的自定义游戏</h3>
+        <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 14 }}>
+          这里列出平台上的全部自定义游戏与模板变体（来自 /api/custom/games），可在此删除。
+        </p>
+        {listError && <div className="error-banner">{listError}</div>}
+        {customGames.length === 0 && !listError && (
+          <p style={{ color: 'var(--muted)', fontSize: 14 }}>还没有自定义游戏 — 用上面的表单创建第一个吧。</p>
+        )}
+        {customGames.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {customGames.map((game) => (
+              <div
+                key={game.game_id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '10px 14px',
+                  border: '1px solid var(--border)',
+                  borderRadius: 10,
+                  background: 'var(--board)',
+                }}
+              >
+                <span className="badge accent">🛠 {FAMILY_LABELS[game.family] ?? game.family}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600 }}>{game.display_name}</div>
+                  <div style={{ color: 'var(--muted)', fontSize: 13 }}>
+                    {game.game_id}
+                    {game.created_at ? ` · ${new Date(game.created_at).toLocaleString()}` : ''}
+                  </div>
+                </div>
+                <button
+                  className="btn btn-danger manage-delete-btn"
+                  title="删除此自定义游戏/变体"
+                  disabled={deletingId !== null}
+                  onClick={() => void removeCustom(game)}
+                >
+                  {deletingId === game.game_id ? '删除中…' : '🗑 删除'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

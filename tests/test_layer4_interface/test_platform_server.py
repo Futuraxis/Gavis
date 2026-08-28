@@ -61,6 +61,10 @@ class TestGames:
         data = _get(base_url + "/api/games")
         assert data["ok"] is True
         by_id = {g["game_id"]: g for g in data["games"]}
+        # 平台注册表覆盖 rules/mahjong.json 声明的全部六种变体（guangdong /
+        # hongzhong / blood / sichuan / changsha / taiwan，v5.2 variants）+ 3 个
+        # 其余游戏 —— 与 test_platform_session.py::TestGameRegistrySpec 的 9 游戏
+        # 契约一致；新增/移除变体必须同步两处断言与文档 docs/user/play_mahjong.md。
         assert set(by_id) == {
             "moon_chess",
             "stochastic_gomoku",
@@ -77,6 +81,22 @@ class TestGames:
         assert by_id["texas_holdem"]["kind"] == "poker"
         assert "cfr" not in by_id["texas_holdem"]["solver_options"]
         assert by_id["moon_chess"]["solver_options"] == ["mcts", "cfr", "hybrid", "random"]
+
+    def test_every_game_info_carries_family(self, base_url: str):
+        """/api/games 每个条目必须携带非空 family —— 前端按 family 分发棋盘组件。
+
+        回归锚：mahjong_sichuan/changsha/taiwan 曾因 `_BUILTIN_FAMILY` 缺项而
+        family 为 null，前端 InlineBoard 把麻将快照误路由到 grid 棋盘（读不到
+        board）崩掉整个对话页。此断言让「注册表游戏 ⇒ 非空 family」成为线上
+        契约；与 test_platform_session.py::TestGameSpecRegistry::
+        test_builtin_family_covers_every_registry_game 同步维护。
+        """
+        data = _get(base_url + "/api/games")
+        assert data["ok"] is True
+        for g in data["games"]:
+            assert isinstance(g.get("family"), str) and g["family"], (
+                f"{g['game_id']} 的 family 缺失/为空，前端会把非 grid 快照误路由到 grid 棋盘"
+            )
 
 
 class TestMatch:
@@ -123,6 +143,33 @@ class TestMatch:
         )
         assert move["session"]["board"][0] == "p_black"
         assert move["session"]["last_vanish"] is None or move["session"]["last_vanish"] in range(81)
+
+    def test_mahjong_variant_snapshot_carries_family(self, base_url: str):
+        """曾缺 `_BUILTIN_FAMILY` 映射的麻将变体，快照必须带 family=mahjong。
+
+        回归锚（与前端 InlineBoard 崩溃对齐）：sichuan/changsha/taiwan 此前
+        family 为 None，前端默认按 grid 渲染 → GenericGridBoard 在
+        board.length 上崩掉对话页。快照现在自描述携带 family，即使游戏目录
+        尚未加载也能正确分发。
+        """
+        for game_id in ("mahjong_sichuan", "mahjong_changsha", "mahjong_taiwan"):
+            start = _post(
+                base_url + "/api/match/start",
+                {
+                    "game_id": game_id,
+                    "player_pid": "p0",
+                    "difficulty": "easy",
+                    "player_count": 2,
+                },
+            )
+            assert start["ok"] is True, game_id
+            session = start["session"]
+            assert session["family"] == "mahjong", game_id
+            assert "board" not in session, f"{game_id} 是非 grid 快照，不应含 board"
+            # 平台注册表键是随机 session id，快照 game_id 字段即该 id（对齐
+            # test_moon_chess_flow 的用法），不能用真实游戏 id 查 state。
+            state = _post(base_url + "/api/match/state", {"game_id": session["game_id"]})
+            assert state["session"]["family"] == "mahjong", game_id
 
     def test_texas_fold_ends_and_records(self, base_url: str):
         start = _post(
@@ -395,3 +442,44 @@ class TestCompanionIntegration:
         _post(companion_url + "/api/match/move", {"game_id": game_id, "action": {"choice": "fold"}})
         active = _get(companion_url + "/api/match/active")
         assert all(s["game_id"] != game_id for s in active["sessions"]), "终局后不得再出现在活跃列表"
+
+
+class TestChatEndpoint:
+    """POST /api/chat 契约：一句 → {intent, text, mood, params}，history 可选透传。"""
+
+    def test_chat_with_history(self, base_url: str):
+        data = _post(
+            base_url + "/api/chat",
+            {
+                "text": "那月亮棋呢",
+                "history": [
+                    {"role": "user", "content": "我想玩德州扑克"},
+                    {"role": "assistant", "content": "好，来一局德州扑克！"},
+                ],
+            },
+        )
+        assert data["ok"] is True
+        assert data["intent"] in {
+            "play",
+            "resume",
+            "move",
+            "hint",
+            "restart",
+            "history",
+            "review",
+            "create",
+            "settings",
+            "platform",
+            "benchmark",
+            "learning",
+            "help",
+            "chat",
+            "clarify",
+        }
+        assert isinstance(data["text"], str) and data["text"]
+        assert data["mood"] in {"happy", "thinking", "sorry", "neutral"}
+
+    def test_chat_bare_text(self, base_url: str):
+        data = _post(base_url + "/api/chat", {"text": "你好"})
+        assert data["ok"] is True
+        assert data["intent"] == "chat"

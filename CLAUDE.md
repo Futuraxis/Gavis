@@ -70,9 +70,10 @@ custom-games 工作流: layer1_translator/variant_translator.py（变体翻译�
   variants 声明）；出牌/罚牌/抢牌/叠加全部用 `env` + `chance` 表达；
   牌堆无实体数组（`deck = 108 − 手牌 − 弃牌`，`undrawn_cards` 查询 +
   `deck_count` 别名）；手牌部分可观测（`visibility` 隐藏他人牌面但
-  保留张数）；`hand_of` 别名（10 分支 switch）被内联进查询/合法条件时
-  超出编译器 switch-in-comprehension 支持形状 → 引擎自动回退纯解释器
-  （设计内行为，功能与测试不受影响）
+  保留张数）；`hand_of` 别名（10 分支 switch）可内联进查询/合法
+  条件——编译器对 switch 生成无 walrus 的首匹配 if/elif 链
+  （`:=` 在 comprehension 迭代表达式里是 SyntaxError，曾经的
+  switch-in-comprehension 会让整套规则回退纯解释器；现可正常编译）
 - **text 参数预制能力**：动作参数声明 `"type": "text"` 时不参与合法
   动作枚举（占位 `""`），solver 把文本放进 `ActionInstance.params`，
   effector 经 `$text` 读取（`_build_context` 自动平铺 params）——

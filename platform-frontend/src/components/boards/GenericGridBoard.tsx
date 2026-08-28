@@ -23,7 +23,8 @@ const SEAT_COLORS = ['p_black', 'p_white']
  * 棋盘扫描序映射到 p_black/p_white。last_vanish 时播放幽灵消散动画（仿 GomokuBoard）。
  */
 export default function GenericGridBoard({ snapshot, interactive, stepKey = 0, onMove }: Props) {
-  const { board, board_size, last_vanish, last_vanish_color } = snapshot
+  // board 缺失时兜底为空棋盘（防误路由快照在 board.length 处崩掉整棵渲染树）。
+  const { board = [], board_size, last_vanish, last_vanish_color, pending_cell, invalid_cell } = snapshot
   const size = board_size ?? Math.round(Math.sqrt(board.length))
   const [ghost, setGhost] = useState<Ghost | null>(null)
   const prevVanish = useRef<number | null>(null)
@@ -63,13 +64,18 @@ export default function GenericGridBoard({ snapshot, interactive, stepKey = 0, o
         return (
           <div
             key={i}
-            className={`cell ${interactive && empty ? 'interactive empty' : ''}`}
+            className={`cell ${interactive && empty ? 'interactive empty' : ''}${invalid_cell === i ? ' cell-invalid' : ''}`}
             onClick={() => {
               if (interactive && empty && onMove) onMove(i)
             }}
             style={{ width: 44, height: 44 }}
           >
-            {piece != null && <div className={`piece ${pieceColor(piece)}`} style={{ width: 32, height: 32 }} />}
+            {piece != null && (
+              <div
+                className={`piece ${pieceColor(piece)}${pending_cell === i ? ' piece-pending' : ''}`}
+                style={{ width: 32, height: 32 }}
+              />
+            )}
             {ghost != null && ghost.cell === i && (
               <div className="ghost-wrap" key={ghost.key}>
                 <div className={`ghost-piece ${ghost.color}`} />

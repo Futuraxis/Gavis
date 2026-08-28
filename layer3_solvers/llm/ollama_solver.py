@@ -11,8 +11,9 @@ to an engine ``ActionInstance``:
     action template (kill/check/vote/poison/heal/guard/shoot/shoot_lynched)
 
 Malformed / timed-out replies fall back to a random legal action, so the
-game never stalls on a bad model output.  No external deps: the ollama
-REST API is called via stdlib ``urllib``.
+game never stalls on a bad model output.  The transport is the project's
+unified LLM client (``layer2_engine.core.llm.LLMClient``, OpenAI-compatible
+endpoint via stdlib ``urllib``).
 
 Usage::
 
@@ -25,12 +26,11 @@ from __future__ import annotations
 import json
 import random
 import re
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.llm import LLMClient, LLMConfig, sanitize_text
 from layer2_engine.core.state_graph import ActionInstance, State
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
@@ -61,10 +61,6 @@ SPEECH_PHASES = ("day_speech",)
 # 合法 speak 动作动态提取，避免与 rules intents 漂移（审查 P3-6）。
 _FALLBACK_INTENTS = ("claim", "accuse", "defend", "question", "persuade")
 
-# 发言清洗：剔除控制字符（含 \x00-\x1f、\x7f）——审计 3.6 prompt 注入修复
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
-
-
 @dataclass
 class OllamaConfig(SolverConfig):
     model: str = "qwen3:8b"
@@ -89,6 +85,15 @@ class OllamaSolver(SolverBase):
         if seed is None:
             seed = getattr(cfg, "fallback_seed", None)
         self._rng = random.Random(seed)
+        # 统一 LLM 客户端（layer2_engine.core.llm）——传输层唯一实现。
+        self._llm = LLMClient(
+            LLMConfig(
+                model=cfg.model,
+                base_url=cfg.base_url,
+                timeout_s=cfg.timeout,
+                temperature=cfg.temperature,
+            )
+        )
 
     @staticmethod
     def _default_player(engine: GameEngine) -> str:
@@ -114,9 +119,10 @@ class OllamaSolver(SolverBase):
         flat = belief_obs(obs, self.player_id)
         try:
             reply = self._ask_model(self._build_prompt(flat, legal))
-        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        except (TimeoutError, OSError):
             # 网络/响应质量问题才随机回退；编程错误（如规则形状不匹配）
             # 不再被吞掉，上浮以便修复（审查 P1-15 曾被裸 except 掩盖）。
+            # 传输已由统一客户端 fail-soft 化，这里仅兜测试注入的异常。
             return self._fallback(legal)
         action = self._parse_reply(reply, legal)
         return action if action is not None else self._fallback(legal)
@@ -201,25 +207,15 @@ class OllamaSolver(SolverBase):
     # ── Model call ─────────────────────────────────────────────────
 
     def _ask_model(self, prompt: str) -> str:
-        cfg = self.config
-        body = json.dumps(
-            {
-                "model": cfg.model,
-                "stream": False,
-                "options": {"temperature": cfg.temperature},
-                "messages": [
-                    {"role": "system", "content": "你是狼人杀玩家，严格按照要求的 JSON 格式输出。"},
-                    {"role": "user", "content": prompt},
-                ],
-            }
-        ).encode("utf-8")
-        req = urllib.request.Request(f"{cfg.base_url}/api/chat", body, {"Content-Type": "application/json"})
-        # 决策记录（审计 3.6 阻塞 I/O，2026-08-13）：本调用会阻塞当前
-        # 线程最长 timeout 秒且无重试——本地单人演示可接受；平台服务
-        # 对外暴露前需改线程池/任务队列（P2，见 docs/design/security-notes.md）。
-        with urllib.request.urlopen(req, timeout=cfg.timeout) as resp:
-            data = json.load(resp)
-        return str(data.get("message", {}).get("content", ""))
+        """Ask the unified LLM client (fail-soft: ``""`` on transport failure).
+
+        决策记录（审计 3.6 阻塞 I/O，2026-08-13）：本调用会阻塞当前线程最长
+        timeout 秒且无重试——本地单人演示可接受；平台服务对外暴露前需改线程池
+        /任务队列（P2，见 docs/design/security-notes.md）。"""
+        return self._llm.complete_chat(
+            "你是狼人杀玩家，严格按照要求的 JSON 格式输出。",
+            prompt,
+        )
 
     # ── Reply parsing ──────────────────────────────────────────────
 
@@ -278,9 +274,8 @@ class OllamaSolver(SolverBase):
 
     @staticmethod
     def _sanitize_speech(speech, max_len: int = 200) -> str:
-        """发言清洗：长度上限 + 剔除控制字符（审计 3.6 prompt 注入）。"""
-        text = _CONTROL_CHARS_RE.sub("", str(speech or ""))
-        return text[:max_len]
+        """发言清洗：长度上限 + 剔除控制字符（统一清洗）。"""
+        return sanitize_text(str(speech or ""), max_len)
 
     def _with_speech(self, action: ActionInstance, speech) -> ActionInstance:
         from dataclasses import replace

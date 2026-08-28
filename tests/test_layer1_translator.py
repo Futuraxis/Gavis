@@ -1096,7 +1096,7 @@ class TestLLMRuleTranslator:
         assert response.validation.valid
 
     def test_llm_translator_falls_back_when_local_model_missing(self) -> None:
-        translator = LLMRuleTranslator(model_path="/tmp/gavis-missing-layer1-llm", run_engine_validation=False)
+        translator = LLMRuleTranslator(llm_model="missing-layer1-llm", run_engine_validation=False)
         response = translator.translate(TranslateRequest(rule_text="随机五子棋，9x9，五连获胜"))
 
         assert response.validation is not None

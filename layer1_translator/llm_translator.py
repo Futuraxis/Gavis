@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
+from layer2_engine.core.llm import LLMClient
+
 from .engine_validator import EngineValidator
-from .local_client import (
-    DEFAULT_LOCAL_MODEL_DIR,
-    LLMTranslatorError,
-    LocalTransformersRuleClient,
-    OpenAICompatibleRuleClient,
-    RuleLLMClient,
-)
+from .local_client import LLMTranslatorError, RuleLLMClient
 from .prompt_builder import CONTROL_CHARS_RE, RulePromptBuilder
 from .protocol import TranslateRequest, TranslateResponse, ValidationResult
 from .schema_validator import SchemaValidator
@@ -23,13 +18,20 @@ MAX_LLM_REPLY_LEN = 512_000
 
 
 class LLMRuleTranslator:
-    """Translate natural-language rules with an LLM and validation loop."""
+    """Translate natural-language rules with an LLM and validation loop.
+
+    The LLM transport is the project's unified client
+    (``layer2_engine.core.llm.LLMClient``).  ``llm_model`` names the model
+    (e.g. ``"qwen3:8b"``) for the default client; an explicit ``client``
+    (any ``RuleLLMClient``) wins.  Anything unavailable / empty / invalid
+    falls back to templates, exactly like the pre-unification behaviour.
+    """
 
     def __init__(
         self,
         client: RuleLLMClient | None = None,
         *,
-        model_path: str | Path | None = None,
+        llm_model: str | None = None,
         run_engine_validation: bool = True,
         fallback: TemplateTranslator | None = None,
         max_repair_attempts: int = 1,
@@ -38,7 +40,7 @@ class LLMRuleTranslator:
         prompt_builder: RulePromptBuilder | None = None,
     ) -> None:
         self.client = client
-        self.model_path = model_path or DEFAULT_LOCAL_MODEL_DIR
+        self.llm_model = llm_model
         self.run_engine_validation = run_engine_validation
         self.fallback = fallback
         self.max_repair_attempts = max(0, max_repair_attempts)
@@ -50,12 +52,7 @@ class LLMRuleTranslator:
     def translate(self, request: TranslateRequest) -> TranslateResponse:
         """Return LLM-generated rules JSON, optionally falling back to templates."""
         warnings: list[str] = []
-        try:
-            client = self.client or LocalTransformersRuleClient(model_path=self.model_path)
-        except Exception as exc:  # noqa: BLE001 — LLM 基础设施异常（torch 缺失/加载失败等）统一走模板兜底
-            warnings.append("本地 LLM 不可用，已使用模板兜底")
-            return self._fallback_or_error(request, ValidationResult(valid=False, errors=[str(exc)]), warnings)
-
+        client = self.client or LLMClient(model=self.llm_model)
         messages = self.prompt_builder.build_initial_messages(request)
         attempts = self.max_repair_attempts + 1
         last_validation = ValidationResult(valid=False, errors=["LLM 未返回可验证的 rules JSON"])
@@ -63,8 +60,16 @@ class LLMRuleTranslator:
         for attempt in range(attempts):
             try:
                 raw = client.complete(messages, max_tokens=self.max_tokens)
+            except Exception as exc:  # noqa: BLE001 — 网络/推理异常统一进入兜底
+                last_validation = ValidationResult(valid=False, errors=[str(exc)])
+                warnings.append("LLM 生成失败，尝试模板兜底")
+                break
+            if not raw:
+                warnings.append("本地 LLM 不可用（未返回内容），已使用模板兜底")
+                break
+            try:
                 rules = self._parse_rules(raw)
-            except Exception as exc:  # noqa: BLE001 — 网络/推理异常同样进入兜底（P2-13：此前仅 LLMTranslatorError）
+            except Exception as exc:  # noqa: BLE001 — 解析/校验异常进入兜底
                 last_validation = ValidationResult(valid=False, errors=[str(exc)])
                 warnings.append("LLM 生成失败，尝试模板兜底")
                 break
@@ -199,10 +204,7 @@ class LLMRuleTranslator:
 
 
 __all__ = [
-    "DEFAULT_LOCAL_MODEL_DIR",
     "LLMRuleTranslator",
     "LLMTranslatorError",
-    "LocalTransformersRuleClient",
-    "OpenAICompatibleRuleClient",
     "RuleLLMClient",
 ]

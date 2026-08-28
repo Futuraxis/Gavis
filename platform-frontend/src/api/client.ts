@@ -45,6 +45,21 @@ export function apiPost<T>(path: string, body: unknown): Promise<T> {
   })
 }
 
+// ── Chat-first (agent 聊天模式) ─────────────────────────────────
+// POST /api/chat — 一句话 → 意图+参数（LLM function calling + 正则兜底）。
+// history: 之前若干轮 user/assistant 文本（最新的在后），让 LLM 有对话上下文。
+export function chatTurn(
+  text: string,
+  gameId?: string,
+  history?: { role: 'user' | 'assistant'; content: string }[],
+): Promise<import('../types').ChatTurnResult> {
+  return apiPost<import('../types').ChatTurnResult>('/chat', {
+    text,
+    ...(gameId ? { game_id: gameId } : {}),
+    ...(history && history.length > 0 ? { history } : {}),
+  })
+}
+
 export function apiPut<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, {
     method: 'PUT',
@@ -73,20 +88,35 @@ export function setLearningConfig(gameId: string, enabled: boolean): Promise<{ l
 // ── Agent 陪伴 / 偏好 / 复盘 API ────────────────────────────────
 // 这些路由由集成阶段接线 (D.1)；前端只按冻结契约的 JSON 结构调用。
 
-export function agentSay(scenario: string, extra?: Record<string, unknown>): Promise<import('../types').AgentMessage> {
-  return apiPost<import('../types').AgentMessage>('/agent/say', { scenario, ...(extra ?? {}) })
+// 后端要求 game_id 作为「会话 id」（与 /match/state、/match/move 一致），
+// 响应仍套 {\"ok\": ..., key: ...} 信封，这里负责解包。
+export function agentSay(
+  gameId: string,
+  scenario: string,
+  extra?: Record<string, unknown>,
+): Promise<import('../types').AgentMessage> {
+  return apiPost<{ message: import('../types').AgentMessage }>('/agent/say', {
+    game_id: gameId,
+    scenario,
+    ...(extra ?? {}),
+  }).then((d) => d.message)
 }
 
-export function matchHint(level: import('../types').HintLevel): Promise<import('../types').AgentMessage> {
-  return apiPost<import('../types').AgentMessage>('/match/hint', { level })
+export function matchHint(gameId: string, level: import('../types').HintLevel): Promise<import('../types').AgentMessage> {
+  return apiPost<{ hint: { hint: string } }>('/match/hint', { game_id: gameId, level }).then((d) => ({
+    text: d.hint.hint,
+    mood: 'thinking',
+  }))
 }
 
+// 后端 /profile 将档案嵌套在 {"ok": ..., "profile": {...}} 信封里
+// （与 /games → games、/match/active → sessions 一致），这里负责解包。
 export function getProfile(): Promise<import('../types').Profile> {
-  return apiGet<import('../types').Profile>('/profile')
+  return apiGet<{ profile: import('../types').Profile }>('/profile').then((d) => d.profile)
 }
 
 export function saveProfile(profile: import('../types').Profile): Promise<import('../types').Profile> {
-  return apiPut<import('../types').Profile>('/profile', profile)
+  return apiPut<{ profile: import('../types').Profile }>('/profile', { profile }).then((d) => d.profile)
 }
 
 export function clearProfile(): Promise<{ ok: boolean }> {

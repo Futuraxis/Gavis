@@ -51,7 +51,8 @@ python train-cli/train.py --list    # 查看注册表（含 6 个 uno_* 条目�
 
 ## 已知说明
 
-- 规则中的 `hand_of` 别名（10 分支 switch）被内联在查询/合法条件里，
-  超出编译器的 switch-in-comprehension 支持形状 → 引擎自动回退纯解释器
-  （设计内行为，功能与测试不受影响；如需提速可后续把 `hand_of` 查询
-  改为直接数组引用）。
+- 规则中的 `hand_of` 别名（10 分支 switch）内联在查询/合法条件里：
+  编译器对 switch 生成无 `:=` 的首匹配 if/elif 链，因此
+  switch-in-comprehension 形状可正常编译（`:=` 在 comprehension 迭代
+  表达式里是 SyntaxError，曾是整套规则回退纯解释器的原因）。
+  手牌部分可观测（`visibility` 隐藏他人牌面但保留张数）。
