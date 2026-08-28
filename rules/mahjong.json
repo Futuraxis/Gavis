@@ -12,7 +12,7 @@
   ],
   "variants": {
     "variant": "guangdong",
-    "player_count": 2,
+    "player_count": 4,
     "options": {
       "guangdong": {},
       "hongzhong": {

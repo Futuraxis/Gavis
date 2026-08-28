@@ -255,7 +255,7 @@ export function useChatRuntime(): ChatRuntime {
           await startSession(gameId, {
             playerPid: activeSession?.player_pid ?? 'random',
             difficulty: activeSession?.difficulty ?? 'easy',
-            playerCount: 2,
+            playerCount: games.find((g) => g.game_id === gameId)?.player_counts[0] ?? 2,
             persona: 'gentle',
             hintLevel: 'off',
             pacing: 'standard',

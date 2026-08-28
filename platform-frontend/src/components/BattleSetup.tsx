@@ -60,7 +60,7 @@ const RULES_SUMMARY: Record<string, string> = {
   moon_chess: '3×3 棋盘，双方轮流落子，三子连珠即胜；棋盘放满后最旧的棋子会被挤出。',
   stochastic_gomoku: '9×9 棋盘，五子连珠即胜；每次落子后，棋子有 50% 概率被随机抹去。',
   texas_holdem: '双人德州扑克：每人两张底牌，依次翻牌/转牌/河牌，比五张最大牌型。',
-  mahjong_guangdong: '二人/四人广东鸡胡：吃碰杠、自摸荣和、清一色等番种。',
+  mahjong_guangdong: '四人广东鸡胡：吃碰杠、自摸荣和、清一色等番种。',
   mahjong_hongzhong: '红中万能牌：红中可代任意牌凑搭子，其余规则同鸡胡。',
   mahjong_blood: '血战到底：胡牌后不退出，剩余玩家继续，直到两家胡或牌墙摸空。',
 }
@@ -75,7 +75,7 @@ export default function BattleSetup({ game, busy, error, onStart }: Props) {
   const [adaptive, setAdaptive] = useState(true)
   const [showRules, setShowRules] = useState(false)
 
-  // 麻将 2 人只显 p0/p1（4 人显 p0-p3）——2p 选到 p2/p3 会造成死局。
+  // 座位按人数取前 N 个（麻将默认 4 人 → 显 p0-p3）——避免选到人数外的座位造成死局。
   const seatOptions = game.seat_options.slice(0, playerCount)
 
   function changePlayerCount(n: number) {

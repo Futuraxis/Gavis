@@ -181,7 +181,7 @@ class GameSpec:
 #   moon_chess:        CFR 800 iters ≈ 3 min；PSRO 5×20000 ≈ 3-6 min（双座位 BR）；MARL 600 局 ≈ 10 s
 #   stochastic_gomoku: CFR 50 iters ≈ 5-8 min（9×9 深限）
 #   texas_holdem:      CFR 1000 iters ≈ 75 s；MARL 400 局 ≈ 30 s
-#   mahjong_*:         MARL 200 局 ≈ 12 min（约 3.5 s/局）；评估建议 4-8 局
+#   mahjong_* (4 人):  MARL 200 局 ≈ 12 min（约 3.5 s/局）；评估建议 4-8 局
 
 #: 麻将 MARL 默认对手编排配置（训练对手编排机制的一站式入口）。
 #: 开启 pfsp 优先虚构自博弈：每 ``checkpoint_interval`` 局把当前策略冻结入池
@@ -212,12 +212,16 @@ _MAHJONG_SOLVERS: Mapping[str, SolverPipeline] = {
 
 
 def _mahjong_spec(game_id: str, display_name: str, variant: str) -> GameSpec:
-    """构造麻将变种登记条目（同一 rules 文件 + variants 声明选择）。"""
+    """构造麻将变种登记条目（同一 rules 文件 + variants 声明选择）。
+
+    麻将标准人数为 4 人：引擎按 4 人装配，训练（MARL）与评估都在
+    四座位（p0-p3）上进行，与 rules/mahjong.json 的默认声明一致。
+    """
     return GameSpec(
         game_id=game_id,
         display_name=display_name,
-        engine=EngineSpec(rules="mahjong.json", variant=variant, player_count=2),
-        players=("p0", "p1"),
+        engine=EngineSpec(rules="mahjong.json", variant=variant, player_count=4),
+        players=("p0", "p1", "p2", "p3"),
         eval_episodes=8,
         eval_opponents=("random", "mahjong"),  # 麻将启发式基线（已登记 runtime_solvers）
         solvers=_MAHJONG_SOLVERS,

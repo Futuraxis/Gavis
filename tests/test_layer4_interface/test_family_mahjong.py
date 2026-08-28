@@ -6,10 +6,10 @@ Covers the B deliverables end-to-end:
   and rejects grid / poker / social rules (stochastic gomoku, texas
   hold'em, moon chess, werewolf, undercover);
 - ``build_spec`` generalizes the ``_mahjong_*`` closures: seats come
-  from ``rules["players"]``, player counts are ``(2, 4)`` for the
-  standard template, and variant selection stays declarative (no
-  variant name hardcoded);
-- registered spec → ``PlayManager.start`` (2- and 4-player) → human
+  from ``rules["players"]``, player counts are ``(4,)`` for the
+  standard template (mahjong defaults to four seats), and variant
+  selection stays declarative (no variant name hardcoded);
+- registered spec → ``PlayManager.start`` (default 4-player) → human
   discard → the AI seats reply → the snapshot key set matches the
   ``MahjongSnapshot`` contract in ``platform-frontend/src/types.ts``
   exactly; ``ai_hand`` stays empty before the game is over (the
@@ -156,12 +156,13 @@ class TestMahjongFamilySpec:
         assert spec.board_size is None
         assert spec.seat_options == ("p0", "p1", "p2", "p3")
         assert spec.seat_label == "座位"
-        assert spec.player_counts == (2, 4)
+        assert spec.player_counts == (4,)  # 麻将默认 4 人（与 rules variants 声明一致）
         assert spec.difficulty_budgets == {"easy": 1, "normal": 1, "hard": 1}
         assert spec.display_name == "mahjong"
         assert "Mahjong" in spec.description  # 模板 meta.description 为英文
 
     def test_player_counts_follow_declared_seats(self):
+        # 声明默认 4 人但只有 2 个座位 → 封顶到 2（声明值不得超出座位数）。
         rules = load_rules("mahjong")
         rules["players"] = ["p0", "p1"]
         assert build_spec("custom_mahjong_2p", rules).player_counts == (2,)
@@ -179,15 +180,17 @@ def manager(tmp_path) -> PlayManager:
 
 
 class TestMahjongSession:
-    def test_start_2p(self, manager: PlayManager):
-        session = manager.start("custom_mahjong", "p0", "easy", player_count=2)
+    def test_start_default_4p(self, manager: PlayManager):
+        # 未传 player_count → 按注册表默认 4 人开局（麻将标准人数）。
+        session = manager.start("custom_mahjong", "p0", "easy")
         assert session.over is False
         assert session.custom is True
         assert session.family == "mahjong"
         snap = session.snapshot()
         assert len(snap["my_hand"]) == 14  # 庄家 p0 多摸一张
+        assert len(snap["hand_counts"]) == 4
         assert snap["phase"] == "action"
-        assert snap["wall_remaining"] == 136 - 27
+        assert snap["wall_remaining"] == 136 - 53  # 13×4+1 张底牌
         assert snap["ai_hand"] == []  # 终局前 AI 手牌隐藏
         assert "discard" in {a["type"] for a in snap["legal"]}
 
@@ -205,8 +208,8 @@ class TestMahjongSession:
         with pytest.raises(PlayError, match="3 人"):
             manager.start("custom_mahjong", "p0", "easy", player_count=3)
 
-    def test_human_discard_ai_replies_2p(self, manager: PlayManager):
-        session = manager.start("custom_mahjong", "p0", "easy", player_count=2)
+    def test_human_discard_ai_replies_4p(self, manager: PlayManager):
+        session = manager.start("custom_mahjong", "p0", "easy", player_count=4)
         payload = _discard_legal(session.snapshot())
         post = manager.move(session.game_id, payload)
         assert post["over"] is False
@@ -230,14 +233,14 @@ class TestMahjongSession:
         assert post["phase"] in ("action", "claim")
 
     def test_ai_opens_when_human_not_first_seat(self, manager: PlayManager):
-        session = manager.start("custom_mahjong", "p1", "easy", player_count=2)
+        session = manager.start("custom_mahjong", "p1", "easy", player_count=4)
         snap = session.snapshot()
         assert len(snap["my_hand"]) == 13  # AI（庄家 p0）已先开一张
         assert snap["ai_hand"] == []
         assert len(session.log) >= 1  # AI 开局动作已记录
 
     def test_snapshot_matches_mahjong_contract_keys(self, manager: PlayManager):
-        session = manager.start("custom_mahjong", "p0", "easy", player_count=2)
+        session = manager.start("custom_mahjong", "p0", "easy", player_count=4)
         built = session.spec.build_snapshot(session)
         assert set(built) == MAHJONG_SNAPSHOT_KEYS
         public = session.snapshot()
@@ -245,7 +248,7 @@ class TestMahjongSession:
 
     def test_full_game_ends_and_reveals(self, manager: PlayManager):
         """脚本 AI 全程过/出牌 → 牌墙摸空终局；终局后 AI 手牌揭晓。"""
-        session = manager.start("custom_mahjong", "p1", "easy", player_count=2)
+        session = manager.start("custom_mahjong", "p1", "easy", player_count=4)
         guard = 0
         while not session.over and guard < 500:
             snap = session.snapshot()

@@ -118,7 +118,9 @@ def test_mahjong_variants_select_variant_and_player_count() -> None:
         GAMES["mahjong_taiwan"],
     ):
         assert spec.engine.rules == "mahjong.json"
-        assert spec.engine.player_count == 2
+        # 麻将标准 4 人：引擎装配、训练（MARL）与评估全部按 4 座位进行。
+        assert spec.engine.player_count == 4
+        assert spec.players == ("p0", "p1", "p2", "p3")
         engine = build_engine(spec, seed=42)
         assert engine.variant == spec.engine.variant
         assert engine.player_count == spec.engine.player_count

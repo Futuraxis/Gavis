@@ -7,9 +7,9 @@ the ``_mahjong_*`` closures in ``platform/games.py``, generalized to
 read seats, variant defaults and player counts from the rules data:
 
 - seats come from ``rules["players"]`` (``normalize_players``); the
-  ``player_counts`` option is the declared default plus the full seat
-  count — the standard template declares 2 seats as default with 4
-  declared seats, yielding ``(2, 4)``;
+  ``player_counts`` option is derived from the rules' declared default
+  (``variants.player_count`` — 4 for the standard template) capped to
+  the declared seats, yielding ``(4,)``;
 - variant selection stays purely declarative: no ``variant`` argument is
   passed, so the engine uses the rules' declared default
   (``variants.variant``) — no variant name is hardcoded;
@@ -81,17 +81,17 @@ def detect(rules: dict) -> bool:
 
 
 def _player_counts(rules: dict, seats: tuple[str, ...]) -> tuple[int, ...]:
-    """Player-count options: declared default plus the full seat count.
+    """Player-count options: declared defaults capped to the seat count.
 
     ``declared_player_counts`` reads ``variants.player_count`` (the
     default selection).  The standard mahjong template declares the
-    default as 2 while four seats exist in ``rules["players"]`` — the
-    engine accepts any count up to the seats, so the full seat count is
-    offered as a second option, giving ``(2, 4)`` for the template.  A
-    two-seat custom rules dict stays ``(2,)``.
+    default as 4 with four seats in ``rules["players"]``, yielding
+    ``(4,)`` — mahjong is a four-seat game.  Counts above the seat
+    capacity are clamped away (a two-seat rules dict therefore ends up
+    with ``(2,)``), and the full seat count is always offered.
     """
-    counts = list(declared_player_counts(rules))
     full = len(seats)
+    counts = [c for c in declared_player_counts(rules) if c <= full]
     if full > 0 and full not in counts:
         counts.append(full)
     return tuple(sorted(counts))
@@ -112,7 +112,7 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
     meta = rules.get("meta", {}) if isinstance(rules.get("meta", {}), dict) else {}
     seats = normalize_players(rules) or ("p0", "p1", "p2", "p3")
 
-    def _create_engine(seed: int, player_count: int = 2) -> GameEngine:
+    def _create_engine(seed: int, player_count: int = 4) -> GameEngine:
         return engine_from_rules_dict(rules, seed, player_count=player_count)
 
     def _create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:

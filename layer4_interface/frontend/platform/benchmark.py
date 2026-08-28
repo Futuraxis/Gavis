@@ -240,8 +240,9 @@ class BenchmarkRunner:
         acting solver (both engines load the same rules, so the state
         dict is interchangeable between them).
 
-        Note: mahjong benchmarks run 2-player seats only (the runner
-        swaps exactly two seats; 4-player mahjong is not benchmarked).
+        Note: the runner swaps exactly two seats (A/B solvers); mahjong
+        now runs the registered 4-player configuration, with the B-side
+        solver driving all seats beyond the first seat pair.
         """
         seats = spec.seat_options[:2]
         seat_a = seats[0] if a_first else seats[1]

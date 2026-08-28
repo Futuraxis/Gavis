@@ -19,7 +19,6 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from layer1_translator import translate_rules_json
-
 from layer2_engine.core.llm import LLMClient
 
 from ...agent import PERSONAS, DialogueEngine
@@ -325,11 +324,14 @@ def make_handler(
 
         def _handle_match_start(self) -> None:
             payload = read_json_body(self)
+            # 未传 player_count → None，由 session 按注册表默认解析（麻将 4 人）。
+            raw_count = payload.get("player_count")
+            player_count = int(raw_count) if raw_count is not None else None
             session = manager.start(
                 payload["game_id"],
                 str(payload.get("player_pid", "random")),
                 str(payload.get("difficulty", "normal")),
-                int(payload.get("player_count", 2)),
+                player_count,
                 persona=str(payload["persona"]) if payload.get("persona") else None,
                 hint_level=str(payload.get("hint_level", "off")),
                 pacing=str(payload.get("pacing", "standard")),

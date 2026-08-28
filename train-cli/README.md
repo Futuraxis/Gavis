@@ -105,9 +105,9 @@ GAMES: dict[str, GameSpec] = {
 | `moon_chess` | moon_chess.json | — | hybrid / cfr / ppo / psro / qmix / happo / maac |
 | `stochastic_gomoku` | stochastic_gomoku.json | — | hybrid(CFR 先验) / cfr |
 | `texas_holdem` | texas_holdem.json | — | hybrid(不完全信息) / qmix / happo / maac |
-| `mahjong_guangdong` | mahjong.json | guangdong × 2p | qmix / happo / maac |
-| `mahjong_hongzhong` | mahjong.json | hongzhong × 2p | qmix / happo / maac |
-| `mahjong_blood` | mahjong.json | blood × 2p | qmix / happo / maac |
+| `mahjong_guangdong` | mahjong.json | guangdong × 4p | qmix / happo / maac |
+| `mahjong_hongzhong` | mahjong.json | hongzhong × 4p | qmix / happo / maac |
+| `mahjong_blood` | mahjong.json | blood × 4p | qmix / happo / maac |
 | `werewolf` | werewolf.json | 默认 9 人 | bayes(per_player，训练 no-op，仅评估) |
 
 ## 运行时装配（前端/基准共用）

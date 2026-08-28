@@ -248,7 +248,7 @@ def analyze(match: dict) -> ReviewReport
 - `pages/ReviewPage.tsx`：升级现有 `ReplayPage` → 左时间线（关键手高亮）/中局面回放/右评语 + "导出报告/再来一局"。
 
 **修改**：
-- `components/BattleSetup.tsx`：加性格、提示级别、节奏、自适应开关、规则速览入口（对齐 PRD 4.1.2）；麻将按 `player_counts` 过滤座位（2 人只显 p0/p1，修复 2p 选到 p2/p3 的死局）。
+- `components/BattleSetup.tsx`：加性格、提示级别、节奏、自适应开关、规则速览入口（对齐 PRD 4.1.2）；麻将按 `player_counts` 过滤座位（内置六变体默认 4 人 → 显 p0-p3；人数超出时避免选到无效座位）。
 - `pages/BattlePage.tsx`：嵌入 `ChatPanel` + `AgentAvatar`，布局对齐 PRD 5.3；"关闭对话/静音"后隐藏聊天区纯对局。
 - `types.ts`：新增 `AgentMessage`、`ChatState`、`ReviewReport`、`Profile`、`LearningStatus` 扩展；`MatchMeta` 加 `persona/hinted/ai_strength`。
 - `api/client.ts`：新增 `/agent/say`、`/match/hint`、`/profile`、`/profile/clear`、`/review/:id` 调用。

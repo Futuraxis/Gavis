@@ -23,14 +23,13 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Literal
 
 from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import ActionInstance
 
-from ..engine_helpers import engine_from_rules, mahjong_tile_name, resolve_all_chance, texas_hand_name
 from ...solver_provider import SolverHandle, SolverProvider
+from ..engine_helpers import engine_from_rules, mahjong_tile_name, resolve_all_chance, texas_hand_name
 
 if TYPE_CHECKING:
     from .session import GameSession
@@ -54,7 +53,7 @@ class GameSpec:
     seat_options: tuple[str, ...]
     seat_label: str  # '颜色' for board games, '座位' for poker
     difficulty_budgets: dict[Difficulty, int]
-    create_engine: Callable[..., GameEngine]  # (seed, player_count=2)
+    create_engine: Callable[..., GameEngine]  # (seed, player_count=<spec default>)
     create_solver: Callable[[SolverProvider, GameEngine, int, int], SolverHandle]  # (provider, engine, seed, budget)
     resolve_start: Callable[[GameSession], None]  # start chance nodes (dealing)
     ai_opens: Callable[[GameSession], bool]  # AI moves before the human's first move
@@ -63,7 +62,7 @@ class GameSpec:
     run_ai: Callable[[GameSession, Callable[[ActionInstance], None] | None], None]
     build_snapshot: Callable[[GameSession], dict]
     describe_action: Callable[[ActionInstance], str]  # history log caption
-    player_counts: tuple[int, ...] = (2,)  # mahjong seat count options
+    player_counts: tuple[int, ...] = (2,)  # seat count options (mahjong specs override with (4,))
 
 
 # ── Moon Chess ────────────────────────────────────────────────────
@@ -364,9 +363,10 @@ def _poker_describe_action(action: ActionInstance) -> str:
 
 
 def _make_mahjong_engine(variant: str) -> Callable[..., GameEngine]:
-    def _create(seed: int, player_count: int = 2) -> GameEngine:
+    def _create(seed: int, player_count: int = 4) -> GameEngine:
         # Variants and player counts are declared in the JSON's
         # ``variants`` section (v5.2); the engine selects them as pure data.
+        # 麻将默认 4 人（rules/mahjong.json 的 variants.player_count 亦为 4）。
         return engine_from_rules("mahjong", seed, variant=variant, player_count=player_count)
 
     return _create
@@ -409,8 +409,8 @@ def _mahjong_apply_human(session: GameSession, action: ActionInstance) -> None:
 
 
 def _mahjong_run_ai(session: GameSession, on_ai_action: Callable[[ActionInstance], None] | None = None) -> None:
-    """Drive every non-human seat (2-player: the single AI; 4-player:
-    both AI seats) through their draw/claim/discard turns."""
+    """Drive every non-human seat (4-player: the three AI seats; 2-player
+    (explicit): the single AI) through their draw/claim/discard turns."""
     while not session.over and session.current_player is not None and session.current_player != session.player_pid:
         action = session.solver.select_action(session.state)
         if action is None:  # heuristic found nothing — random fallback
@@ -526,7 +526,7 @@ def _poker_ai_opens(session: GameSession) -> bool:
 # 文档承诺六变种但大厅只有三个；两个测试断言已按 9 游戏锁定）：
 #   - 平台：本文件（平台 /api/games → 大厅）
 #   - 训练：train-cli/games.py `_mahjong_spec`（六变体 × MARL 管线）
-#   - 文档：docs/user/play_mahjong.md（六变体 × 2/4 人）
+#   - 文档：docs/user/play_mahjong.md（六变体 × 默认 4 人）
 GAMES: dict[str, GameSpec] = {
     "moon_chess": GameSpec(
         game_id="moon_chess",
@@ -588,12 +588,13 @@ GAMES: dict[str, GameSpec] = {
     "mahjong_guangdong": GameSpec(
         game_id="mahjong_guangdong",
         display_name="广东麻将（鸡胡）",
-        description="二人/四人广东鸡胡：吃碰杠、自摸荣和、清一色等番种，AI 使用启发式策略。",
+        description="四人广东鸡胡：吃碰杠、自摸荣和、清一色等番种，AI 使用启发式策略。",
         kind="mahjong",
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
         seat_label="座位",
-        player_counts=(2, 4),
+        # 麻将标准 4 人（规则默认与训练注册表一致；2 人仅引擎层显式可选）
+        player_counts=(4,),
         # 启发式求解器与搜索预算无关，难度档仅作展示（审查 Minor 12）
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("guangdong"),
@@ -614,7 +615,8 @@ GAMES: dict[str, GameSpec] = {
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
         seat_label="座位",
-        player_counts=(2, 4),
+        # 麻将标准 4 人（规则默认与训练注册表一致；2 人仅引擎层显式可选）
+        player_counts=(4,),
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("hongzhong"),
         create_solver=_make_mahjong_solver("mahjong_hongzhong"),
@@ -634,7 +636,8 @@ GAMES: dict[str, GameSpec] = {
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
         seat_label="座位",
-        player_counts=(2, 4),
+        # 麻将标准 4 人（规则默认与训练注册表一致；2 人仅引擎层显式可选）
+        player_counts=(4,),
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("blood"),
         create_solver=_make_mahjong_solver("mahjong_blood"),
@@ -649,12 +652,13 @@ GAMES: dict[str, GameSpec] = {
     "mahjong_sichuan": GameSpec(
         game_id="mahjong_sichuan",
         display_name="四川麻将（血战到底）",
-        description="二人/四人四川麻将（血战到底）：108 张无字牌，缺一门才能胡（硬门槛），禁吃，胡牌后继续至两家胡或牌墙摸空；番种：平胡 1/对对胡 2/清一色 4/七对 4/龙七对 8/将对 8。",
+        description="四人四川麻将（血战到底）：108 张无字牌，缺一门才能胡（硬门槛），禁吃，胡牌后继续至两家胡或牌墙摸空；番种：平胡 1/对对胡 2/清一色 4/七对 4/龙七对 8/将对 8。",
         kind="mahjong",
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
         seat_label="座位",
-        player_counts=(2, 4),
+        # 麻将标准 4 人（规则默认与训练注册表一致；2 人仅引擎层显式可选）
+        player_counts=(4,),
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("sichuan"),
         create_solver=_make_mahjong_solver("mahjong_sichuan"),
@@ -669,12 +673,13 @@ GAMES: dict[str, GameSpec] = {
     "mahjong_changsha": GameSpec(
         game_id="mahjong_changsha",
         display_name="长沙麻将（258将）",
-        description="二人/四人长沙麻将（258将）：108 张无字牌，小胡必须 2/5/8 为将，大胡（碰碰胡/清一色/七对/将将胡）乱将豁免；番制：小胡 1 番→10 / 大胡 6 番→60 / 番上番 12 番→120。",
+        description="四人长沙麻将（258将）：108 张无字牌，小胡必须 2/5/8 为将，大胡（碰碰胡/清一色/七对/将将胡）乱将豁免；番制：小胡 1 番→10 / 大胡 6 番→60 / 番上番 12 番→120。",
         kind="mahjong",
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
         seat_label="座位",
-        player_counts=(2, 4),
+        # 麻将标准 4 人（规则默认与训练注册表一致；2 人仅引擎层显式可选）
+        player_counts=(4,),
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("changsha"),
         create_solver=_make_mahjong_solver("mahjong_changsha"),
@@ -689,12 +694,13 @@ GAMES: dict[str, GameSpec] = {
     "mahjong_taiwan": GameSpec(
         game_id="mahjong_taiwan",
         display_name="台湾麻将（16张）",
-        description="二人/四人台湾麻将（16张）：无花简化 136 张，庄 17 张闲 16 张，5 副+将成胡，呖咕呖咕（八对半）可胡；台数：平胡 2/门清 1/自摸 1/碰碰胡 4/混一色 4/清一色 8。",
+        description="四人台湾麻将（16张）：无花简化 136 张，庄 17 张闲 16 张，5 副+将成胡，呖咕呖咕（八对半）可胡；台数：平胡 2/门清 1/自摸 1/碰碰胡 4/混一色 4/清一色 8。",
         kind="mahjong",
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
         seat_label="座位",
-        player_counts=(2, 4),
+        # 麻将标准 4 人（规则默认与训练注册表一致；2 人仅引擎层显式可选）
+        player_counts=(4,),
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("taiwan"),
         create_solver=_make_mahjong_solver("mahjong_taiwan"),

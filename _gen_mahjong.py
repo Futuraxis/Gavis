@@ -1,12 +1,14 @@
 """Generate rules/mahjong.json — one JSON serving all variants.
 
-Variants (guangdong/hongzhong/blood) × player counts (2/4) are declared
-in the JSON's ``variants`` section (v5.2, self-describing): the engine
-only *selects* a declared option (variant / player_count) and evaluates
-the declared formulas (``player_ids``, ``deal_target``).  Nothing is
-injected at construction time and no adapter is required.  Everything
-else is static and self-contained: zero builtins, pure expression
-aliases (v5.1).
+Variants (guangdong/hongzhong/blood/…) × player counts (2/4) are
+declared in the JSON's ``variants`` section (v5.2, self-describing): the
+engine only *selects* a declared option (variant / player_count) and
+evaluates the declared formulas (``player_ids``, ``deal_target``).  The
+default player count is **4** (mahjong is a four-seat game); 2 remains a
+declared, explicitly selectable option.  Nothing is injected at
+construction time and no adapter is required.  Everything else is
+static and self-contained: zero builtins, pure expression aliases
+(v5.1).
 """
 
 from __future__ import annotations
@@ -1306,7 +1308,9 @@ def build() -> dict:
         "players": PLAYERS4,
         "variants": {
             "variant": "guangdong",
-            "player_count": 2,
+            #: 麻将标准人数为 4 人：默认按 4 人开局（引擎仍接受显式 2 人参数，
+            #: 2/4 人都是声明过的合法取值；平台与训练注册表均按 4 人装配）。
+            "player_count": 4,
             "options": {
                 "guangdong": {},
                 "hongzhong": {"constants": {"wild_tile": "z5"}},

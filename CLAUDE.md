@@ -56,9 +56,10 @@ custom-games 工作流: layer1_translator/variant_translator.py（变体翻译�
   节声明（`variant` + `player_count` + `options[n].constants` 补丁；
   `$variant/$player_count/$constants/$players` 上下文），引擎做纯数据
   解析，**没有任何 constants 注入 API**；未知 variant → ValueError
-- `rules/mahjong.json` 由 `_gen_mahjong.py` 生成（六变种 × 2/4 人由
-  variants 声明：guangdong/hongzhong/blood/sichuan/changsha/taiwan），
-  改规则改生成器再重新生成
+- `rules/mahjong.json` 由 `_gen_mahjong.py` 生成（六变种由 variants 声明：
+  guangdong/hongzhong/blood/sichuan/changsha/taiwan；**默认 4 人**——2/4 人
+  都是声明过的合法取值，平台与训练注册表按 4 人装配），改规则改生成器
+  再重新生成
 - `rules/werewolf.json` 由 `_gen_werewolf.py` 生成（配比 9 人/3 狼在
   variants 声明，消费者只校验不注入）；结算阶段（夜晚/放逐）用
   `chance` 模板 + `effectMap` 表达（explicit 概率 1.0）；部分可观测由
@@ -94,7 +95,7 @@ custom-games 工作流: layer1_translator/variant_translator.py（变体翻译�
 | `docs/design/gamerule/v4.1.md` | 规则语言设计 (v5.0: `docs/design/gamerule/v5.0.md`, v5.1: `docs/design/gamerule/v5.1.md`, 语法参考: `docs/design/gamerule/v5.1-reference.md`) |
 | `docs/user/play_moon_chess.md` | 月亮棋人机对弈使用说明 |
 | `docs/user/play_texas_holdem.md` | 德州扑克人机对弈使用说明 |
-| `docs/user/play_mahjong.md` | 麻将人机对弈使用说明（六变种 × 2/4 人） |
+| `docs/user/play_mahjong.md` | 麻将人机对弈使用说明（六变种 × 默认 4 人） |
 | `docs/user/play_undercover.md` | 谁是卧底使用说明（场景词对 × 4-12 人，text 发言桌游） |
 | `docs/user/play_uno.md` | UNO 使用说明（六变体 × 2-10 人，rules/uno.json） |
 | `docs/user/custom_games.md` | 自定义游戏使用说明（自然语言规则 / 模板变体 → 平台可对弈；四规则族） |

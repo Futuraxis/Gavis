@@ -212,13 +212,15 @@ class TestGameSpecRegistry:
 
 
 class TestMahjong:
-    def test_start_2p(self, manager: PlayManager):
-        session = manager.start("mahjong_guangdong", "p0", "easy", player_count=2)
+    def test_start_default_4p(self, manager: PlayManager):
+        # 未传 player_count → 注册表默认 4 人（麻将标准人数，2 人不再兜底）。
+        session = manager.start("mahjong_guangdong", "p0", "easy")
         assert session.over is False
         snap = session.snapshot()
         assert len(snap["my_hand"]) == 14
+        assert len(snap["hand_counts"]) == 4
         assert snap["phase"] == "action"
-        assert snap["wall_remaining"] == 136 - 27
+        assert snap["wall_remaining"] == 136 - 53
         assert "discard" in {a["type"] for a in snap["legal"]}
 
     def test_start_4p(self, manager: PlayManager):
@@ -229,7 +231,7 @@ class TestMahjong:
         assert snap["wall_remaining"] == 136 - 53
 
     def test_discard_and_claim_flow(self, manager: PlayManager):
-        session = manager.start("mahjong_guangdong", "p0", "easy", player_count=2)
+        session = manager.start("mahjong_guangdong", "p0", "easy", player_count=4)
         legal = session.snapshot()["legal"]
         tile = next(action["tile"] for action in legal if action["type"] == "discard")
         manager.move(session.game_id, {"type": "discard", "tile": tile})
@@ -239,7 +241,7 @@ class TestMahjong:
         assert session.over or snap["phase"] in ("action", "claim")
 
     def test_ai_solver_used(self, manager: PlayManager):
-        session = manager.start("mahjong_hongzhong", "p0", "easy", player_count=2)
+        session = manager.start("mahjong_hongzhong", "p0", "easy", player_count=4)
         assert session.solver.name == "mahjong_heuristic"
 
     def test_player_count_validation(self, manager: PlayManager):
@@ -247,7 +249,7 @@ class TestMahjong:
             manager.start("mahjong_guangdong", "p0", "easy", player_count=3)
 
     def test_snapshot_hides_ai_hand(self, manager: PlayManager):
-        session = manager.start("mahjong_guangdong", "p1", "easy", player_count=2)
+        session = manager.start("mahjong_guangdong", "p1", "easy", player_count=4)
         snap = session.snapshot()
         assert len(snap["my_hand"]) == 13  # AI (dealer) opened with a discard
         assert snap["ai_hand"] == []
@@ -267,13 +269,13 @@ class TestMahjong:
             "mahjong_changsha",
             "mahjong_taiwan",
         ):
-            session = manager.start(game_id, "p0", "easy", player_count=2)
+            session = manager.start(game_id, "p0", "easy", player_count=4)
             snap = session.snapshot()
             assert snap["family"] == "mahjong", game_id
             assert "board" not in snap, f"{game_id} 是非 grid 快照，不应含 board"
 
     def test_full_game_records(self, manager: PlayManager, tmp_path):
-        session = manager.start("mahjong_guangdong", "p1", "easy", player_count=2)
+        session = manager.start("mahjong_guangdong", "p1", "easy", player_count=4)
         guard = 0
         while not session.over and guard < 300:
             snap = session.snapshot()

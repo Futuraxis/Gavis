@@ -159,7 +159,7 @@ class TestMatch:
                     "game_id": game_id,
                     "player_pid": "p0",
                     "difficulty": "easy",
-                    "player_count": 2,
+                    "player_count": 4,  # 麻将默认 4 人（2 人仅为引擎层显式可选）
                 },
             )
             assert start["ok"] is True, game_id

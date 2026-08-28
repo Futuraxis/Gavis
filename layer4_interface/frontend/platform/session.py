@@ -194,7 +194,7 @@ class PlayManager:
         game_id: str,
         player_pid: str,
         difficulty: str,
-        player_count: int = 2,
+        player_count: int | None = None,  # None → spec.player_counts[0]（麻将 4 人）
         *,
         persona: str | None = None,
         hint_level: str = "off",
@@ -223,6 +223,9 @@ class PlayManager:
             raise PlayError(f"未知游戏: {game_id}")
         if family is None:
             family = _BUILTIN_FAMILY.get(game_id)
+        if player_count is None:
+            # 未显式指定时按注册表默认人数开局（麻将 = 4 人）。
+            player_count = spec.player_counts[0]
         if player_count not in spec.player_counts:
             raise PlayError(f"该游戏不支持 {player_count} 人")
         if player_pid == "random":
