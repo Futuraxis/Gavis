@@ -296,6 +296,14 @@ export default function BattlePage() {
                 <span>{session.turn === session.player_pid ? '轮到你了' : 'AI 回合'}</span>
               )}
               {'round' in session && session.round != null && <span>第 {session.round} 轮</span>}
+              {session.evaluation && (
+                <span
+                  title={session.evaluation.mechanical_text ?? session.evaluation.summary}
+                  style={{ cursor: 'help' }}
+                >
+                  📊 局势：{session.evaluation.summary}
+                </span>
+              )}
               {game.kind === 'board' && game.board_size === 9 && <VanishToast snapshot={session} />}
             </div>
           )}

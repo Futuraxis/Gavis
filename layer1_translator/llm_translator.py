@@ -5,10 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from layer2_engine.core.llm import LLMClient
-
 from .engine_validator import EngineValidator
-from .local_client import LLMTranslatorError, RuleLLMClient
+from .local_client import RULE_LLM_TEMPERATURE, LLMClient, LLMTranslatorError, RuleLLMClient, complete_with_retry
 from .prompt_builder import CONTROL_CHARS_RE, RulePromptBuilder
 from .protocol import TranslateRequest, TranslateResponse, ValidationResult
 from .schema_validator import SchemaValidator
@@ -52,17 +50,20 @@ class LLMRuleTranslator:
     def translate(self, request: TranslateRequest) -> TranslateResponse:
         """Return LLM-generated rules JSON, optionally falling back to templates."""
         warnings: list[str] = []
-        client = self.client or LLMClient(model=self.llm_model)
+        # P2-22 修复：规则翻译必须确定性 —— 默认客户端固定 temperature=0
+        # （统一客户端默认 0.2 会让同一规则文本跨次产出不同 rules.json）。
+        client = self.client or LLMClient(model=self.llm_model, temperature=RULE_LLM_TEMPERATURE)
         messages = self.prompt_builder.build_initial_messages(request)
         attempts = self.max_repair_attempts + 1
         last_validation = ValidationResult(valid=False, errors=["LLM 未返回可验证的 rules JSON"])
 
         for attempt in range(attempts):
-            try:
-                raw = client.complete(messages, max_tokens=self.max_tokens)
-            except Exception as exc:  # noqa: BLE001 — 网络/推理异常统一进入兜底
-                last_validation = ValidationResult(valid=False, errors=[str(exc)])
-                warnings.append("LLM 生成失败，尝试模板兜底")
+            # P2-23 修复：传输失败/空回复先立即重试一次（冷启动 Ollama 的
+            # 典型形态），持久失败才走模板兜底；"校验失败"仍进修复循环。
+            raw, transport_error = complete_with_retry(client, messages, self.max_tokens)
+            if transport_error is not None:
+                last_validation = ValidationResult(valid=False, errors=[str(transport_error)])
+                warnings.append("LLM 生成失败（已重试），尝试模板兜底")
                 break
             if not raw:
                 warnings.append("本地 LLM 不可用（未返回内容），已使用模板兜底")

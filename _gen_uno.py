@@ -295,7 +295,15 @@ def _queries():
 
 
 def _visibility():
-    """部分可观测：手牌视图对非 viewer 隐藏牌面（count 保留在字段）。"""
+    """部分可观测：手牌视图对非 viewer 隐藏牌面（count 保留在字段）。
+
+    P1-3 修复：``env.handsSnapshot`` 是 7-0 换手/移交的临时快照——0 牌时含全场
+    手牌、7 牌时含两名换牌者手牌，轮转后本就不应出现在任何观察者视图里。
+    加 ``env`` 过滤对所有 viewer 隐藏（filter 恒假 ``{"const": False}``），
+    并配合 ``_rotate_ops`` / ``_swap_ops`` 末尾清理，双重保险防止他人手牌经
+    env 字段泄露给任意观察者（此前 visibility 无 env 子段 → handsSnapshot 按
+    契约对任何观察者公开，击穿隐藏信息红线）。
+    """
     return {
         "default": "partial",
         "rules": [
@@ -306,6 +314,10 @@ def _visibility():
             }
             for pid in _player_ids()
         ],
+        "env": {
+            # 换手快照是纯内部 scratch 字段，任何 viewer 都不得观察。
+            "handsSnapshot": {"filter": C(False)},
+        },
     }
 
 
@@ -562,7 +574,11 @@ def _penalty_start_ops(k):
 
 
 def _rotate_ops():
-    """0 牌：全场手牌按当前方向移交（快照 → forEach 重绑，克隆安全）。"""
+    """0 牌：全场手牌按当前方向移交（快照 → forEach 重绑，克隆安全）。
+
+    P1-3：快照含全场手牌，forEach 重绑后立即清空，防止 ``env.handsSnapshot``
+    跨回合残留（即使有 visibility.env 兜底也保持 state 干净）。
+    """
     return [
         _set_env(
             "handsSnapshot",
@@ -590,11 +606,15 @@ def _rotate_ops():
                 )
             ],
         },
+        _set_env("handsSnapshot", C([])),
     ]
 
 
 def _swap_ops():
-    """7 牌：$player 与 $swapTarget 手牌互换（快照先取两份再重绑）。"""
+    """7 牌：$player 与 $swapTarget 手牌互换（快照先取两份再重绑）。
+
+    P1-3：交换后立即清空快照，防止两名换牌者手牌跨回合残留。
+    """
     return [
         _set_env(
             "handsSnapshot",
@@ -605,6 +625,7 @@ def _swap_ops():
         ),
         _set_array({"template": "hand_{$player}"}, AT(V("$env.handsSnapshot"), C(1))),
         _set_array({"template": "hand_{$swapTarget}"}, AT(V("$env.handsSnapshot"), C(0))),
+        _set_env("handsSnapshot", C([])),
     ]
 
 

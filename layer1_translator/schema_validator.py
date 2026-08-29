@@ -46,6 +46,10 @@ class SchemaValidator:
 
         if dialect == "v5":
             SchemaValidator._validate_v5_metadata(rules, errors)
+            # P2-25 修复：v5.2 声明式变体此前完全未被 schema 校验 —— 未知
+            # 默认 variant / 坏 options 结构要等引擎运行时才暴露（连 smoke
+            # 也会被同一次异常吞掉标签）。这里是结构层第一道闸。
+            SchemaValidator._validate_variants(rules, errors)
 
         actions = SchemaValidator._expect_list(rules, "actions", errors)
         SchemaValidator._validate_actions(actions, errors)
@@ -113,6 +117,58 @@ class SchemaValidator:
             value = rules.get(key, {})
             if value is not None and not isinstance(value, dict):
                 errors.append(f"{key} 必须是对象")
+
+    @staticmethod
+    def _validate_variants(rules: dict[str, Any], errors: list[str]) -> None:
+        """v5.2 声明式变体节的结构校验（与引擎解析语义对齐）。
+
+        P2-25 修复：变体节此前完全未被 schema 校验 —— 未知默认 variant /
+        坏 options 结构要等引擎运行时才暴露（variant-aware smoke 也会被
+        同一异常吞掉标签）。这里是结构层第一道闸。
+        """
+        variants = rules.get("variants")
+        if variants is None:
+            return
+        if not isinstance(variants, dict):
+            errors.append("variants 必须是对象")
+            return
+        options = variants.get("options", {})
+        if options is None:
+            errors.append("variants.options 不能为 None")
+            options = {}
+        if not isinstance(options, dict):
+            errors.append("variants.options 必须是对象")
+            options = {}
+        if not isinstance(options, dict) or not options:
+            errors.append("variants.options 不能为空（至少声明默认变体）")
+            return
+        for name, option in options.items():
+            if not isinstance(name, str) or not name:
+                errors.append("variants.options 的键必须是非空字符串")
+                continue
+            if not isinstance(option, dict):
+                errors.append(f"variants.options.{name} 必须是对象")
+                continue
+            constants = option.get("constants")
+            if constants is not None and not isinstance(constants, dict):
+                errors.append(f"variants.options.{name}.constants 必须是对象")
+        default = variants.get("variant")
+        if default is not None:
+            if not isinstance(default, str):
+                errors.append("variants.variant 必须是字符串")
+            elif default not in options:
+                errors.append(f"variants.variant={default!r} 未在 variants.options 中声明")
+        count = variants.get("player_count")
+        if count is not None and not (isinstance(count, int) and count >= 1):
+            errors.append("variants.player_count 必须是 ≥1 的整数")
+        for key in ("trim_players", "trim_utility"):
+            value = variants.get(key)
+            if value is not None and not isinstance(value, bool):
+                errors.append(f"variants.{key} 必须是布尔值")
+        for key in ("player_ids", "deal_target"):
+            value = variants.get(key)
+            if value is not None and not isinstance(value, dict):
+                errors.append(f"variants.{key} 必须是表达式对象")
 
     @staticmethod
     def _validate_actions(actions: list[Any], errors: list[str]) -> None:

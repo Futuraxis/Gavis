@@ -44,12 +44,15 @@ from typing import Any
 from layer2_engine.core.llm import LLMClient
 
 from .custom_games import CustomGameRegistry
-from .games import GAMES, PlayError
-from .session import PlayManager, _BUILTIN_FAMILY
+from .games import GAMES
+from .session import _BUILTIN_FAMILY, PlayManager
 
 GRID_BOARD_LEN = {
     "moon_chess": 3,
-    "stochastic_gomoku": 15,
+    # P2-18 修复：随机五子棋是 9×9（rules/stochastic_gomoku.json
+    # board_size:9）。旧值 15 是错的 —— 且该字典只作 spec.board_size
+    # 缺失时的兜底（见 _grid_cell_from_text，spec 是单一事实来源）。
+    "stochastic_gomoku": 9,
 }
 
 #: 每轮随请求带来的对话历史上限（条数 / 总字符），防 prompt 无限膨胀。
@@ -98,7 +101,9 @@ _HELP_TEXT = (
 _JOIN_WORDS = ("加入", "来一局", "来一把", "玩", "下", "打", "开")
 _PLAY_RE = re.compile(r"(?:玩|来一局|来一把|下|打|开局|对战|加入|开一局)")
 _RESUME_RE = re.compile(r"(?:继续|接着|恢复|回到) *(?:上一局|对战|对局|游戏)")
-_RESTART_RE = re.compile(r"(?:再来一局|重来|重新|重开|换一局|再来)")  # 注意: 与 play 有交集, 优先级低于 play 里的"来一局"判断
+_RESTART_RE = re.compile(
+    r"(?:再来一局|重来|重新|重开|换一局|再来)"
+)  # 注意: 与 play 有交集, 优先级低于 play 里的"来一局"判断
 _HINT_RE = re.compile(r"(?:提示|怎么走|这步为什么|帮我想|下一步)")
 _HISTORY_RE = re.compile(r"(?:战绩|历史|记录|胜率|输赢|数据)")
 _REVIEW_RE = re.compile(r"(?:复盘|回放|重看|复盘一下)")
@@ -282,7 +287,13 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
                     "description": "用户要提示/指导/“这步怎么走”时调用。",
                     "parameters": {
                         "type": "object",
-                        "properties": {"level": {"type": "string", "enum": ["direction", "specific", "demo"], "default": "direction"}},
+                        "properties": {
+                            "level": {
+                                "type": "string",
+                                "enum": ["direction", "specific", "demo"],
+                                "default": "direction",
+                            }
+                        },
                         "required": [],
                     },
                 },
@@ -414,9 +425,10 @@ def _intent_from_tool(
 
 def _grid_cell_from_text(text: str, session: Any) -> dict | None:
     """Parse “下第X行第Y列 / 第N格 / 中间” into a grid action (best-effort)."""
-    size = GRID_BOARD_LEN.get(session.game_id)
-    if size is None:
-        size = getattr(session.spec, "board_size", None) or 15
+    # P2-18 修复：spec.board_size 是单一事实来源（旧逻辑先查硬编码字典，
+    # stochastic_gomoku 被按 15×15 解析 → “下第2行第3列”落到第 17 格、
+    # 10-15 行被正则接受后再判非法）。
+    size = getattr(session.spec, "board_size", None) or GRID_BOARD_LEN.get(session.game_id) or 9
     m = _GRID_MOVE_RE.search(text)
     if m:
         row, col = int(m.group(1)), int(m.group(2))

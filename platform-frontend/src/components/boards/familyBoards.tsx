@@ -1,8 +1,9 @@
-import type { BoardSnapshot, MahjongSnapshot, PokerSnapshot, Snapshot, SocialSnapshot } from '../../types'
+import type { BoardSnapshot, MahjongSnapshot, PokerSnapshot, Snapshot, SocialSnapshot, UnoSnapshot } from '../../types'
 import GenericGridBoard from './GenericGridBoard'
 import MahjongTable from './MahjongTable'
 import PokerTable from './PokerTable'
 import SocialChatTable from './SocialChatTable'
+import UnoTable from './UnoTable'
 
 /** 族分发面板统一 props — onMove 接受任意动作结构（由各族组件自行构造）。 */
 export interface FamilyBoardProps {
@@ -43,5 +44,11 @@ export const FAMILY_BOARDS: Record<string, React.FC<FamilyBoardProps>> = {
       onMove={(a) => onMove?.(a)}
     />
   ),
+  uno: ({ snapshot, interactive, onMove }) => (
+    <UnoTable
+      snapshot={snapshot as UnoSnapshot}
+      interactive={interactive}
+      onAction={(a) => onMove?.(a)}
+    />
+  ),
 }
-// social entry appended by B3

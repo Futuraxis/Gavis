@@ -19,9 +19,7 @@ from __future__ import annotations
 import pytest
 
 from layer2_engine.core.llm import ChatReply, ToolCall
-
 from layer4_interface.frontend.platform.chat import (
-    ChatTurnResult,
     build_tools,
     chat_turn,
     fallback_intent,
@@ -98,6 +96,28 @@ class TestFallbackIntent:
         session = manager.start("moon_chess", "p_black", "easy")
         result = fallback_intent("下第9行第9列", _games(manager), session)
         assert result.intent == "clarify"
+
+    def test_gomoku_grid_text_move_uses_board_size(self, manager: PlayManager) -> None:
+        """P2-18 回归：随机五子棋是 9×9，文字落子必须按 spec.board_size 解析。
+
+        修复前 ``GRID_BOARD_LEN`` 硬编码 stochastic_gomoku=15（且字典优先于
+        spec）—— "下第2行第3列" 落到 (2-1)*15+2=17 格（9×9 盘上越界 → 澄清），
+        10-15 行的落子又被正则接受后再判非法。
+        """
+        session = manager.start("stochastic_gomoku", "p_black", "easy")
+        result = fallback_intent("我下第2行第3列", _games(manager), session)
+        assert result.intent == "move"
+        assert result.params["action"] == {"cell_index": (2 - 1) * 9 + (3 - 1)}
+        # 9×9 之外必须澄清（旧 15×15 解析会静默接受越界行号）
+        assert fallback_intent("下第10行第1列", _games(manager), session).intent == "clarify"
+
+    def test_gomoku_center_move_in_range(self, manager: PlayManager) -> None:
+        """9×9 的天元是第 41 格（5,5）；15×15 的中心是 113 格 —— 修复前
+        "下中间" 会落到 113 直接越界。"""
+        session = manager.start("stochastic_gomoku", "p_black", "easy")
+        result = fallback_intent("下中间", _games(manager), session)
+        assert result.intent == "move"
+        assert result.params["action"] == {"cell_index": 40}
 
     def test_help_and_default_chat(self, manager: PlayManager) -> None:
         assert fallback_intent("你能做什么", _games(manager), None).intent == "help"
@@ -195,10 +215,7 @@ class TestChatTurnHistory:
 
     def test_history_capped_to_recent_messages(self, manager: PlayManager) -> None:
         fake = _RecordingLLM()
-        many = [
-            {"role": "user" if i % 2 == 0 else "assistant", "content": f"msg-{i}"}
-            for i in range(60)
-        ]
+        many = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"msg-{i}"} for i in range(60)]
         chat_turn(manager, "最后一问", llm=fake, history=many)
         assert len(fake.seen) == 26  # system + 最近 24 条 + 当前句
         assert fake.seen[1]["content"] == "msg-36"

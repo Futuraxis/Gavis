@@ -13,6 +13,11 @@ python -m pytest tests/test_layer2_engine/test_uno.py -v   # 引擎级测试
 python train-cli/train.py --list    # 查看注册表（含 6 个 uno_* 条目）
 ```
 
+**平台对局**：六款 UNO 已登记平台注册表（游戏大厅可见，徽标 🎴 UNO），
+默认 4 人（1 人 + 3 AI），UNO 桌面组件按颜色分组展示手牌、台面顶牌与
+罚牌状态。启动平台：`python -m layer4_interface.frontend.platform.server`
+（需先 `cd platform-frontend && npm run build`）。
+
 训练 / 运行时装配走 `train-cli/games.py` 注册表：`uno` 与
 `uno_seven_zero` / `uno_jump_in` / `uno_stacking` / `uno_draw_until` /
 `uno_strict_wild4` 六个条目，默认 4 人，Hybrid 求解器以

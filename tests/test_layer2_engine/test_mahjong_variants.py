@@ -126,12 +126,16 @@ class TestSichuan:
         s = _tsumo_win(a, s, ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p1", "p2", "p3", "p3", "p3"], "p3")
         assert not a.is_terminal(s)
         assert s["env"]["done"] == ["p0"]
+        p0_first = float(s["env"]["payoffs"][0])
+        assert p0_first > 0, "p0 首胡应得三家支付的正分"
         # p1 tsumo (two-suit hand)
         s = _resolve(a, s)
         s = _tsumo_win(
             a, s, ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p2", "p3", "p4", "p4", "p4"], "p4", pid="p1"
         )
         assert not a.is_terminal(s)
+        # 累计结算：p1 胡后 p0（已 done）的分数必须原样保留。
+        assert float(s["env"]["payoffs"][0]) == p0_first
         # p2 tsumo → three done → over (two-suit hand)
         s = _resolve(a, s)
         s = _tsumo_win(
@@ -139,6 +143,13 @@ class TestSichuan:
         )
         assert a.is_terminal(s)
         assert s["env"]["done"] == ["p0", "p1", "p2"]
+        # 血战累计结算终态：先前胡家分数保留、三家胡牌、四人零和。
+        payoffs = [float(x) for x in s["env"]["payoffs"]]
+        assert payoffs[0] == p0_first
+        assert payoffs[1] > 0, "第二位胡家 p1 累计应为正（两家中未 done 的 p2/p3 支付）"
+        assert s["env"]["winners"] == ["p0", "p1", "p2"]
+        assert s["env"]["winner"] is None
+        assert abs(sum(payoffs)) < 1e-9, "四次支付累计应零和"
 
     def test_wall_empty_on_108_deck(self):
         a = _engine(variant="sichuan", player_count=2, seed=1)
@@ -147,8 +158,9 @@ class TestSichuan:
         # Drain the wall by marking all 108 kinds drawn (ground array, bound
         # as $drawn — the wall-empty deck arm reads $drawn, not env.drawn).
         s["_arrays"]["drawn"] = list(a._constants["tile_ids"])  # noqa: SLF001
-        s = _act(a, s, "claim_pass")
-        assert a.is_terminal(s)
+        while a.get_node_type(s) != "terminal":  # 胡>碰/杠>吃 阶段全过
+            assert s["env"]["phase"] == "claim"
+            s = _act(a, s, "claim_pass")
         assert s["env"]["last_action"] == "wall_empty"
 
 
@@ -174,8 +186,8 @@ class TestChangsha:
         peng = ["m1", "m1", "m1", "m2", "m2", "m2", "p3", "p3", "p3", "s4", "s4", "s4", "m5", "m5"]
         assert _eval_win(a, peng)
         # 清一色 with non-258 pair → legal (runs + pung mixed structure;
-        # note the meld pool lists each run once, so two identical runs
-        # cannot be chosen — a pre-existing engine model limit).
+        # v5.4: the chi pool supplies each run once per copy, so 一杯口
+        # shapes are also selectable).
         qing = ["m1", "m1", "m1", "m1", "m2", "m3", "m4", "m5", "m6", "m6", "m6", "m7", "m8", "m9"]
         assert _eval_win(a, qing)
         # Plain standard hand with non-258 pair and no 大胡 pattern → illegal.
@@ -444,3 +456,78 @@ class TestTaiwan:
         ]
         s = _tsumo_win(a, s, licu, "z7")
         assert s["env"]["fan_pay"] == 20
+
+
+# ── v5.4 audit fixes (blood 血流成河 / changsha 番表) ────────────────
+
+
+class TestBloodV54:
+    """blood = 血流成河：108 张无字牌、缺一门、无吃、胡家不退场。
+
+    （对比 sichuan 血战到底：胡家退场进 done；blood 靠 winners 守卫禁止
+    二胡，终局条件统一为 player_count-1 家胡过或牌墙抽干。）
+    """
+
+    TWO_SUIT_WIN = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "p1", "p2", "p3", "m5", "m5"]
+
+    def test_blood_deck_no_honors(self):
+        """blood 牌池 = 108 张无字牌（旧版用 136 张默认牌池）。"""
+        a = _engine(variant="blood", player_count=2, seed=1)
+        assert len(a._constants["tile_ids"]) == 108  # noqa: SLF001
+        assert not any(t.startswith("z") for t in a._constants["tile_ids"])  # noqa: SLF001
+        s = _resolve(a, a.create_initial_state())
+        assert not any(t.startswith("z") for t in s["_arrays"]["hand_p0"])
+
+    def test_blood_missing_suit_gate(self):
+        """blood 与四川同款缺一门 gate：三门手牌不胡，两门胡。"""
+        a = _engine(variant="blood", player_count=2, seed=1)
+        three_suits = ["m1", "m2", "m3", "m4", "m5", "m6", "p1", "p2", "p3", "s1", "s2", "s3", "m7", "m7"]
+        assert not _eval_win(a, three_suits)
+        assert _eval_win(a, self.TWO_SUIT_WIN)
+
+    def test_blood_no_chi(self):
+        """blood 禁吃（川麻无吃，旧版漏了 blood）。"""
+        a = _engine(variant="blood", player_count=2, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        s = _act(a, s, "discard", tile=s["_arrays"]["hand_p0"][0])
+        assert s["env"]["phase"] == "claim"
+        legal_ids = {x.template_id for x in a.get_legal_actions(s)}
+        assert "claim_chi" not in legal_ids
+
+    def test_changsha_no_chi(self):
+        """changsha 禁吃（长沙麻将只能碰杠，旧版漏了 changsha）。"""
+        a = _engine(variant="changsha", player_count=2, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        s = _act(a, s, "discard", tile=s["_arrays"]["hand_p0"][0])
+        legal_ids = {x.template_id for x in a.get_legal_actions(s)}
+        assert "claim_chi" not in legal_ids
+
+    def test_blood_haidilaoyue(self):
+        """blood 海底捞月 8 番（鸡胡1 + 缺一门1 + 海底8 = 10 → clamp 1280）。"""
+        a = _engine(variant="blood", player_count=4, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        s["env"]["wall_count"] = 0
+        s = _tsumo_win(a, s, self.TWO_SUIT_WIN, "m5")
+        assert s["env"]["fan_pay"] == 1280
+
+    def test_haidilaoyue_deck_exhausted_arm(self):
+        """P1-10: 108 张牌型的海底捞月走牌池抽干臂（旧版只查
+        wall_count==0，而 wall_count 初值 136 在 108 张局永远到不了 0）。"""
+        a = _engine(variant="blood", player_count=4, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        # 不动 wall_count（保持 136 初值减已发牌数），只把 drawn 抬满牌池：
+        # drawn 已含发牌 + 本局摸牌，补齐到全部 108 张。
+        s["_arrays"]["drawn"] = list(a._constants["tile_ids"])  # noqa: SLF001
+        s = _tsumo_win(a, s, self.TWO_SUIT_WIN, "m5")
+        assert s["env"]["fan_pay"] == 1280
+
+
+class TestChangshaV54:
+    def test_fan_12_pays_120(self):
+        """P1-9: changsha 番表 12 番 → 120（旧表 [60]*7 在 idx 11 给 60，
+        番上番被压成单大胡）。清一色碰碰胡 = 6+6 = 12 番。"""
+        a = _engine(variant="changsha", player_count=2, seed=1)
+        s = _resolve(a, a.create_initial_state())
+        hand = ["m1", "m1", "m1", "m2", "m2", "m2", "m3", "m3", "m3", "m4", "m4", "m4", "m5", "m5"]
+        s = _tsumo_win(a, s, hand, "m5")
+        assert s["env"]["fan_pay"] == 120

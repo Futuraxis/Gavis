@@ -540,6 +540,14 @@ class ExprEvaluator:
         ``where`` filters full combinations.  With ``then`` + ``agg`` the
         best (max/min) ``then`` value over satisfying combinations is
         returned; without ``then``, existence (bool) is returned.
+
+        ``dedup`` (default True) keeps the historical set semantics.
+        With ``dedup: False`` the items keep multiplicity (multiset
+        combinations): two identical entries may BOTH be chosen — needed
+        when the candidate pool legitimately offers duplicate copies
+        (e.g. a mahjong hand supplying two identical runs; the pool
+        repeats a run once per suppliable copy).  k then clamps to
+        ``len(items)`` instead of the deduplicated length.
         """
         items_fn = self.compile(cspec["items"])
         k_fn = self.compile(cspec["k"])
@@ -548,6 +556,7 @@ class ExprEvaluator:
         where_fn = self.compile(cspec["where"]) if "where" in cspec else None
         then_fn = self.compile(cspec["then"]) if "then" in cspec else None
         maximize = cspec.get("agg", "max") != "min"
+        dedup = bool(cspec.get("dedup", True))
 
         def _choose(
             ctx: dict,
@@ -558,6 +567,7 @@ class ExprEvaluator:
             then_fn=then_fn,
             as_var=as_var,
             maximize=maximize,
+            dedup=dedup,
         ) -> Any:
             items = items_fn(ctx)
             if not isinstance(items, list):
@@ -566,17 +576,20 @@ class ExprEvaluator:
                 items = sorted(items)
             except TypeError:
                 pass  # unorderable items — keep input order
-            uniq: list = []
-            seen: set = set()
-            for item in items:
-                try:
-                    if item in seen:
-                        continue
-                    seen.add(item)
-                except TypeError:
-                    pass
-                if item not in uniq:
-                    uniq.append(item)
+            if dedup:
+                uniq: list = []
+                seen: set = set()
+                for item in items:
+                    try:
+                        if item in seen:
+                            continue
+                        seen.add(item)
+                    except TypeError:
+                        pass
+                    if item not in uniq:
+                        uniq.append(item)
+            else:
+                uniq = list(items)
             try:
                 k = int(k_fn(ctx))
             except (TypeError, ValueError):
@@ -957,7 +970,19 @@ class ExprEvaluator:
         raise ValueError(f"Unknown expression type: {list(expr.keys())}")
 
     def _eval_choose(self, cspec: dict, ctx: dict) -> Any:
-        """Interpreter for ``choose`` (see :meth:`_compile_choose`)."""
+        """Interpreter for ``choose`` (see :meth:`_compile_choose`).
+
+        Value-multiset enumeration: pool entries that are *equal* collapse
+        into one value with a multiplicity, and the recursion picks a copy
+        count per value instead of walking each duplicate slot.  With
+        ``dedup: False`` this keeps multiset semantics (two identical
+        entries may BOTH be chosen) while avoiding the index-set explosion
+        of duplicate pool slots — a chi pool holding up to 4 copies of
+        each of 63 runs would otherwise enumerate C(252,4)≈165M slot
+        selections (v5.5 multi-supply, 三杯口及以上).  The ``prefix``
+        prune is monotone (adding tiles never repairs a failing prefix),
+        so checking it once per value-count jump stays sound.
+        """
         items = self.eval(cspec["items"], ctx)
         if not isinstance(items, list):
             return None if "then" in cspec else False
@@ -965,15 +990,25 @@ class ExprEvaluator:
             items = sorted(items)
         except TypeError:
             pass
-        uniq: list = []
-        for item in items:
-            if item not in uniq:
-                uniq.append(item)
+        if cspec.get("dedup", True):
+            uniq: list = []
+            for item in items:
+                if item not in uniq:
+                    uniq.append(item)
+            values, mults = uniq, [1] * len(uniq)
+        else:
+            values, mults = [], []
+            for item in items:
+                if values and values[-1] == item:
+                    mults[-1] += 1
+                else:
+                    values.append(item)
+                    mults.append(1)
         try:
             k = int(self.eval(cspec["k"], ctx))
         except (TypeError, ValueError):
             return None if "then" in cspec else False
-        k = max(0, min(k, len(uniq)))
+        k = max(0, min(k, len(items)))
 
         as_var = cspec.get("as", "$c")
         prefix = cspec.get("prefix")
@@ -983,28 +1018,42 @@ class ExprEvaluator:
         best: Any = None
         found = False
         combo: list = []
+        n_values = len(values)
 
-        def _rec(i: int):
+        def _rec(v_idx: int, remaining: int) -> bool:
+            """Return True to abort the whole search (boolean mode found)."""
             nonlocal best, found
-            if len(combo) == k:
+            if remaining == 0:
                 sub = {**ctx, as_var: list(combo), "$node": list(combo)}
                 if where is not None and not self.eval(where, sub):
-                    return
+                    return False
                 found = True
                 if then is not None:
                     value = self.eval(then, sub)
                     if best is None or (value > best if maximize else value < best):
                         best = value
-                return
-            if i >= len(uniq):
-                return
-            combo.append(uniq[i])
-            if len(combo) == k or prefix is None or self.eval(prefix, {**ctx, as_var: list(combo)}):
-                _rec(i + 1)
-            combo.pop()
-            _rec(i + 1)
+                    return False
+                return True  # boolean mode: first satisfying combo suffices
+            if v_idx >= n_values:
+                return False
+            max_c = min(mults[v_idx], remaining)
+            for c in range(max_c, -1, -1):
+                if c:
+                    combo.extend([values[v_idx]] * c)
+                    # Completing to k defers to the where check; otherwise
+                    # the monotone prefix prunes unsuppliable selections.
+                    if remaining != c and prefix is not None and not self.eval(prefix, {**ctx, as_var: list(combo)}):
+                        del combo[-c:]
+                        continue
+                if _rec(v_idx + 1, remaining - c):
+                    if c:
+                        del combo[-c:]
+                    return True
+                if c:
+                    del combo[-c:]
+            return False
 
-        _rec(0)
+        _rec(0, k)
         if then is not None:
             return best
         return found

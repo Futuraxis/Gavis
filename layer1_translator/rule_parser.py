@@ -189,17 +189,34 @@ class RuleParser:
         return params
 
     def _parse_mahjong(self, text: str) -> dict[str, Any]:
+        """Parse mahjong template parameters.
+
+        变体关键词映射到 ``rules/mahjong.json`` 声明的六变体；先查更
+        特异的中文词（血流成河/血战到底），再查英文/通用词。T2 修复：
+        旧版只认 红中/血战/广东 —— "四川/长沙/台湾麻将" 解析不出变体，
+        且"血战"（血战到底 = sichuan）被错映射到 blood（血流成河）。
+        """
         params: dict[str, Any] = {}
         normalized = self._normalize(text)
-        if "红中" in text or "hongzhong" in normalized:
-            params["variant"] = "hongzhong"
-        elif "血战" in text or "blood" in normalized:
+        # 特异优先：血流成河 → blood；血战到底/四川 → sichuan。
+        if "血流" in text or "blood" in normalized:
             params["variant"] = "blood"
+        elif "血战" in text or "四川" in text or "sichuan" in normalized:
+            params["variant"] = "sichuan"
+        elif "红中" in text or "hongzhong" in normalized:
+            params["variant"] = "hongzhong"
+        elif "长沙" in text or "changsha" in normalized:
+            params["variant"] = "changsha"
+        elif "台湾" in text or "taiwan" in normalized:
+            params["variant"] = "taiwan"
         elif "广东" in text or "鸡胡" in text or "guangdong" in normalized:
             params["variant"] = "guangdong"
 
+        # 人数原样透传（int 时）：2/4 之外的值由 _apply_mahjong_params
+        # 校验并给出"保留默认"警告 —— 在 parser 层过滤会让该警告成为
+        # 死代码（"红中麻将 3人" 静默跑 4 人局，用户无从得知）。
         player_count = self._extract_count_before(text, ("人", "家"), ("麻将", "局", "玩家"))
-        if player_count in (2, 4):
+        if player_count is not None:
             params["player_count"] = player_count
         return params
 

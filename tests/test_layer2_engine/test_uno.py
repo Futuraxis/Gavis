@@ -380,6 +380,40 @@ def test_seven_zero_rotate_hands_on_zero() -> None:
     assert nxt["env"]["turn"] == "p2"
 
 
+def test_seven_zero_hands_snapshot_not_leaked() -> None:
+    """P1-3 回归：7-0 换手快照（``env.handsSnapshot``）含他人手牌，
+    不得泄露给任何观察者。
+
+    修复前 ``visibility`` 无 ``env`` 子段 → ``handsSnapshot`` 按契约对任意
+    viewer 公开；且快照永不清理（0 牌含全场手牌、7 牌含两名换牌者手牌），
+    跨回合残留。修复后 ``visibility.env.handsSnapshot`` 对所有 viewer 隐藏
+    （filter 恒假）+ 轮转末尾 ``setEnv handsSnapshot=[]`` 清空，双重保险。
+    """
+    eng = _engine(variant="seven_zero")
+    # ── 7 牌换手：快照曾含 [p0 手, p2 手] ──
+    state = _craft(eng, hands={"p0": ["r7a", "b6a"], "p2": ["g3a", "y8a"]}, top=("r", "7"), turn="p0")
+    nxt = eng.apply_action(state, _legal(eng, state, "play7", card="r7a", target="p2"))
+    # (a) 原始 state 的快照已清空（不再残留 p0/p2 的手牌）
+    assert nxt["env"].get("handsSnapshot") == []
+    # (b) 任何观察者的投影都不含该字段（visibility.env 过滤兜底）
+    for viewer in ("p0", "p1", "p2", "p3"):
+        env_obs = eng.project_observation(nxt, viewer)["env"]
+        assert "handsSnapshot" not in env_obs, f"handsSnapshot leaked to {viewer} on 7-swap"
+
+    # ── 0 牌全场移交：快照曾含全场手牌 ──
+    state0 = _craft(
+        eng,
+        hands={"p0": ["g1a", "g2a"], "p1": ["r0", "b0"], "p2": ["b1a"], "p3": ["y1a", "y2a", "y3a"]},
+        top=("r", "0"),
+        turn="p1",
+    )
+    nxt0 = eng.apply_action(state0, _legal(eng, state0, "play", card="r0"))
+    assert nxt0["env"].get("handsSnapshot") == []
+    for viewer in ("p0", "p1", "p2", "p3"):
+        env_obs = eng.project_observation(nxt0, viewer)["env"]
+        assert "handsSnapshot" not in env_obs, f"handsSnapshot leaked to {viewer} on 0-rotate"
+
+
 # ── 抢牌变种 ─────────────────────────────────────────────────────────
 
 

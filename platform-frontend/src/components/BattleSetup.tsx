@@ -134,6 +134,13 @@ export default function BattleSetup({ game, busy, error, onStart }: Props) {
           ))}
         </select>
       </div>
+      {game.kind === 'mahjong' && !game.custom && (
+        <div className="form-row" style={{ marginTop: -6 }}>
+          <span style={{ color: 'var(--muted)', fontSize: 13 }}>
+            ℹ️ 麻将 AI 当前为固定强度的启发式策略，三档难度暂无实际差异
+          </span>
+        </div>
+      )}
       <div className="form-row">
         <label>性格:</label>
         <select value={persona} onChange={(e) => setPersona(e.target.value as PersonaKey)}>

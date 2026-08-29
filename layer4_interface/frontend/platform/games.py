@@ -48,7 +48,7 @@ class GameSpec:
     game_id: str
     display_name: str
     description: str
-    kind: Literal["board", "poker", "mahjong"]
+    kind: Literal["board", "poker", "mahjong", "uno"]
     board_size: int | None
     seat_options: tuple[str, ...]
     seat_label: str  # '颜色' for board games, '座位' for poker
@@ -317,9 +317,17 @@ def _poker_snapshot(session: GameSession) -> dict:
     def _cards(pid: str) -> list:
         return list(arrs.get(f"{pid[2:]}_hole", []))
 
-    def _hand_name(pid: str) -> str | None:
+    def _hand_name(pid: str, *, gate: bool) -> str | None:
+        # P1-2 修复：牌型类别必须按显式门计算，不能统一用 ``over``。
+        # 人类自己的牌（my_hand_name）以 ``over`` 为门——玩家始终知道自己的底牌，
+        # 终局展示牌型无泄露；AI 的牌型（ai_hand_name）必须以 ``revealed``
+        # （= over 且 last_action=="showdown"）为门，否则弃牌局（over=True、
+        # revealed=False）会从 AI 隐藏底牌+公共牌反推出 AI 牌型类别（口袋对/成牌），
+        # 击穿 §A.3 reveal-gate 红线。
+        if not gate:
+            return None
         cards = [*_cards(pid), *arrs.get("community", [])]
-        return texas_hand_name(session.engine, cards) if over else None
+        return texas_hand_name(session.engine, cards)
 
     return {
         "game_id": session.game_id,
@@ -347,8 +355,8 @@ def _poker_snapshot(session: GameSession) -> dict:
         "last_action": env.get("last_action"),
         "last_ai_action": session.last_ai_info.get("action"),
         "call_to": int(env.get("last_call_to", 0)),
-        "my_hand_name": _hand_name(session.player_pid),
-        "ai_hand_name": _hand_name(session.ai_pid),
+        "my_hand_name": _hand_name(session.player_pid, gate=over),
+        "ai_hand_name": _hand_name(session.ai_pid, gate=revealed),
         "payoff": session.engine.get_utility(session.state, session.player_pid) if over else None,
         "legal": legal,
         "raise_amounts": raise_amts,
@@ -520,11 +528,177 @@ def _poker_ai_opens(session: GameSession) -> bool:
     return True
 
 
-# 注意：平台注册表应覆盖 rules/mahjong.json 声明的**全部六种变体**
-# （guangdong / hongzhong / blood / sichuan / changsha / taiwan，v5.2 variants）。
-# 三个消费注册点必须同步，否则各自漂移（曾漏挂四川/长沙/台湾，导致
-# 文档承诺六变种但大厅只有三个；两个测试断言已按 9 游戏锁定）：
-#   - 平台：本文件（平台 /api/games → 大厅）
+# ── UNO (classic / seven_zero / jump_in / stacking / draw_until / strict_wild4)
+
+
+def _make_uno_engine(variant: str) -> Callable[..., GameEngine]:
+    """构造 UNO 变种引擎（同一 uno.json + variants 声明选择，默认 4 人）。
+
+    ``allow_codegen=False``：走纯解释器路径。实测（2026-09 平台接入冒烟）
+    UNO 的编译快路径在 ``draw_result`` 等阶段即与解释器分叉（compiled=1
+    vs interp=2 合法动作），并会在牌堆耗尽后返回 0 合法动作导致对局卡死
+    ——正是审查报告 P2-6~10 编译/解释器静默分叉组的现实表现。引擎测试
+    （tests/test_layer2_engine/test_uno.py，37 例）全部走解释器路径，
+    故平台同样固定解释器（正确性优先；见该测试文件头部说明）。
+    """
+
+    def _create(seed: int, player_count: int = 4) -> GameEngine:
+        return engine_from_rules("uno", seed, variant=variant, player_count=player_count, allow_codegen=False)
+
+    return _create
+
+
+def _make_uno_solver(game_id: str) -> Callable[[SolverProvider, GameEngine, int, int], SolverHandle]:
+    """UNO 手牌部分可观测 → 与德州同样的不完全信息 Hybrid 求解器
+    （train-cli 注册表 runtime_configs 注入 ``imperfect_information=True``）。
+
+    交互节奏调优（PRD §4.3.2：AI 思考 ≤1s/5s/15s）：UNO 引擎对内联
+    ``hand_of`` switch 自动回退纯解释器（设计内行为），单步求值昂贵——
+    平台运行时默认的 CFR 1000×depth8 + 大预算会让单次决策达 ~3.5s、
+    三 AI 座位轮转不可交互。此处显式传入轻量搜索参数（kwargs 覆盖
+    runtime 默认）：budget 25/50/100 实测 ≈0.5s/1.3s/2.6s 每次决策。
+    """
+
+    def _create(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
+        return provider.create_solver(
+            game_id,
+            "hybrid",
+            engine,
+            seed,
+            budget,
+            cfr_iterations=100,
+            cfr_depth_limit=4,
+        )
+
+    return _create
+
+
+def _uno_resolve_start(session: GameSession) -> None:
+    """发牌与翻首张（chance 节点）直到进入 play 阶段。"""
+    while session.engine.get_node_type(session.state) == "chance":
+        _, session.state = session.engine.sample_chance(session.state)
+
+
+def _uno_parse_human_action(session: GameSession, payload: dict) -> ActionInstance:
+    """匹配合法动作：按 template_id + 可选 card/color/target 参数。
+
+    UNO 动作形态：``play``/``play_wild``（带 card，wild 另带 color）、
+    ``play7``（带 target，seven_zero）、``draw``/``pick``/``pass``、
+    ``play_drawn``、``jump_play``/``jump_pass``、``stack2``/``stack4``/
+    ``take_penalty``。所有参数都从 ``ActionInstance.params`` 取，匹配策略
+    与麻将一致（payload 缺省的键不参与比对）。
+    """
+    if session.over:
+        raise PlayError("本局已结束")
+    if session.current_player != session.player_pid:
+        raise PlayError("还没轮到你")
+    action_type = payload.get("type")
+    for action in session.engine.get_legal_actions(session.state):
+        if action.template_id != action_type:
+            continue
+        matched = True
+        for key in ("card", "color", "target"):
+            if key in payload and action.params.get(key) != payload[key]:
+                matched = False
+        if matched:
+            return action
+    raise PlayError(f"非法动作: {action_type} {payload}")
+
+
+def _uno_apply_human(session: GameSession, action: ActionInstance) -> None:
+    session.state = session.engine.apply_action(session.state, action)
+    while session.engine.get_node_type(session.state) == "chance":
+        _, session.state = session.engine.sample_chance(session.state)
+
+
+def _uno_run_ai(session: GameSession, on_ai_action: Callable[[ActionInstance], None] | None = None) -> None:
+    """驱动所有非人类座位（4 人局：p1/p2/p3 三个 AI 座位）的摸/出/罚牌轮转。"""
+    while not session.over and session.current_player is not None and session.current_player != session.player_pid:
+        action = session.solver.select_action(session.state)
+        if action is None:  # 搜索无果 — 随机兜底
+            legal = session.engine.get_legal_actions(session.state)
+            action = random.choice(legal) if legal else None
+        if action is None:
+            break
+        session.state = session.engine.apply_action(session.state, action)
+        while session.engine.get_node_type(session.state) == "chance":
+            _, session.state = session.engine.sample_chance(session.state)
+        session.last_ai_info["action"] = action.canonical_key
+        if on_ai_action is not None:
+            on_ai_action(action)
+
+
+def _uno_snapshot(session: GameSession) -> dict:
+    """UNO 公开视图：本人手牌、各座张数、台面顶牌、方向、罚牌、合法动作。
+
+    隐藏信息红线：他人手牌只暴露张数（``hand_counts``），牌面永不公开；
+    ``ai_hand`` 仅终局展示（与德州 ``ai_hole`` 同门）。``env.handsSnapshot``
+    是 7-0 换手 scratch 字段，已由规则 visibility 隐藏 + 轮转后清空（P1-3），
+    此处亦不读取。
+    """
+    env = session.state["env"]
+    arrs = session.state["_arrays"]
+    seats = session.spec.seat_options
+    over = session.over
+
+    def _hand(pid: str) -> list:
+        return list(arrs.get(f"hand_{pid}", []))
+
+    legal: list[dict] = []
+    if not over and session.current_player == session.player_pid:
+        for action in session.engine.get_legal_actions(session.state):
+            legal.append({"type": action.template_id, **action.params})
+
+    discard = list(arrs.get("discard", []))
+    # 牌堆剩余 = 总牌数 − 各家手牌 − 弃牌堆（108 张标准 UNO）。
+    total_cards = len(session.engine._constants.get("card_ids") or [])  # type: ignore[attr-defined]
+    in_play = sum(len(_hand(pid)) for pid in seats) + len(discard)
+    deck_count = max(0, total_cards - in_play)
+
+    return {
+        "game_id": session.game_id,
+        "player_pid": session.player_pid,
+        "ai_pid": session.ai_pid,
+        "difficulty": session.difficulty,
+        "over": over,
+        "winner": session.winner,
+        "turn": session.current_player,
+        "phase": env.get("phase"),
+        "direction": int(env.get("direction", 1)),
+        "top_color": env.get("topColor"),
+        "top_symbol": env.get("topSymbol"),
+        "my_hand": _hand(session.player_pid),
+        "ai_hand": _hand(session.ai_pid) if over else [],
+        "hand_counts": {pid: len(_hand(pid)) for pid in seats},
+        "discard_top": discard[-1] if discard else None,
+        "discard_recent": discard[-5:],
+        "deck_count": deck_count,
+        "pending_draw": int(env.get("pendingDraw", 0)),
+        "penalty_target": env.get("penaltyTarget"),
+        "last_action": env.get("lastActor"),
+        "last_ai_action": session.last_ai_info.get("action"),
+        "legal": legal,
+        "payoff": session.engine.get_utility(session.state, session.player_pid) if over else None,
+    }
+
+
+def _uno_describe_action(action: ActionInstance) -> str:
+    return action.canonical_key
+
+
+def _uno_ai_opens(session: GameSession) -> bool:
+    """首张特殊牌会改写先手（skip→跳过下家、reverse→反转方向）：
+    发牌后只要当前行动者不是人类座位，AI 座位就先行。"""
+    return session.current_player != session.player_pid
+
+
+# 注意：平台注册表共 15 款 = 月亮棋/随机五子棋/德州 + 麻将六变种
+# （guangdong / hongzhong / blood / sichuan / changsha / taiwan，v5.2
+# variants）+ UNO 六变体。三个消费注册点必须同步，否则各自漂移（曾漏挂
+# 四川/长沙/台湾，导致文档承诺六变种但大厅只有三个）：
+#   - 平台：本文件（平台 /api/games → 大厅；UNO 已注册但前端
+#     FAMILY_BOARDS 尚无 "uno" 条目——LobbyPage 对 uno 族卡片置灰标注
+#     「前端界面开发中」，BattlePage 有占位守卫防崩溃）
 #   - 训练：train-cli/games.py `_mahjong_spec`（六变体 × MARL 管线）
 #   - 文档：docs/user/play_mahjong.md（六变体 × 默认 4 人）
 GAMES: dict[str, GameSpec] = {
@@ -711,5 +885,129 @@ GAMES: dict[str, GameSpec] = {
         run_ai=_mahjong_run_ai,
         build_snapshot=_mahjong_snapshot,
         describe_action=_mahjong_describe_action,
+    ),
+    # ── UNO：六变体（与 train-cli/games.py `_uno_spec` 对齐；同一 uno.json
+    # 的 variants 声明选择，默认 4 人）。求解器与德州同为不完全信息 Hybrid。
+    # 三个消费注册点同步：平台（本文件）/ 训练（train-cli）/ 文档
+    # （docs/user/play_uno.md）。
+    "uno": GameSpec(
+        game_id="uno",
+        display_name="UNO（经典）",
+        description="四人经典 UNO：108 张牌，同色或同符号接牌，先清空手牌者胜。",
+        kind="uno",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(4,),
+        difficulty_budgets={"easy": 25, "normal": 50, "hard": 100},
+        create_engine=_make_uno_engine("classic"),
+        create_solver=_make_uno_solver("uno"),
+        resolve_start=_uno_resolve_start,
+        ai_opens=_uno_ai_opens,
+        parse_human_action=_uno_parse_human_action,
+        apply_human=_uno_apply_human,
+        run_ai=_uno_run_ai,
+        build_snapshot=_uno_snapshot,
+        describe_action=_uno_describe_action,
+    ),
+    "uno_seven_zero": GameSpec(
+        game_id="uno_seven_zero",
+        display_name="UNO 7-0（换手/移交）",
+        description="UNO 7-0 变体：打出 7 可与任一玩家换手，打出 0 全场手牌按方向移交。",
+        kind="uno",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(4,),
+        difficulty_budgets={"easy": 25, "normal": 50, "hard": 100},
+        create_engine=_make_uno_engine("seven_zero"),
+        create_solver=_make_uno_solver("uno_seven_zero"),
+        resolve_start=_uno_resolve_start,
+        ai_opens=_uno_ai_opens,
+        parse_human_action=_uno_parse_human_action,
+        apply_human=_uno_apply_human,
+        run_ai=_uno_run_ai,
+        build_snapshot=_uno_snapshot,
+        describe_action=_uno_describe_action,
+    ),
+    "uno_jump_in": GameSpec(
+        game_id="uno_jump_in",
+        display_name="UNO 抢牌",
+        description="UNO 抢牌变体：他人出牌后，持同色同数字牌者可抢出（jump-in）。",
+        kind="uno",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(4,),
+        difficulty_budgets={"easy": 25, "normal": 50, "hard": 100},
+        create_engine=_make_uno_engine("jump_in"),
+        create_solver=_make_uno_solver("uno_jump_in"),
+        resolve_start=_uno_resolve_start,
+        ai_opens=_uno_ai_opens,
+        parse_human_action=_uno_parse_human_action,
+        apply_human=_uno_apply_human,
+        run_ai=_uno_run_ai,
+        build_snapshot=_uno_snapshot,
+        describe_action=_uno_describe_action,
+    ),
+    "uno_stacking": GameSpec(
+        game_id="uno_stacking",
+        display_name="UNO +2 叠加",
+        description="UNO 叠加变体：+2/+4 可被下一家继续叠加，累计罚牌由无力叠加者全部吃下。",
+        kind="uno",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(4,),
+        difficulty_budgets={"easy": 25, "normal": 50, "hard": 100},
+        create_engine=_make_uno_engine("stacking"),
+        create_solver=_make_uno_solver("uno_stacking"),
+        resolve_start=_uno_resolve_start,
+        ai_opens=_uno_ai_opens,
+        parse_human_action=_uno_parse_human_action,
+        apply_human=_uno_apply_human,
+        run_ai=_uno_run_ai,
+        build_snapshot=_uno_snapshot,
+        describe_action=_uno_describe_action,
+    ),
+    "uno_draw_until": GameSpec(
+        game_id="uno_draw_until",
+        display_name="UNO 摸到能打",
+        description="UNO 摸到能打变体：无牌可接时持续摸牌，直到摸到可打的牌（牌堆空则停）。",
+        kind="uno",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(4,),
+        difficulty_budgets={"easy": 25, "normal": 50, "hard": 100},
+        create_engine=_make_uno_engine("draw_until"),
+        create_solver=_make_uno_solver("uno_draw_until"),
+        resolve_start=_uno_resolve_start,
+        ai_opens=_uno_ai_opens,
+        parse_human_action=_uno_parse_human_action,
+        apply_human=_uno_apply_human,
+        run_ai=_uno_run_ai,
+        build_snapshot=_uno_snapshot,
+        describe_action=_uno_describe_action,
+    ),
+    "uno_strict_wild4": GameSpec(
+        game_id="uno_strict_wild4",
+        display_name="UNO 严格+4",
+        description="UNO 严格+4 变体：仍有台面颜色可接时禁止出 +4，违规质疑成立罚 4 张。",
+        kind="uno",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(4,),
+        difficulty_budgets={"easy": 25, "normal": 50, "hard": 100},
+        create_engine=_make_uno_engine("strict_wild4"),
+        create_solver=_make_uno_solver("uno_strict_wild4"),
+        resolve_start=_uno_resolve_start,
+        ai_opens=_uno_ai_opens,
+        parse_human_action=_uno_parse_human_action,
+        apply_human=_uno_apply_human,
+        run_ai=_uno_run_ai,
+        build_snapshot=_uno_snapshot,
+        describe_action=_uno_describe_action,
     ),
 }

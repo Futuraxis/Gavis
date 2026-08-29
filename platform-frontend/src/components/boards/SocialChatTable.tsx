@@ -156,6 +156,9 @@ export default function SocialChatTable({ snapshot, interactive, onMove }: Props
             <span className="social-my-role">
               你的身份：{ROLE_LABELS[snapshot.my_role ?? ''] ?? snapshot.my_role ?? '未知'}
             </span>
+            {snapshot.my_word && (
+              <span className="social-my-role">你的词：{snapshot.my_word}</span>
+            )}
             <span className="social-ai-mode">
               AI 模式：{snapshot.ai_mode === 'ollama' ? '本地大模型' : '随机策略'}
             </span>

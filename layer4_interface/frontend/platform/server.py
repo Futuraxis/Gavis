@@ -42,6 +42,35 @@ PORT = 8770
 #: 聊天编排共享的统一 LLM 客户端（懒加载单例；不可用时自动走正则兜底）。
 _CHAT_LLM: LLMClient | None = None
 
+#: dist 未构建时的浏览器引导页（503）：三步自救，替代裸 JSON 报错。
+_DIST_MISSING_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gavis 平台 · 前端未构建</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0;
+         max-width: 640px; margin: 12vh auto; padding: 0 24px; line-height: 1.7; }
+  h1 { font-size: 22px; } code { background: #1e293b; padding: 2px 8px; border-radius: 6px;
+         color: #7dd3fc; font-size: 14px; }
+  ol li { margin: 10px 0; } .muted { color: #94a3b8; font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>⚡ 前端尚未构建</h1>
+<p>平台服务已在运行，但 <code>platform-frontend/dist/</code> 不存在。在项目根目录依次执行：</p>
+<ol>
+  <li><code>cd platform-frontend</code></li>
+  <li><code>npm install</code>（首次需要，需已安装 Node.js）</li>
+  <li><code>npm run build</code></li>
+</ol>
+<p>构建完成后<a href="/">刷新本页</a>即可进入平台。</p>
+<p class="muted">提示：API（/api/*）不受影响；开发模式可改用 <code>npm run dev</code>（5173 端口，/api 自动代理到本服务）。</p>
+</body>
+</html>
+"""
+
 
 def _get_chat_llm() -> LLMClient | None:
     global _CHAT_LLM
@@ -72,24 +101,28 @@ def make_handler(
             super().__init__(*args, directory=str(dist_dir), **kwargs)
 
         # ── CORS ──────────────────────────────────────────────────
-        # 决策记录（审计 3.6，2026-08-13）：本服务定位为**本机开发工具**
-        # （默认绑定 127.0.0.1），因此 CORS 保持通配且不引入认证。对外网
-        # /局域网暴露前必须先收紧 CORS 到同源并加鉴权（见
-        # docs/design/security-notes.md）。
+        # 决策更新（审计 3.6 修复，2026-08）：CORS 通配已移除——本服务默认
+        # 同源（Python 托管 dist，页面与 /api 同源；开发模式经 Vite
+        # proxy 转发也不跨域）。通配 ACAO 曾允许本机浏览器里任意网页跨域
+        # 读取对局史/画像并触发写操作。LAN 访问（--host 0.0.0.0）下页面
+        # 仍由本服务托管，同源成立。跨域消费方不存在（前端仅两种模式）。
+        # 对外网暴露前仍需加鉴权（见 docs/design/security-notes.md）。
 
-        def _send_cors_headers(self) -> None:
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-
-        # CORS 只由 end_headers 统一发出一遍（审查 P2：双重 CORS 头移除）
         def end_headers(self) -> None:
-            self._send_cors_headers()
-            super().end_headers()
+            super().end_headers()  # 不再发任何 CORS 头：默认同源策略生效
 
         def do_OPTIONS(self) -> None:
             self.send_response(HTTPStatus.NO_CONTENT)
             self.end_headers()
+
+        def _send_dist_missing(self) -> None:
+            """dist 未构建：给浏览器一页可读的自救指引（而非裸 JSON）。"""
+            payload = _DIST_MISSING_HTML.encode("utf-8")
+            self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
 
         # ── Routing ───────────────────────────────────────────────
 
@@ -124,14 +157,7 @@ def make_handler(
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
                 else:
                     if not dist_dir.is_dir():
-                        send_json(
-                            self,
-                            HTTPStatus.SERVICE_UNAVAILABLE,
-                            {
-                                "ok": False,
-                                "error": "前端未构建，请先运行: cd platform-frontend && npm run build",
-                            },
-                        )
+                        self._send_dist_missing()
                         return
                     super().do_GET()
             except (PlayError, HistoryError, CustomGameError) as exc:
@@ -142,14 +168,7 @@ def make_handler(
                 self.log_error("internal error: %s", exc)
                 send_error_json(self, HTTPStatus.INTERNAL_SERVER_ERROR, "服务器内部错误")
                 if not dist_dir.is_dir():
-                    send_json(
-                        self,
-                        HTTPStatus.SERVICE_UNAVAILABLE,
-                        {
-                            "ok": False,
-                            "error": "前端未构建，请先运行: cd platform-frontend && npm run build",
-                        },
-                    )
+                    self._send_dist_missing()
                     return
                 super().do_GET()
 

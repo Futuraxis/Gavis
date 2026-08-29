@@ -38,9 +38,9 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Callable
 
 from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.llm import LLMClient
 from layer2_engine.core.state_graph import ActionInstance
 
-from layer2_engine.core.llm import LLMClient
 from ....solver_provider import SolverHandle, SolverProvider
 from ..games import GameSpec, PlayError
 from .helpers import (
@@ -259,6 +259,15 @@ def _build_snapshot(session: GameSession) -> dict:
     if my_role is not None:
         my_role = str(my_role)
 
+    # my_word: 投影 ``my_word`` 视图（谁是卧底的词表；狼人杀无此视图 → None）。
+    # 没有词，拿到"平民"也无从描述——卧底玩法的最低可玩信息。
+    my_word: str | None = None
+    word_rows = _view_rows(obs, "my_word")
+    if word_rows and isinstance(word_rows[0], dict):
+        word = word_rows[0].get("word")
+        if word is not None:
+            my_word = str(word)
+
     # alive: 投影 ``alive`` 视图（数组值公开）→ 存活玩家 id（回到座位序）。
     alive: list[str] = []
     for row in _view_rows(obs, "alive"):
@@ -300,6 +309,19 @@ def _build_snapshot(session: GameSession) -> dict:
     assembly = _assembly_of(session)
     ai_mode = assembly.mode if assembly is not None else session.last_ai_info.get("ai_mode", "random")
 
+    phase = obs_env.get("phase", env.get("phase"))
+
+    # turn 脱敏（公平性红线）：夜晚/发牌/猎人开枪等私密阶段，非本人回合的
+    # 行动者身份不得暴露（夜间当前行动者 = 狼人/预言家/女巫——前端高亮
+    # 该座位等于官方外挂）。白天发言/投票的顺序是公开信息，照常透出；
+    # 本人回合保留（前端 myTurn 依赖 turn === player_pid）。
+    turn = session.current_player
+    secret_phase = isinstance(phase, str) and (
+        phase.startswith("night") or phase.startswith("deal") or phase == "vote_hunter"
+    )
+    if turn is not None and turn != session.player_pid and secret_phase:
+        turn = None
+
     return {
         "family": "social",
         "game_id": session.game_id,
@@ -307,9 +329,10 @@ def _build_snapshot(session: GameSession) -> dict:
         "difficulty": session.difficulty,
         "over": over,
         "winner": session.winner,
-        "turn": session.current_player,
-        "phase": obs_env.get("phase", env.get("phase")),
+        "turn": turn,
+        "phase": phase,
         "my_role": my_role,
+        "my_word": my_word,
         "alive": alive,
         "discourse": discourse,
         "last_action": obs_env.get("last_action"),

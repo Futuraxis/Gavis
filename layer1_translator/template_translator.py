@@ -119,6 +119,8 @@ class TemplateTranslator:
         if parsed.game_id == "texas_holdem":
             self._apply_texas_holdem_params(rules, parsed.parameters)
             return []
+        if parsed.game_id == "uno":
+            return self._apply_uno_params(rules, parsed.parameters)
         return []
 
     @staticmethod
@@ -136,20 +138,32 @@ class TemplateTranslator:
 
     @staticmethod
     def _apply_mahjong_params(rules: dict[str, Any], params: dict[str, Any]) -> list[str]:
-        constants = rules.setdefault("constants", {})
-        if "variant" in params:
-            constants["variant"] = params["variant"]
+        """Apply mahjong ``variant`` / ``player_count`` to the declarative variants spec.
+
+        与 VariantTranslator._apply_mahjong_params 同实现（T1 修复：旧版
+        写 constants 无运行时效果 —— 引擎 _resolve_variants 覆写
+        constants.variant/player_count，"红中麻将 2人" 实际仍跑 guangdong/4人）。
+        只改 ``rules["variants"]`` 规约默认值，人数裁剪由规约的
+        player_ids map / trim_players / trim_utility 表达。
+        """
+        spec = rules.setdefault("variants", {})
+        warnings: list[str] = []
+        options = spec.get("options", {}) or {}
+        variant = params.get("variant")
+        if variant is not None:
+            if variant in options:
+                spec["variant"] = variant
+            else:
+                warnings.append(
+                    f"麻将变体 {variant!r} 未声明（可选 {sorted(options)}），已保留默认 {spec.get('variant')!r}"
+                )
         player_count = params.get("player_count")
-        if player_count is None:
-            return []
-        if player_count not in (2, 4):
-            return [f"麻将模板仅支持 2 或 4 人，已保留默认 player_count={constants.get('player_count')}"]
-        constants["player_count"] = player_count
-        constants["player_ids"] = [f"p{i}" for i in range(player_count)]
-        constants["deal_target"] = 13 * player_count + 1
-        rules["players"] = constants["player_ids"]
-        rules["utility"] = [u for u in rules.get("utility", []) if u.get("player") in constants["player_ids"]]
-        return []
+        if player_count is not None:
+            if player_count in (2, 4):
+                spec["player_count"] = player_count
+            else:
+                warnings.append(f"麻将模板仅支持 2 或 4 人，已保留默认 player_count={spec.get('player_count')}")
+        return warnings
 
     @staticmethod
     def _apply_werewolf_params(rules: dict[str, Any], params: dict[str, Any]) -> list[str]:
@@ -211,6 +225,33 @@ class TemplateTranslator:
             if stack_size not in grid:
                 grid.append(stack_size)
             constants["raise_grid"] = sorted(set(grid))
+
+    @staticmethod
+    def _apply_uno_params(rules: dict[str, Any], params: dict[str, Any]) -> list[str]:
+        """Apply UNO ``variant`` / ``player_count`` to the declarative variants spec.
+
+        与 VariantTranslator._apply_uno_params 同实现（P1-5：此前无 uno 分支，
+        解析出的变体/人数被静默丢弃）。UNO 是声明式变体游戏，引擎构造期纯数据
+        解析，故只改 ``rules["variants"]`` 规约默认值，不做 constants 注入。
+        """
+        spec = rules.setdefault("variants", {})
+        warnings: list[str] = []
+        options = spec.get("options", {}) or {}
+        variant = params.get("variant")
+        if variant is not None:
+            if variant in options:
+                spec["variant"] = variant
+            else:
+                warnings.append(
+                    f"UNO 变体 {variant!r} 未声明（可选 {sorted(options)}），已保留默认 {spec.get('variant')!r}"
+                )
+        player_count = params.get("player_count")
+        if player_count is not None:
+            if isinstance(player_count, int) and 2 <= player_count <= 10:
+                spec["player_count"] = player_count
+            else:
+                warnings.append(f"UNO 仅支持 2-10 人，已保留默认 player_count={spec.get('player_count')}")
+        return warnings
 
     def _validate(self, rules: dict[str, Any]) -> ValidationResult:
         if self.run_engine_validation:

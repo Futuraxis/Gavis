@@ -257,9 +257,15 @@ class TestRecordingHandle:
 
 
 class StubLearning:
-    def __init__(self, store: LearningStore) -> None:
+    def __init__(self, store: LearningStore, enabled_games: set[str] | None = None) -> None:
         self.store = store
         self.requests: list[str] = []
+        self._enabled_games = enabled_games
+
+    def enabled(self, game_id: str) -> bool:
+        # PlayManager 捕获门控（审计 B5）：enabled=False 的游戏不再包装
+        # RecordingHandle——开关同时控制捕获与 apply。
+        return self._enabled_games is None or game_id in self._enabled_games
 
     def wrap_handle(self, session, solver):
         self.requests.append(f"wrap:{session.game_id}")
@@ -324,6 +330,23 @@ class TestPlayManagerHooks:
         manager.move(session.game_id, {"cell_index": 0})
         assert session.recorder is None
 
+    def test_disabled_game_means_no_capture(self, store_dir: Path):
+        """审计 B5：UI 关闭学习后，新会话**不再采集**——旧实现只在 apply
+        阶段检查 enabled，捕获照常落盘（隐私盲区）。"""
+        store = LearningStore(store_dir / "online_learning")
+        learning = StubLearning(store, enabled_games=set())  # 全部关闭
+        manager = PlayManager(
+            provider=default_provider,
+            history=MatchHistory(store_dir / "matches"),
+            seed=42,
+            learning=learning,
+        )
+        session = manager.start("moon_chess", "p_black", "easy")
+        assert session.recorder is None, "关闭学习后不得再包装录制器"
+        assert learning.requests == [], "关闭学习后不得触发 wrap_handle"
+        manager.move(session.game_id, {"cell_index": 0})
+        assert store.read_matches("moon_chess") == [], "关闭学习后不得落盘轨迹"
+
     def test_texas_holdem_captures_info_keys_and_ai_loop(self, store_dir: Path, learning_manager):
         learning, store = learning_manager
         manager = PlayManager(
@@ -341,6 +364,12 @@ class TestPlayManagerHooks:
         human = [d for d in matches[0]["decisions"] if d["actor"] == "human"]
         assert human and human[0]["info_key"] is not None
         assert human[0]["legal"], "legal set must be captured"
+        # 审计 B7：落盘的 state 必须是决策者自己的信息集投影（视图行），
+        # 不得再是含 ``_arrays`` 的 god-view 全量（旧实现会把对手底牌明文
+        # 写进 trajectories.jsonl）。
+        for d in matches[0]["decisions"]:
+            assert "_arrays" not in d["state"], "轨迹不得落盘 god-view 全量状态"
+            assert isinstance(d["state"], dict) and d["state"], "投影观测应为非空视图字典"
 
 
 # ── Signal conversion ─────────────────────────────────────────────────

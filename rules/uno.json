@@ -2633,6 +2633,13 @@
                   ]
                 },
                 {
+                  "op": "setEnv",
+                  "key": "handsSnapshot",
+                  "value": {
+                    "const": []
+                  }
+                },
+                {
                   "op": "branch",
                   "if": {
                     "var": "$advance"
@@ -2813,6 +2820,13 @@
                         "const": 0
                       }
                     ]
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "handsSnapshot",
+                  "value": {
+                    "const": []
                   }
                 },
                 {
@@ -4760,7 +4774,14 @@
           "id": "hidden"
         }
       }
-    ]
+    ],
+    "env": {
+      "handsSnapshot": {
+        "filter": {
+          "const": false
+        }
+      }
+    }
   },
   "terminal": [
     {

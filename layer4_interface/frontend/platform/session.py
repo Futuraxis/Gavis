@@ -39,6 +39,13 @@ _BUILTIN_FAMILY: dict[str, str] = {
     "mahjong_sichuan": "mahjong",
     "mahjong_changsha": "mahjong",
     "mahjong_taiwan": "mahjong",
+    # UNO 六变体（P1-4/P1-6 接入）：前端 FAMILY_BOARDS["uno"] 分发。
+    "uno": "uno",
+    "uno_seven_zero": "uno",
+    "uno_jump_in": "uno",
+    "uno_stacking": "uno",
+    "uno_draw_until": "uno",
+    "uno_strict_wild4": "uno",
 }
 
 
@@ -73,6 +80,9 @@ class GameSession:
     pending_chat: list[dict] = field(default_factory=list)  # 待投递的聊天增量
     custom: bool = field(default=False)  # 自定义游戏（platform/custom_games.py 注册表条目）
     family: str | None = field(default=None)  # 规则族（grid/poker/mahjong/social）
+    #: 本局实际使用的随机种子（PlayManager 按 base+开局序号派生——首局等于
+    #: base seed 保持既有测试确定性，第二局起牌墙不同，「再来一局」不再同牌）。
+    seed: int = 42
 
     def __post_init__(self) -> None:
         self.state = self.engine.create_initial_state()
@@ -88,6 +98,12 @@ class GameSession:
     @property
     def winner(self) -> str | None:
         return self.state["env"].get("winner")
+
+    @property
+    def winners(self) -> list[str]:
+        """所有胡/胜玩家（血战等多胡局承载；普通局与 ``winner`` 一致或为空）。"""
+        value = self.state["env"].get("winners")
+        return list(value) if isinstance(value, list) else []
 
     @property
     def current_player(self) -> str | None:
@@ -183,6 +199,8 @@ class PlayManager:
         self._custom = custom
         self._sessions: dict[str, GameSession] = {}
         self._lock = threading.Lock()
+        # 开局序号：每局 seed = base + 序号（首局 = base，与旧行为一致）。
+        self._start_count = 0
 
     @property
     def provider(self) -> SolverProvider:
@@ -246,11 +264,15 @@ class PlayManager:
         budget = self._pick_budget(spec, difficulty, pacing, adaptive_enabled)
 
         session_id = uuid.uuid4().hex[:8]
+        # 每局派生新种子（base + 开局序号）：首局等于 base seed（既有测试
+        # 的确定性不变），第二局起发牌不同——修复「再来一局永远同牌」。
+        seed = self._seed + self._start_count
+        self._start_count += 1
         if spec.player_counts != (2,):
-            engine = spec.create_engine(self._seed, player_count=player_count)
+            engine = spec.create_engine(seed, player_count=player_count)
         else:
-            engine = spec.create_engine(self._seed)
-        solver = spec.create_solver(self._provider, engine, self._seed, budget)
+            engine = spec.create_engine(seed)
+        solver = spec.create_solver(self._provider, engine, seed, budget)
         session = GameSession(
             game_id=session_id,
             spec=spec,
@@ -264,11 +286,14 @@ class PlayManager:
             agent=self._agent_factory(persona_key) if self._agent_factory is not None else None,
             custom=is_custom,
             family=family,
+            seed=seed,
         )
-        if self._learning is not None:
+        if self._learning is not None and self._learning.enabled(spec.game_id):
             # Wrap the solver in a recording handle and attach a
             # per-match recorder; every AI decision (incl. multi-action
             # loops) is captured with zero GameSpec changes.
+            # 门控（隐私红线）：enabled=False 的新会话**不再采集**——开关
+            # 同时控制捕获与 apply，而不是只停发布。
             session.solver = self._learning.wrap_handle(session, session.solver)
         spec.resolve_start(session)
         if spec.ai_opens(session):
@@ -443,7 +468,8 @@ class PlayManager:
             profile["recent"] = recent
         tally = recent.setdefault(session.spec.game_id, {"wins": 0, "plays": 0})
         tally["plays"] = int(tally.get("plays", 0)) + 1
-        if session.winner == session.player_pid:
+        # 多胡局（血战等）无单一 winner：人类在 winners 中即计胜。
+        if session.winner == session.player_pid or session.player_pid in session.winners:
             tally["wins"] = int(tally.get("wins", 0)) + 1
         self._profiles.save(profile)
 
@@ -455,10 +481,11 @@ class PlayManager:
             "player_pid": session.player_pid,
             "ai_pid": session.ai_pid,
             "difficulty": session.difficulty,
-            "seed": self._seed,
+            "seed": session.seed,
             "started_at": session.started_at,
             "finished_at": _now_iso(),
             "winner": session.winner,
+            "winners": session.winners,
             "over": True,
             "persona": session.persona,
             "hinted": session.hinted,

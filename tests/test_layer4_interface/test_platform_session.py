@@ -150,6 +150,20 @@ class TestTexasHoldem:
         matches = manager._history.list_matches()  # type: ignore[union-attr]
         assert [m["match_id"] for m in matches] == [session.game_id]
 
+    def test_fold_does_not_leak_ai_hand_name(self, manager: PlayManager):
+        """P1-2 回归：弃牌局（over=True、revealed=False）不得泄露 AI 牌型类别。
+
+        修复前 ``ai_hand_name`` 以 ``over`` 为门，弃牌时仍据 AI 隐藏底牌+公共牌
+        计算并返回（暴露口袋对/成牌类别），击穿 reveal-gate 红线。修复后以
+        ``revealed``（= over 且 last_action=="showdown"）为门。
+        """
+        session = manager.start("texas_holdem", "p_sb", "easy")
+        snapshot = manager.move(session.game_id, {"choice": "fold"})
+        assert snapshot["over"] is True
+        assert snapshot["revealed"] is False
+        assert snapshot["ai_hole"] == []  # 原始底牌已 withheld（本来就对）
+        assert snapshot["ai_hand_name"] is None  # 牌型类别也必须 withheld（P1-2 修复）
+
     def test_replay_log_shape(self, manager: PlayManager):
         session = manager.start("moon_chess", "p_black", "easy")
         manager.move(session.game_id, {"cell_index": 0})
@@ -166,6 +180,11 @@ class TestTexasHoldem:
 
 class TestGameSpecRegistry:
     def test_all_games_present(self):
+        # 15 款 = 月亮棋/随机五子棋/德州 + 麻将六变种 + UNO 六变体
+        # （uno 基类 + seven_zero/jump_in/stacking/draw_until/strict_wild4）。
+        # UNO 前端 FAMILY_BOARDS 尚无 "uno" 条目：大厅对 uno 族置灰标注
+        # 「前端界面开发中」，后端契约先按 15 款锁定（与
+        # test_platform_server.py::TestGames::test_list_games 同步维护）。
         assert set(GAMES) == {
             "moon_chess",
             "stochastic_gomoku",
@@ -176,6 +195,12 @@ class TestGameSpecRegistry:
             "mahjong_sichuan",
             "mahjong_changsha",
             "mahjong_taiwan",
+            "uno",
+            "uno_seven_zero",
+            "uno_jump_in",
+            "uno_stacking",
+            "uno_draw_until",
+            "uno_strict_wild4",
         }
 
     def test_seat_options_consistent(self):
@@ -289,3 +314,117 @@ class TestMahjong:
             manager.move(session.game_id, action)
             guard += 1
         assert session.over or guard >= 300
+
+
+# ── UNO（P1-4/P1-6 平台接入）─────────────────────────────────────────
+
+
+class TestUno:
+    def test_start_and_snapshot_shape(self, manager: PlayManager):
+        """开局快照：4 手各 7 张、family=uno、牌堆守恒、隐藏信息红线。"""
+        session = manager.start("uno", "p0", "easy")
+        snap = session.snapshot()
+        assert snap["family"] == "uno"
+        assert snap["over"] is False
+        assert snap["direction"] in (1, -1)
+        # 起手各 7 张；首张特殊牌可能改写先手 → AI 座位开局即行动（打出/摸牌）。
+        assert snap["hand_counts"]["p0"] == 7
+        assert all(1 <= c <= 8 for c in snap["hand_counts"].values())
+        assert len(snap["my_hand"]) == 7
+        # 隐藏信息红线：他人手牌只暴露张数；AI 手牌终局前不可见。
+        assert snap["ai_hand"] == []
+        # 换手 scratch 字段不得进入快照（P1-3 双保险）。
+        assert "handsSnapshot" not in snap
+        # 牌堆守恒：108 = 4×7 手牌 + ≥1 弃牌 + 牌堆（首张翻牌可能有后续效果）。
+        assert 0 < snap["deck_count"] <= 79
+
+    def test_move_applies_and_ai_replies(self, manager: PlayManager):
+        """人类出第一张合法牌后 AI 座位轮转行动，快照正常返回。"""
+        session = manager.start("uno", "p0", "easy")
+        guard = 0
+        moved = False
+        while not session.over and guard < 20:
+            snap = session.snapshot()
+            if snap["turn"] == "p0" and snap["legal"]:
+                action = snap["legal"][0]
+                payload = {"type": action["type"]}
+                for key in ("card", "color", "target"):
+                    if key in action:
+                        payload[key] = action[key]
+                after = manager.move(session.game_id, payload)
+                moved = True
+                assert after["game_id"] == session.game_id
+                break
+            guard += 1
+        assert moved, "p0 必须在某步获得合法动作（发牌后轮转）"
+
+    def test_play_wild_requires_color_param(self, manager: PlayManager):
+        """万能牌动作带 color 参数（play_wild 枚举即具体色），前端照 payload 下发。"""
+        session = manager.start("uno", "p0", "easy")
+        guard = 0
+        while not session.over and guard < 40:
+            snap = session.snapshot()
+            wilds = [a for a in snap["legal"] if a.get("type") == "play_wild"]
+            if snap["turn"] == "p0" and wilds:
+                for w in wilds:
+                    assert w.get("color") in ("r", "b", "g", "y"), "万能牌合法动作必须带具体 color"
+                break
+            if snap["turn"] == "p0" and snap["legal"]:
+                action = snap["legal"][0]
+                payload = {"type": action["type"]}
+                for key in ("card", "color", "target"):
+                    if key in action:
+                        payload[key] = action[key]
+                manager.move(session.game_id, payload)
+            guard += 1
+
+    def test_illegal_action_raises(self, manager: PlayManager):
+        session = manager.start("uno", "p0", "easy")
+        with pytest.raises(PlayError, match="还没轮到你|非法动作|本局已结束"):
+            manager.move(session.game_id, {"type": "play", "card": "not_a_card"})
+
+    def test_snapshot_carries_family_for_every_variant(self, manager: PlayManager):
+        """六个 UNO 变体的会话快照都必须携带 ``family == \"uno\"``（前端分发第一优先来源）。"""
+        for game_id in (
+            "uno",
+            "uno_seven_zero",
+            "uno_jump_in",
+            "uno_stacking",
+            "uno_draw_until",
+            "uno_strict_wild4",
+        ):
+            session = manager.start(game_id, "p0", "easy")
+            snap = session.snapshot()
+            assert snap["family"] == "uno", game_id
+            assert "board" not in snap, f"{game_id} 是非 grid 快照，不应含 board"
+
+    def test_engine_uses_interpreter_path(self, manager: PlayManager):
+        """UNO 引擎必须固定解释器路径（allow_codegen=False）。
+
+        编译快路径在 draw_result 等阶段与解释器分叉（compiled=1 vs interp=2），
+        并在牌堆耗尽后返回 0 合法动作导致对局卡死（2026-09 平台接入实测，
+        审查报告 P2-6~10 编译/解释器静默分叉组的现实表现）。
+        """
+        session = manager.start("uno", "p0", "easy")
+        assert session.engine._compiled is None  # noqa: SLF001 — 解释器路径守卫
+
+
+class TestSessionSeed:
+    """每局种子派生（审计 B2：固定 seed=42 → 「再来一局」永远同牌）。"""
+
+    def test_first_session_uses_base_seed(self, manager: PlayManager):
+        session = manager.start("mahjong_guangdong", "p0", "easy", player_count=4)
+        assert session.seed == 42, "首局必须等于 base seed（既有测试的确定性锚点）"
+
+    def test_second_session_deals_different_wall(self, manager: PlayManager):
+        first = manager.start("mahjong_guangdong", "p0", "easy", player_count=4)
+        second = manager.start("mahjong_guangdong", "p0", "easy", player_count=4)
+        assert second.seed == first.seed + 1
+        assert first.snapshot()["my_hand"] != second.snapshot()["my_hand"], "第二局必须换牌墙"
+
+    def test_record_persists_actual_seed(self, manager: PlayManager):
+        # 终局才落盘历史记录，这里直接检查记录构造器带上的实际种子。
+        first = manager.start("mahjong_guangdong", "p0", "easy", player_count=4)
+        second = manager.start("mahjong_guangdong", "p0", "easy", player_count=4)
+        assert manager._build_record(first)["seed"] == 42  # noqa: SLF001
+        assert manager._build_record(second)["seed"] == 43  # noqa: SLF001

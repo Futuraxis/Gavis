@@ -47,6 +47,7 @@ SOCIAL_CONTRACT_KEYS = frozenset(
         "turn",
         "phase",
         "my_role",
+        "my_word",
         "alive",
         "discourse",
         "last_action",
@@ -250,9 +251,16 @@ class TestUndercoverSession:
                 continue  # 同角色字符串以 my_role 合法出现
             assert role not in strings or role in public, f"他人角色泄露: {role}"
         for i, word in enumerate(words):
-            if i == index:
-                continue
+            if i == index or word == snap.get("my_word"):
+                continue  # 同词玩家（同队）与自己的词不构成泄露
             assert word not in strings, f"他人词卡泄露: {word}"
+
+    def test_my_word_projected(self, manager):
+        """审计 B12：卧底玩家必须能看到自己的词——没有词无从描述。"""
+        session = manager.start("undercover", "p0", "easy", player_count=8)
+        snap = session.snapshot()
+        words = list(session.state["_arrays"]["words"])
+        assert snap["my_word"] == words[0], "快照必须投影自己的词卡"
 
     def test_play_to_terminal_and_no_role_leak(self, manager):
         session = manager.start("undercover", "p0", "easy", player_count=8)
@@ -377,3 +385,63 @@ class TestWerewolfSmoke:
         assert after["ai_mode"] == "random"
         if after["over"]:
             assert after["winner"] is not None  # 终局胜方来自公开 env.winner
+        # 狼人杀没有词卡视图 → my_word 必须为 None（不误报）。
+        assert snap["my_word"] is None
+
+
+# ── 夜晚行动者脱敏（审计 B4：夜间 turn = 谁是狼/预言家/女巫的官方外挂）──
+
+
+class TestNightTurnMasking:
+    @staticmethod
+    def _start_alive(tmp_path, monkeypatch, seat: str):
+        """以指定座位开局；每个座位用全新 manager（首局 seed=42，角色表
+        不变），返回存活会话或 None（该座位首夜出局被 AI 驱动到终局）。"""
+        monkeypatch.setattr(LLMClient, "available", staticmethod(lambda: False))
+        registry = _registry(tmp_path, "werewolf")
+        manager = PlayManager(
+            provider=default_provider,
+            history=MatchHistory(tmp_path / "matches"),
+            seed=42,
+            custom=registry,
+        )
+        session = manager.start("werewolf", seat, "easy", player_count=9)
+        return session if not session.over else None
+
+    @pytest.fixture
+    def live_session(self, tmp_path, monkeypatch):
+        """一个存活到人类回合的狼人杀会话（seed 42 下 p0 村民首夜出局，
+        逐座尝试直到某座位存活——角色表对同一 seed 不变，确定性成立）。"""
+        for i in range(9):
+            session = self._start_alive(tmp_path, monkeypatch, f"p{i}")
+            if session is not None:
+                return session
+        pytest.fail("seed 42 下 9 个座位全部首夜出局——不可能，检查开局驱动")
+
+    @staticmethod
+    def _force_phase(session, phase: str, turn: str) -> dict:
+        session.state["env"]["phase"] = phase
+        session.state["env"]["turn"] = turn
+        return session.snapshot()
+
+    def test_night_phase_masks_other_actor(self, live_session):
+        other = "p8" if live_session.player_pid != "p8" else "p7"
+        snap = self._force_phase(live_session, "night_wolf", other)
+        assert snap["phase"] == "night_wolf"
+        assert snap["turn"] is None, "夜晚他人回合不得暴露行动者身份"
+
+    def test_night_phase_keeps_own_turn(self, live_session):
+        # 本人回合必须保留：前端 myTurn 判定依赖 turn === player_pid。
+        snap = self._force_phase(live_session, "night_seer", live_session.player_pid)
+        assert snap["turn"] == live_session.player_pid
+
+    def test_day_phase_keeps_public_turn(self, live_session):
+        # 白天发言/投票顺序是公开信息，照常透出。
+        snap = self._force_phase(live_session, "day_speech", "p5")
+        assert snap["turn"] == "p5"
+        snap = self._force_phase(live_session, "day_vote", "p5")
+        assert snap["turn"] == "p5"
+
+    def test_hunter_shot_masks_other_actor(self, live_session):
+        snap = self._force_phase(live_session, "vote_hunter", "p7")
+        assert snap["turn"] is None, "猎人开枪目标时机也是私密信息"
