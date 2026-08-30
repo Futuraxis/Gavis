@@ -10,17 +10,18 @@ needed to prove that the selected response is legal.
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from layer2_engine.core.engine import GameEngine
-from layer3_solvers.mcts.solver import MCTS, MCTSConfig
 
 SMALL_BLIND = 50
 BIG_BLIND = 100
 BOTZONE_TO_ENGINE = 50
+BOTZONE_LAYER3_BUDGET = 35
 FOLD = -1
 ALL_IN = -2
 CALL_OR_CHECK = 0
@@ -75,9 +76,10 @@ def decide_texas_holdem(payload: dict[str, Any]) -> tuple[int, str]:
     """Choose one strictly legal Botzone Texas Hold'em integer action."""
     request = parse_texas_holdem_request(payload)
     betting = reconstruct_betting_state(request)
-    action = _layer3_action(request, betting)
-    source = "layer3"
-    if action is None:
+    layer3 = _layer3_action(request, betting)
+    if layer3 is not None:
+        action, source = layer3
+    else:
         action = _heuristic_action(request, betting)
         source = "heuristic"
     legal = legal_responses(request, betting)
@@ -198,7 +200,7 @@ def legal_responses(request: TexasHoldemRequest, betting: BettingState) -> froze
     return frozenset(legal)
 
 
-def _layer3_action(request: TexasHoldemRequest, betting: BettingState) -> int | None:
+def _layer3_action(request: TexasHoldemRequest, betting: BettingState) -> tuple[int, str] | None:
     """Route Botzone heads-up Texas input through Gavis Layer 2 + Layer 3.
 
     The bundled Gavis rule is a heads-up abstraction.  For 6-player Botzone
@@ -210,11 +212,22 @@ def _layer3_action(request: TexasHoldemRequest, betting: BettingState) -> int | 
     try:
         engine = _texas_engine()
         state = _to_gavis_state(engine, request, betting)
-        solver = MCTS(engine, MCTSConfig(seed=request.hand + request.my_id, budget=35, rollout_depth=8, time_limit=0.25))
+        from train_cli import default_provider
+
+        solver = default_provider.create_solver(
+            "texas_holdem",
+            "hybrid",
+            engine,
+            seed=request.hand + request.my_id,
+            budget=_layer3_budget(),
+        )
         action = solver.select_action(state)
         if action is None:
             return None
-        return _to_botzone_response(action, request, betting)
+        response = _to_botzone_response(action, request, betting)
+        if response is None:
+            return None
+        return response, f"layer3:{solver.name}"
     except Exception:
         return None
 
@@ -225,6 +238,16 @@ def _texas_engine() -> GameEngine:
     with open(root / "rules" / "texas_holdem.json", encoding="utf-8") as f:
         rules = json.load(f)
     return GameEngine(rules, seed=0, allow_codegen=False)
+
+
+def _layer3_budget() -> int:
+    value = os.environ.get("GAVIS_BOTZONE_TEXAS_BUDGET")
+    if value is None:
+        return BOTZONE_LAYER3_BUDGET
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return BOTZONE_LAYER3_BUDGET
 
 
 def _to_gavis_state(engine: GameEngine, request: TexasHoldemRequest, betting: BettingState) -> dict[str, Any]:

@@ -56,6 +56,10 @@ def decide_mahjong_format(payload: dict[str, Any]) -> tuple[str, str]:
     layer3 = _decide_with_layer3(state, current)
     if layer3 is not None:
         response, debug = layer3
+        if response == "PASS" and code == "3" and len(current) >= 4:
+            fallback = _decide_public_request(state, current)
+            if fallback != "PASS":
+                return fallback, f"mahjong-international/layer3-fallback: {debug} -> {fallback}"
         return response, f"mahjong-international/layer3: {debug}"
 
     if code == "2" and len(current) >= 2:
