@@ -158,10 +158,17 @@ class MCTS(SolverBase):
                 path.append((None, node))
 
         # Simulation
-        value = self._rollout(state)
+        # 视角锚 = 路径最深 player 节点（chance 子节点在 _expand_* 中已
+        # 继承其视角），显式传给 _rollout 与 _backpropagate 共用，保证
+        # rollout 的价值视角与回传翻转锚永远一致。不从状态重新推导——
+        # root_player 读 env.lastActor/turn 的启发式对 chance 语义因游戏
+        # 而异（UNO 摸牌 chance 曾因 lastActor 缺失/陈旧导致价值归零或
+        # 视角错配）。
+        perspective = self._path_perspective(path)
+        value = self._rollout(state, perspective)
 
         # Backpropagation
-        self._backpropagate(path, value)
+        self._backpropagate(path, value, perspective)
 
     def _select_ucb1_key(self, node: MCTSNode) -> Optional[str]:
         best_key = None
@@ -276,7 +283,7 @@ class MCTS(SolverBase):
             return None
         return node.children.get(chosen.key), child_states[chosen.key]
 
-    def _rollout(self, state: dict) -> float:
+    def _rollout(self, state: dict, perspective: Optional[str] = None) -> float:
         sim_state = clone_state(state)
         terminal = False
         for _ in range(self.rollout_depth):
@@ -304,26 +311,24 @@ class MCTS(SolverBase):
                 terminal = True
                 break
 
+        # 价值视角：树内锚（路径最深 player 节点）优先；无树上下文
+        # （如 chance 根展开出 chance 子）才由 root_player 从状态兜底。
+        player = perspective if perspective is not None else root_player(state, self.engine)
+        if player is None:
+            return 0.0
         if terminal or self.engine.is_terminal(sim_state):
-            player = root_player(state, self.engine)
-            if player is None:
-                return 0.0
             return self.engine.get_utility(sim_state, player)
         # Non-terminal at depth limit: board games get the threat-gap
         # heuristic (clamped to ±0.5); everything else gets the neutral 0.
-        player = root_player(state, self.engine)
-        if player is None:
-            return 0.0
         return self._board_policy.leaf_value(sim_state, player)
 
-    def _backpropagate(self, path: list, value: float):
+    def _backpropagate(self, path: list, value: float, perspective: Optional[str] = None) -> None:
         # value 以“推演起点（路径最深玩家节点）”的视角表示；沿路径向上，
         # 只在玩家确实变化时翻转视角，因此不依赖“双人严格轮流”的假设。
-        perspective = None
-        for _key, node in reversed(path):
-            if node.node_type == "player" and node.player is not None:
-                perspective = node.player
-                break
+        # perspective 由 _iterate 传入（与 _rollout 共用同一锚，保证
+        # rollout 视角与翻转锚一致）；缺省时重新计算以兼容独立调用。
+        if perspective is None:
+            perspective = self._path_perspective(path)
         for _key, node in reversed(path):
             node.visits += 1
             if node.node_type == "player" and node.player is not None:
@@ -331,3 +336,17 @@ class MCTS(SolverBase):
                     value = -value
                     perspective = node.player
             node.total_value += value
+
+    @staticmethod
+    def _path_perspective(path: list) -> Optional[str]:
+        """路径最深 player 节点 = 价值视角锚（_rollout/_backpropagate 共用）。
+
+        chance 子节点在 ``_expand_player``/``_expand_chance`` 中继承父
+        player 节点的视角，因此锚对“动作后接 chance”的推演起点（UNO
+        摸牌、五子棋消子）同样成立，且不依赖 env.lastActor 这类规则层
+        约定字段。
+        """
+        for _key, node in reversed(path):
+            if node.node_type == "player" and node.player is not None:
+                return node.player
+        return None

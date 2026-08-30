@@ -24,14 +24,21 @@ class EngineValidator:
         self.seed = seed
 
     def validate(self, rules: dict[str, Any]) -> ValidationResult:
-        """Run schema validation plus a minimal engine smoke test."""
+        """Run schema validation plus an engine smoke test.
+
+        Smoke covers **every declared variant** (v5.5 variant-aware): a
+        rules JSON with a ``variants`` section is booted once per option
+        (plus the default selection) so a variant whose ``constants``
+        patch breaks construction or the initial transition is rejected
+        here rather than failing at runtime on the platform.
+        """
         schema_result = SchemaValidator.validate(rules)
         errors = list(schema_result.errors)
         warnings = list(schema_result.warnings)
         if errors:
             return ValidationResult(valid=False, errors=errors, warnings=warnings)
 
-        smoke = smoke_validate(rules, seed=self.seed)
+        smoke = smoke_validate(rules, seed=self.seed, variants="all")
         errors.extend(smoke.errors)
         warnings.extend(smoke.warnings)
         return ValidationResult(valid=len(errors) == 0, errors=errors, warnings=warnings)

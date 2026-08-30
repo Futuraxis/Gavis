@@ -52,12 +52,14 @@ export default function MessageBubble({ msg, games, busy, onStart, onCreated, on
     }
   }
 
-  const chips = msg.intent === 'clarify' ? ((params.chips ?? []) as string[]) : []
+  // clarify 追问选项与 chat 知识回答的“来一局”快捷 chips 复用同一组件。
+  const chips =
+    msg.intent === 'clarify' || msg.intent === 'chat' ? ((params.chips ?? []) as string[]) : []
 
   return (
     <div className={`chat-msg ${msg.role === 'player' ? 'chat-msg-player' : 'chat-msg-agent'}`}>
-      <div className="chat-bubble">
-        <div className="chat-bubble-text">{msg.text}</div>
+      <div className="chat-msg-bubble">
+        <div className="chat-msg-bubble-text">{msg.text}</div>
         {inlineCard()}
         {chips.length > 0 && <Chips chips={chips} disabled={busy} onPick={onChip} />}
       </div>

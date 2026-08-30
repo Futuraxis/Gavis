@@ -52,6 +52,7 @@ test('默认：viewMode=chat、无活跃对局（对话即一切为主）', () =
     const s = loadChatStore()
     assert.equal(s.viewMode, 'chat')
     assert.equal(s.activeGameId, null)
+    assert.equal(s.boardCollapsed, false)
   } finally {
     restore()
   }
@@ -76,6 +77,55 @@ test('viewMode 持久化：platform 写回后可恢复', () => {
     const s = loadChatStore()
     assert.equal(s.viewMode, 'platform')
     assert.equal(s.activeGameId, 'sess-9')
+  } finally {
+    restore()
+  }
+})
+
+test('boardCollapsed 持久化：收起界面写回后可恢复（专心对话的选择跨刷新保留）', () => {
+  const { restore } = installStubs()
+  try {
+    saveChatStore({ boardCollapsed: true })
+    assert.equal(loadChatStore().boardCollapsed, true)
+    // 只补丁指定字段：其它字段不受影响
+    saveChatStore({ activeGameId: 'sess-1' })
+    const s = loadChatStore()
+    assert.equal(s.boardCollapsed, true)
+    assert.equal(s.activeGameId, 'sess-1')
+  } finally {
+    restore()
+  }
+})
+
+test('boardCollapsed 容错：旧数据/非布尔值 → 视为未收起', () => {
+  const { restore } = installStubs()
+  try {
+    const ls = (globalThis as { localStorage: Storage }).localStorage
+    // 旧版本存储（无 boardCollapsed 字段）
+    ls.setItem('gavis.chat.v1', JSON.stringify({ viewMode: 'chat', activeGameId: 'sess-9' }))
+    assert.equal(loadChatStore().boardCollapsed, false)
+    // 非法类型同样回落 false
+    ls.setItem('gavis.chat.v1', JSON.stringify({ boardCollapsed: 'yes' }))
+    assert.equal(loadChatStore().boardCollapsed, false)
+  } finally {
+    restore()
+  }
+})
+
+test('conversationId 持久化：存档会话 id 写回后可恢复，旧数据/坏类型 → null', () => {
+  const { restore } = installStubs()
+  try {
+    saveChatStore({ conversationId: 'conv-abc123' })
+    assert.equal(loadChatStore().conversationId, 'conv-abc123')
+    // 只补丁指定字段：其它字段不受影响
+    assert.equal(loadChatStore().viewMode, 'chat')
+    // 旧版本存储（无 conversationId 字段）→ null（新开对话）
+    const ls = (globalThis as { localStorage: Storage }).localStorage
+    ls.setItem('gavis.chat.v1', JSON.stringify({ viewMode: 'chat' }))
+    assert.equal(loadChatStore().conversationId, null)
+    // 非字符串（数字等坏数据）→ null
+    ls.setItem('gavis.chat.v1', JSON.stringify({ conversationId: 42 }))
+    assert.equal(loadChatStore().conversationId, null)
   } finally {
     restore()
   }

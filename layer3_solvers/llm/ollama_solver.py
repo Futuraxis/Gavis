@@ -24,6 +24,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 from dataclasses import dataclass
@@ -35,6 +36,8 @@ from layer2_engine.core.state_graph import ActionInstance, State
 
 from ..base import SolverBase, SolverConfig, SolverMetrics
 from ..werewolf.belief import belief_obs
+
+logger = logging.getLogger(__name__)
 
 # 角色策略提示：每个身份一段简短行为指南（8B 模型的推理上限内的实用策略）。
 # 注意：guard 不在 ROLE_GUIDE 中 — 当前生成的 rules/werewolf.json 没有
@@ -60,6 +63,7 @@ SPEECH_PHASES = ("day_speech",)
 # 意图枚举兜底（规则常量缺失时）：正常路径在 _build_prompt 里从
 # 合法 speak 动作动态提取，避免与 rules intents 漂移（审查 P3-6）。
 _FALLBACK_INTENTS = ("claim", "accuse", "defend", "question", "persuade")
+
 
 @dataclass
 class OllamaConfig(SolverConfig):
@@ -94,6 +98,9 @@ class OllamaSolver(SolverBase):
                 temperature=cfg.temperature,
             )
         )
+        #: 最近一次 select_action 是否成功走 LLM 决策（False = 传输失败/
+        #: 输出不可用随机兜底）——调用方（如平台社交族）据此如实标注 ai_mode。
+        self.last_call_ok = True
 
     @staticmethod
     def _default_player(engine: GameEngine) -> str:
@@ -117,15 +124,33 @@ class OllamaSolver(SolverBase):
             return None
         obs = self.engine.get_observation(state, self.player_id)
         flat = belief_obs(obs, self.player_id)
+        self.last_call_ok = True
         try:
             reply = self._ask_model(self._build_prompt(flat, legal))
         except (TimeoutError, OSError):
             # 网络/响应质量问题才随机回退；编程错误（如规则形状不匹配）
             # 不再被吞掉，上浮以便修复（审查 P1-15 曾被裸 except 掩盖）。
             # 传输已由统一客户端 fail-soft 化，这里仅兜测试注入的异常。
+            self.last_call_ok = False
+            logger.warning("Ollama 求解器 %s 传输异常，随机兜底", self.player_id)
+            return self._fallback(legal)
+        if not reply:
+            # 统一客户端 fail-soft：真实失败原因在 last_error（API 4xx/5xx、
+            # 端点不可达等）——记录而不是把「模型在线但报错」误当「离线」。
+            last = self._llm.last_error
+            self.last_call_ok = False
+            logger.warning(
+                "Ollama 求解器 %s 未获得模型回复%s，随机兜底",
+                self.player_id,
+                f"（{last}）" if last is not None else "",
+            )
             return self._fallback(legal)
         action = self._parse_reply(reply, legal)
-        return action if action is not None else self._fallback(legal)
+        if action is None:
+            self.last_call_ok = False
+            logger.warning("Ollama 求解器 %s 输出不可解析，随机兜底", self.player_id)
+            return self._fallback(legal)
+        return action
 
     def train(self, episodes: int = 100, **kwargs) -> SolverMetrics:
         """LLM 求解器无需训练；返回占位指标。"""

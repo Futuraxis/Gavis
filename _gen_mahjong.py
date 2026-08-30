@@ -42,11 +42,13 @@ CHI_RUNS = [[f"{s}{r}", f"{s}{r + 1}", f"{s}{r + 2}"] for s in ("m", "p", "s") f
 THIRTEEN_ORPHANS = ["m1", "m9", "p1", "p9", "s1", "s9", "z1", "z2", "z3", "z4", "z5", "z6", "z7"]
 
 FAN_PAY = [10, 20, 40, 80, 160, 320, 640, 1280]  # pay_base × 2^(n-1)
+FAN_PAY_INTERNATIONAL = list(range(1, 89))
 
 # 长沙番制：小胡 1 番 → 10；大胡 6 番 → 60；番上番（两个及以上大胡）
 # 12 番 → 120（含海底捞月/杠上开花叠加）。索引 = fan_sum - 1（do_win
-# 已夹取边界；超额番数落到 120）。
-FAN_PAY_CHANGSHA = [10] * 5 + [60] * 7 + [120] * 8
+# 已夹取边界；超额番数落到 120）。[10]*5 覆盖 1-5 番，[60]*6 覆盖
+# 6-11 番（大胡+小胡组合），[120]*9 覆盖 12 番起（番上番）。
+FAN_PAY_CHANGSHA = [10] * 5 + [60] * 6 + [120] * 9
 
 # 长沙杠上开花触发集合（last_action 属此集合即补牌后胡）。
 GANG_ACTIONS = ["gang", "gang_concealed", "gang_added"]
@@ -200,7 +202,7 @@ def FLAT2(lst_of_lists):
 
 
 def REPEAT(item, n):
-    """[item] × n."""
+    """[item] × n — n must be a LITERAL (wrapped via const)."""
     return MAP(RANGE(C(0), C(n)), item)
 
 
@@ -243,6 +245,19 @@ def _hand_count(hand_expr, tile_expr):
     return COUNT(FILTER(hand_expr, EQ(V("$h"), tile_expr), as_var="$h"))
 
 
+def _wild_count(hand_expr):
+    """Active wild-tile count for the hand.
+
+    红中麻将 (hongzhong) declares z5 as a universal joker via the
+    variants patch (``constants.wild_tile``); every other variant keeps
+    the default empty string, and matching against "" never fires — so
+    the wild count is structurally zero outside hongzhong.  (The old
+    global ``z5`` default leaked a joker into guangdong/blood/taiwan
+    win checks — a lone z5 could stand in for any missing tile.)
+    """
+    return _hand_count(hand_expr, V("$constants.wild_tile"))
+
+
 def _min_sel_have(group_expr, hand_expr):
     """Σ_g min(sel_g, have_g) over the selected-tile groups."""
     return SUM(
@@ -254,9 +269,9 @@ def _min_sel_have(group_expr, hand_expr):
 
 
 def _cover_ok(selected_expr, hand_expr):
-    """Selected tiles coverable by hand + wild: min_sum + wild >= win_tiles."""
+    """Selected tiles coverable by hand + active wild: min_sum + wild >= win_tiles."""
     return GTE(
-        ADD(_min_sel_have(selected_expr, hand_expr), _hand_count(hand_expr, V("$constants.wild_tile"))),
+        ADD(_min_sel_have(selected_expr, hand_expr), _wild_count(hand_expr)),
         V("$constants.win_tiles"),
     )
 
@@ -267,13 +282,18 @@ def _cover_prefix(hand_expr):
     Adding a meld raises min_sum by ≤3 and the bound by exactly 3, so a
     failing prefix stays failing for every extension (sound prune)."""
     return GTE(
-        ADD(_min_sel_have(FLAT2(V("$m")), hand_expr), _hand_count(hand_expr, V("$constants.wild_tile"))),
+        ADD(_min_sel_have(FLAT2(V("$m")), hand_expr), _wild_count(hand_expr)),
         MUL(C(3), COUNT(V("$m"))),
     )
 
 
+def MIN(lst):
+    """min over a list expression (engine ``min`` primitive)."""
+    return {"min": lst}
+
+
 def _meld_pool(hand_expr):
-    """Runs/pungs the hand can supply once wild tiles fill gaps.
+    """Runs/pungs the hand can supply, once active wild tiles fill gaps.
 
     A run is a candidate when its three tiles are coverable:
     Σ min(1, have(t)) + wild ≥ 3; a pung needs count(t) + wild ≥ 3.
@@ -281,13 +301,31 @@ def _meld_pool(hand_expr):
     structure choose's ``FLAT2`` concat sees uniform lists — a key-only
     pung would string-join with the run lists and break coverage (the
     pre-v5.3 pung pool was unusable for pung-structured wins, e.g. 碰碰胡).
-    The exact global coverage is verified by the choose ``where``.
+
+    Multiset supply (v5.4+): each run copy consumes one of each tile, and
+    a tile can be sourced have(t)+wild times, so a run is suppliable
+    min_t(have(t)+wild) times — bounded by the deck's 4 physical copies
+    (plus wild).  The chi pool is the CONCAT of four filters: ``supply_k``
+    admits every run whose per-tile supply reaches k (k = 1..4), so the
+    multiset choose (``dedup: False``) can pick up to four identical
+    runs — 一杯口/二杯口 (two identical runs), 三杯口 and above.  Hands
+    with fewer copies simply fail the ``where`` coverage check — over-
+    supply is harmless because the exact global coverage is always
+    re-verified by the choose ``where``.  Pungs never repeat: a deck
+    holds ≤4 copies of a kind, so two pungs of one kind (6 copies) are
+    impossible.
     """
-    wild = _hand_count(hand_expr, V("$constants.wild_tile"))
-    chi = FILTER(
-        V("$constants.chi_runs"),
-        GTE(ADD(SUM(MAP(V("$run"), MIN2(C(1), _hand_count(hand_expr, V("$node2"))), as_var="$node2")), wild), C(3)),
-        as_var="$run",
+    wild = _wild_count(hand_expr)
+
+    def supply_at_least(k: int):
+        """Per-tile supply reaches k: min_t(have(t) + wild) ≥ k."""
+        return GTE(
+            MIN(MAP(V("$run"), ADD(_hand_count(hand_expr, V("$node2")), wild), as_var="$node2")),
+            C(k),
+        )
+
+    chi = CONCAT(
+        *[FILTER(V("$constants.chi_runs"), supply_at_least(k), as_var="$run") for k in range(1, 5)]
     )
     # [k,k,k] per pung: the inner range-map binds ``$i`` (its own as-var)
     # so the outer group ``$node`` stays visible — a plain REPEAT would
@@ -313,14 +351,14 @@ def _pair_pool(hand_expr):
     :func:`_pair_pool_258` from the variant branch of ``is_win_hand``:
     大胡 (碰碰胡/清一色/七对/将将胡) are 乱将 and must keep any pair.
     """
-    wild = _hand_count(hand_expr, V("$constants.wild_tile"))
+    wild = _wild_count(hand_expr)
     return MAP(FILTER(GROUP(hand_expr), GTE(ADD(GET(V("$node"), "count"), wild), C(2))), GET(V("$node"), "key"))
 
 
 def _pair_pool_258(hand_expr):
     """Pair candidates restricted to 2/5/8 — the changsha 小胡 / sichuan
     将对 whitelist (``constants.pair_258``)."""
-    wild = _hand_count(hand_expr, V("$constants.wild_tile"))
+    wild = _wild_count(hand_expr)
     pool = FILTER(
         GROUP(hand_expr),
         AND(
@@ -356,13 +394,26 @@ def _suits_noz_expr(hand_expr):
 
 
 def _qidui(hand_expr):
-    """Seven pairs: exactly 14 tiles, every group of size 2.
+    """Seven pairs (14 tiles): every group of size 2, OR 龙七对 —
+    exactly one group of size 4 (a quad read as two pairs) plus five
+    pairs.  Pure quad-as-two-pairs is the standard Sichuan/Changsha
+    reading; the fan layer distinguishes the two via ``fan_qidui``
+    (pure) vs ``fan_longqidui`` (quad form).
 
     The size check is essential: without it a 2-tile pair hand (from a
     degenerate chi chain) vacuously passes and ``win_self`` becomes
     legal on a non-winning hand.
     """
-    return AND(EQ(COUNT(hand_expr), C(14)), ALL(GROUP(hand_expr), EQ(GET(V("$node"), "count"), C(2))))
+    return AND(
+        EQ(COUNT(hand_expr), C(14)),
+        OR(
+            ALL(GROUP(hand_expr), EQ(GET(V("$node"), "count"), C(2))),
+            AND(
+                EQ(COUNT(FILTER(GROUP(hand_expr), EQ(GET(V("$node"), "count"), C(4)))), C(1)),
+                EQ(COUNT(FILTER(GROUP(hand_expr), EQ(GET(V("$node"), "count"), C(2)))), C(5)),
+            ),
+        ),
+    )
 
 
 def _standard_win(hand_expr, pair_pool_fn=_pair_pool):
@@ -370,12 +421,17 @@ def _standard_win(hand_expr, pair_pool_fn=_pair_pool):
 
     ``pair_pool_fn`` selects the pair candidate set (unrestricted, or the
     changsha 258 whitist via :func:`_pair_pool_258` for 小胡).
+
+    ``dedup: False`` — multiset combinations: the meld pool legitimately
+    offers duplicate copies of one run (see :func:`_meld_pool`), and a
+    一杯口 hand must be able to pick both copies.
     """
     return {
         "choose": {
             "items": _meld_pool(hand_expr),
             "k": V("$constants.meld_k"),
             "as": "$m",
+            "dedup": False,
             "prefix": _cover_prefix(hand_expr),
             "where": {
                 "choose": {
@@ -403,10 +459,16 @@ def _ground_env_fields():
         "dealer_idx": {"type": "int", "initial": 0},
         "claim_queue": {"type": "list", "initial": []},
         "claim_index": {"type": "int", "initial": 0},
+        # 响应优先级阶段（胡>碰/杠>吃）：``win`` → 只问胡；``meld`` → 只问
+        # 碰/杠；``chi`` → 只问吃（下家）。整队过一阶段才进入下一阶段。
+        "claim_mode": {"type": "string", "initial": "win"},
         "dealt_count": {"type": "int", "initial": 0},
         "wall_count": {"type": "int", "initial": 136},
         "winners": {"type": "list", "initial": []},
         "done": {"type": "list", "initial": []},
+        # gang_added 过渡键：晋升的碰 → 杠的 tiles 拷贝（do_gang_added
+        # 写入；曾在 groundState 中未声明）。
+        "gang_tiles": {"type": "list", "initial": []},
         "fan_pay": {"type": "int", "initial": 0},
         "win_hand": {"type": "list", "initial": []},
         "payoffs": {"type": "list", "initial": []},
@@ -487,7 +549,13 @@ def _actions():
             # double-count it (15 tiles: seven pairs / thirteen orphans never
             # legal, and a 14-tile cover could be faked with the duplicate).
             # Meld-aware: the player's open melds count towards the structure.
-            "legal": CALL("is_win_hand", CALL("hand_of", V("$env.turn")), CALL("melds_of", V("$env.turn"))),
+            # Single-win guard: a player who already won may not win again
+            # (blood winners keep playing but cannot re-win; elsewhere the
+            # game ends on the first win so the guard is inert).
+            "legal": AND(
+                NOT({"contains": [V("$env.winners"), V("$env.turn")]}),
+                CALL("is_win_hand", CALL("hand_of", V("$env.turn")), CALL("melds_of", V("$env.turn"))),
+            ),
             "effectRef": "do_win_self",
             "canonicalKey": {"const": "win_self"},
         },
@@ -523,10 +591,18 @@ def _actions():
             "phases": ["claim"],
             "actor": CLAIM_ACTOR,
             "params": {"tile": {"domain": {"expr": SINGLE(V("$env.last_discard"))}}},
-            "legal": CALL(
-                "is_win_hand",
-                CONCAT(CALL("hand_of", CLAIM_ACTOR), SINGLE(V("tile"))),
-                CALL("melds_of", CLAIM_ACTOR),
+            # Single-win guard mirrors win_self: a previous winner may not
+            # ron again (blood winners still chi/peng/gang via the queue).
+            # Stage gate: wins resolve in the ``win`` stage (胡>碰>吃 — a
+            # later seat's win preempts any earlier 吃/碰).
+            "legal": AND(
+                EQ(V("$env.claim_mode"), C("win")),
+                NOT({"contains": [V("$env.winners"), CLAIM_ACTOR]}),
+                CALL(
+                    "is_win_hand",
+                    CONCAT(CALL("hand_of", CLAIM_ACTOR), SINGLE(V("tile"))),
+                    CALL("melds_of", CLAIM_ACTOR),
+                ),
             ),
             "effectRef": "do_claim_win",
             "canonicalKey": {"template": "claim_win:{tile}"},
@@ -537,7 +613,12 @@ def _actions():
             "phases": ["claim"],
             "actor": CLAIM_ACTOR,
             "params": {"tile": {"domain": {"expr": SINGLE(V("$env.last_discard"))}}},
-            "legal": GTE(COUNT(FILTER(CALL("hand_of", CLAIM_ACTOR), EQ(V("$node"), V("tile")))), C(2)),
+            # Stage gate: 碰/杠 resolve in the ``meld`` stage — any player's
+            # meld beats a later 吃 (碰>吃), and a win already had its chance.
+            "legal": AND(
+                EQ(V("$env.claim_mode"), C("meld")),
+                GTE(COUNT(FILTER(CALL("hand_of", CLAIM_ACTOR), EQ(V("$node"), V("tile")))), C(2)),
+            ),
             "effectRef": "do_claim_peng",
             "canonicalKey": {"template": "claim_peng:{tile}"},
         },
@@ -547,7 +628,10 @@ def _actions():
             "phases": ["claim"],
             "actor": CLAIM_ACTOR,
             "params": {"tile": {"domain": {"expr": SINGLE(V("$env.last_discard"))}}},
-            "legal": GTE(COUNT(FILTER(CALL("hand_of", CLAIM_ACTOR), EQ(V("$node"), V("tile")))), C(3)),
+            "legal": AND(
+                EQ(V("$env.claim_mode"), C("meld")),
+                GTE(COUNT(FILTER(CALL("hand_of", CLAIM_ACTOR), EQ(V("$node"), V("tile")))), C(3)),
+            ),
             "effectRef": "do_claim_gang",
             "canonicalKey": {"template": "claim_gang:{tile}"},
         },
@@ -563,13 +647,24 @@ def _actions():
                     }
                 }
             },
-            # Chi is banned in sichuan (血战到底); elsewhere it is legal only
-            # for the first responder AND only when the two non-discard tiles
-            # of the chosen run are actually in the claimant's hand — without
-            # this gate, bogus chi conjures melds from thin air and hands
-            # shrink erratically (the observed "吃规则混乱").
+            # Chi is banned in the no-chi Sichuan family — sichuan (血战
+            # 到底), changsha (长沙麻将只能碰杠), blood (血流成河) — and
+            # elsewhere it is legal only for the first responder AND only
+            # when the two non-discard tiles of the chosen run are
+            # actually in the claimant's hand — without this gate, bogus
+            # chi conjures melds from thin air and hands shrink
+            # erratically (the observed "吃规则混乱").
+            # 吃只在 chi 阶段（胡/碰/杠阶段过后）对首个响应者开放：任何后位
+            # 的碰/杠（meld 阶段）与任意胡（win 阶段）都优先于下家的吃。
             "legal": AND(
-                NOT(EQ(V("$constants.variant"), C("sichuan"))),
+                EQ(V("$env.claim_mode"), C("chi")),
+                NOT(
+                    OR(
+                        EQ(V("$constants.variant"), C("sichuan")),
+                        EQ(V("$constants.variant"), C("changsha")),
+                        EQ(V("$constants.variant"), C("blood")),
+                    )
+                ),
                 EQ(V("$env.claim_index"), C(0)),
                 GTE(COUNT(CALL("hand_of", CLAIM_ACTOR)), C(2)),
                 ALL(
@@ -729,6 +824,8 @@ def _effectors():
                     ),
                 ),
                 _set_env("claim_index", C(0)),
+                # 响应从 win 阶段开始（胡>碰/杠>吃）。
+                _set_env("claim_mode", C("win")),
                 # Claim-phase actor is the queue head — ``env.turn`` is set
                 # to CLAIM_ACTOR so the base engine's ``get_current_player``
                 # needs no adapter override (v5.2 declarative rotation).
@@ -738,17 +835,40 @@ def _effectors():
             ],
         },
         "do_claim_pass": {
-            "description": "Pass the claim; open the draw once all pass",
+            "description": "Pass the claim; advance the priority stage (胡>碰/杠>吃), open the draw once all pass",
             "ops": [
                 _inc("claim_index", 1),
                 _branch(
                     GTE(V("$env.claim_index"), COUNT(V("$env.claim_queue"))),
                     [
-                        _set_env("last_action", C("pass_all")),
-                        _set_env("turn", AT(V("$env.claim_queue"), C(0))),
-                        _set_env("claim_queue", C([])),
+                        # 整队放弃当前阶段 → 进入下一优先级阶段（胡 → 碰/杠 →
+                        # 吃）；chi 阶段也无人认领时弃牌作废，回到下家摸牌。
                         _set_env("claim_index", C(0)),
-                        _call_effect("to_draw"),
+                        _branch(
+                            EQ(V("$env.claim_mode"), C("win")),
+                            [
+                                _set_env("claim_mode", C("meld")),
+                                _set_env("last_action", C("pass_win_stage")),
+                                _set_env("turn", CLAIM_ACTOR),
+                            ],
+                            [
+                                _branch(
+                                    EQ(V("$env.claim_mode"), C("meld")),
+                                    [
+                                        _set_env("claim_mode", C("chi")),
+                                        _set_env("last_action", C("pass_meld_stage")),
+                                        _set_env("turn", CLAIM_ACTOR),
+                                    ],
+                                    [
+                                        _set_env("last_action", C("pass_all")),
+                                        _set_env("turn", AT(V("$env.claim_queue"), C(0))),
+                                        _set_env("claim_queue", C([])),
+                                        _set_env("claim_index", C(0)),
+                                        _call_effect("to_draw"),
+                                    ],
+                                )
+                            ],
+                        ),
                     ],
                     [
                         _set_env("last_action", C("pass")),
@@ -878,12 +998,24 @@ def _effectors():
         "do_win": {
             "description": "Common win settlement: fans, winners, continue or end",
             "ops": [
-                # Self-drawn wins: the tile is already in the hand (do_draw
-                # appended it), so win_hand is the 14-tile hand itself.  Ron
-                # wins still append the discard.
+                # win_hand = 手牌（自摸已含摸牌；荣和补弃牌）∪ 副露牌 ——
+                # 计番与胡牌结构同口径（副露碰碰胡此前只按暗手计 1 番；
+                # 副露混入的牌也参与清一色/混一色判定）。门清时副露为空，
+                # 结果与纯手牌一致。
                 _set_env(
                     "win_hand",
-                    IF(V("self_win"), CALL("hand_of", V("pid")), CONCAT(CALL("hand_of", V("pid")), SINGLE(V("tile")))),
+                    CONCAT(
+                        IF(
+                            V("self_win"),
+                            CALL("hand_of", V("pid")),
+                            CONCAT(CALL("hand_of", V("pid")), SINGLE(V("tile"))),
+                        ),
+                        IF(
+                            EQ(COUNT(CALL("melds_of", V("pid"))), C(0)),
+                            C([]),
+                            _meld_tiles_expr(CALL("melds_of", V("pid"))),
+                        ),
+                    ),
                 ),
                 # Clamp the fan table index: `at` returns None out of
                 # range, and a None fan_pay crashes payoff arithmetic.
@@ -904,23 +1036,27 @@ def _effectors():
                     ),
                 ),
                 _branch(NOT({"contains": [V("$env.winners"), V("pid")]}), [_append("winners", V("pid"))], []),
-                _branch(NOT({"contains": [V("$env.done"), V("pid")]}), [_append("done", V("pid"))], []),
+                # done = 退场名单，仅 sichuan（血战到底胡家退场）追加；
+                # blood（血流成河）胡家继续摸打，靠 winners 守卫禁止再胡
+                # （win_self/claim_win 的 legality 均含 NOT contains(winners)）。
+                _branch(
+                    AND(
+                        EQ(V("$constants.variant"), C("sichuan")),
+                        NOT({"contains": [V("$env.done"), V("pid")]}),
+                    ),
+                    [_append("done", V("pid"))],
+                    [],
+                ),
                 _set_env("last_action", IF(V("self_win"), C("win_self"), C("win_discard"))),
                 _branch(
                     OR(EQ(V("$constants.variant"), C("blood")), EQ(V("$constants.variant"), C("sichuan"))),
                     [
                         _branch(
                             OR(
-                                # blood ends at 2 done; sichuan 血战到底 ends at
-                                # player_count - 1 done (4p → 3, 2p → 1).
-                                GTE(
-                                    COUNT(V("$env.done")),
-                                    IF(
-                                        EQ(V("$constants.variant"), C("sichuan")),
-                                        SUB(V("$constants.player_count"), C(1)),
-                                        C(2),
-                                    ),
-                                ),
+                                # 血战到底/血流成河统一终局：player_count-1 家
+                                # 胡过（4p → 三家胡；2p → 首胡即终局，只剩
+                                # 一家无以为继）或牌墙抽干。
+                                GTE(COUNT(V("$env.winners")), SUB(V("$constants.player_count"), C(1))),
                                 wall_empty,
                             ),
                             _end_game("blood_over"),
@@ -942,9 +1078,10 @@ def _effectors():
                         _set_env("winner", V("pid")),
                     ],
                 ),
+                _set_env("last_winner", V("pid")),
                 _set_env(
                     "payoffs",
-                    MAP(V("$players"), CALL("payoff_for", GET(V("$node"), "id"), V("pid"), V("$env.fan_pay"))),
+                    MAP(V("$players"), CALL("payoff_after", GET(V("$node"), "id"))),
                 ),
             ],
         },
@@ -1008,21 +1145,37 @@ def _aliases():
             "params": ["hand"],
             "expr": EQ(COUNT(FILTER(GROUP(hand), GTE(GET(V("$node"), "count"), C(3)))), V("$constants.meld_k")),
         },
+        # 清一色 = m/p/s 单花色且无字牌——此前按首字符匹配，纯字牌手
+        # （字一色）会被误判为清一色。
         "fan_qingyise": {
-            "description": "清一色",
+            "description": "清一色 (one of m/p/s, NO honors)",
             "params": ["hand"],
-            "expr": ALL(hand, EQ(AT(V("$node"), C(0)), AT(AT(hand, C(0)), C(0)))),
+            "expr": AND(
+                EQ(COUNT(DISTINCT(suits_noz)), C(1)),
+                EQ(COUNT(suits_noz), COUNT(hand)),
+            ),
         },
         "fan_hunyise": {
             "description": "混一色 (approx: honors + one suit)",
             "params": ["hand"],
             "expr": AND(ANY(hand, EQ(AT(V("$node"), C(0)), C("z"))), EQ(COUNT(DISTINCT(suits_noz)), C(1))),
         },
-        "fan_qidui": {"description": "七对", "params": ["hand"], "expr": CALL("is_qidui", hand)},
-        "fan_shisanyao": {
-            "description": "十三幺",
+        # 七对番只认纯七对（全 size-2 组）；龙七对（一组四张+五对）由
+        # fan_longqidui 独立计番（四川 8 番），不再 4+8 重复计。
+        "fan_qidui": {
+            "description": "七对 (pure pairs — quad form scores via fan_longqidui)",
             "params": ["hand"],
-            "expr": ALL(V("$constants.thirteen_orphans"), {"contains": [hand, V("$node")]}),
+            "expr": AND(EQ(COUNT(hand), C(14)), ALL(GROUP(hand), EQ(GET(V("$node"), "count"), C(2)))),
+        },
+        # 十三幺双向判定：幺九全集 ⊆ 手牌 且 手牌 ⊆ 幺九——此前只有正向，
+        # "13 幺九 + 1 普通牌"也能骗过（fan 层同样收紧）。
+        "fan_shisanyao": {
+            "description": "十三幺 (bidirectional: orphans ⊆ hand AND hand ⊆ orphans)",
+            "params": ["hand"],
+            "expr": AND(
+                ALL(V("$constants.thirteen_orphans"), {"contains": [hand, V("$node")]}),
+                ALL(hand, {"contains": [V("$constants.thirteen_orphans"), V("$node")]}),
+            ),
         },
         "fan_hongzhongke": {
             "description": "红中刻 (hongzhong only)",
@@ -1063,12 +1216,22 @@ def _aliases():
                 ALL(hand, {"contains": [V("$constants.pair_258"), V("$node")]}),
             ),
         },
+        # 海底捞月：牌墙抽干时胡牌。wall_count 初值恒为 136，108 张牌型
+        # （sichuan/blood/changsha）抽干时 wall_count=28≠0 永不触发——改用
+        # 与 effectors wall_empty 同款判定（wall_count==0 或 drawn ≥ 牌池）。
         "fan_haidilaoyue": {
-            "description": "海底捞月 (changsha 6 / sichuan 8: win with the wall exhausted)",
+            "description": "海底捞月 (changsha 6 / sichuan·blood 8: win with the wall exhausted)",
             "params": ["hand"],
             "expr": IF(
-                OR(EQ(V("$constants.variant"), C("changsha")), EQ(V("$constants.variant"), C("sichuan"))),
-                EQ(V("$env.wall_count"), C(0)),
+                OR(
+                    EQ(V("$constants.variant"), C("changsha")),
+                    EQ(V("$constants.variant"), C("sichuan")),
+                    EQ(V("$constants.variant"), C("blood")),
+                ),
+                OR(
+                    EQ(V("$env.wall_count"), C(0)),
+                    GTE(COUNT(V("$drawn")), COUNT(V("$constants.tile_ids"))),
+                ),
                 C(0),
             ),
         },
@@ -1082,18 +1245,22 @@ def _aliases():
             ),
         },
         "fan_menqing": {
-            "description": "门清 (taiwan: no open melds)",
+            "description": "门清 (taiwan/international: no open melds)",
             "params": ["pid"],
             "expr": IF(
-                EQ(V("$constants.variant"), C("taiwan")),
+                OR(EQ(V("$constants.variant"), C("taiwan")), EQ(V("$constants.variant"), C("international"))),
                 EQ(COUNT(CALL("melds_of", V("$pid"))), C(0)),
                 C(0),
             ),
         },
         "fan_zimo": {
-            "description": "自摸 (taiwan: self-drawn win)",
+            "description": "自摸 (taiwan/international: self-drawn win)",
             "params": ["self_win"],
-            "expr": IF(EQ(V("$constants.variant"), C("taiwan")), V("$self_win"), C(0)),
+            "expr": IF(
+                OR(EQ(V("$constants.variant"), C("taiwan")), EQ(V("$constants.variant"), C("international"))),
+                V("$self_win"),
+                C(0),
+            ),
         },
     }
     fan_order = [
@@ -1124,27 +1291,27 @@ def _aliases():
     # 大胡 6 番) and qidui/jiangjianghu overlap → 番上番 12 番.
     fan_values_variant = {
         "fan_jihu": {"sichuan": 0, "changsha": 0, "taiwan": 0, "default": 1},
-        "fan_pinghu": {"sichuan": 1, "changsha": 1, "taiwan": 2, "default": 2},
-        "fan_pengpenghu": {"sichuan": 2, "changsha": 6, "taiwan": 4, "default": 3},
-        "fan_qingyise": {"sichuan": 4, "changsha": 6, "taiwan": 8, "default": 5},
-        "fan_hunyise": {"sichuan": 0, "changsha": 0, "taiwan": 4, "default": 2},
-        "fan_qidui": {"sichuan": 4, "changsha": 6, "taiwan": 0, "default": 4},
-        "fan_shisanyao": {"sichuan": 0, "changsha": 0, "taiwan": 0, "default": 8},
+        "fan_pinghu": {"sichuan": 1, "changsha": 1, "taiwan": 2, "international": 2, "default": 2},
+        "fan_pengpenghu": {"sichuan": 2, "changsha": 6, "taiwan": 4, "international": 6, "default": 3},
+        "fan_qingyise": {"sichuan": 4, "changsha": 6, "taiwan": 8, "international": 24, "default": 5},
+        "fan_hunyise": {"sichuan": 0, "changsha": 0, "taiwan": 4, "international": 6, "default": 2},
+        "fan_qidui": {"sichuan": 4, "changsha": 6, "taiwan": 0, "international": 24, "default": 4},
+        "fan_shisanyao": {"sichuan": 0, "changsha": 0, "taiwan": 0, "international": 88, "default": 8},
         "fan_hongzhongke": {"default": 1},  # expr already hongzhong-gated
         "fan_jueshang": {"sichuan": 0, "changsha": 0, "taiwan": 0, "default": 1},
         "fan_longqidui": {"sichuan": 8, "default": 0},
         "fan_jiangdui": {"sichuan": 8, "default": 0},
         "fan_jiangjianghu": {"changsha": 6, "default": 0},
-        "fan_haidilaoyue": {"changsha": 6, "sichuan": 8, "default": 0},
+        "fan_haidilaoyue": {"changsha": 6, "sichuan": 8, "blood": 8, "default": 0},
         "fan_gangshangkaihua": {"changsha": 6, "sichuan": 8, "default": 0},
-        "fan_menqing": {"taiwan": 1, "default": 0},
-        "fan_zimo": {"taiwan": 1, "default": 0},
+        "fan_menqing": {"taiwan": 1, "international": 2, "default": 0},
+        "fan_zimo": {"taiwan": 1, "international": 1, "default": 0},
     }
     fan_sum_expr = C(0)
     for name in fan_order:
         vmap = fan_values_variant[name]
         variant_val_expr = C(vmap["default"])
-        for vname in ("taiwan", "changsha", "sichuan"):
+        for vname in ("taiwan", "changsha", "sichuan", "blood", "international"):
             if vname in vmap:
                 variant_val_expr = IF(EQ(V("$constants.variant"), C(vname)), C(vmap[vname]), variant_val_expr)
         params_ = fan_params.get(name, ["hand"])
@@ -1167,6 +1334,11 @@ def _aliases():
             "params": ["p"],
             "expr": SWITCH([(p, V(f"$melds_{p}")) for p in PLAYERS4], V("$p")),
         },
+        "seat_of": {
+            "description": "A player's seat index (0-based) within PLAYERS4",
+            "params": ["p"],
+            "expr": SWITCH([(p, C(i)) for i, p in enumerate(PLAYERS4)], V("$p")),
+        },
         "is_qidui": {
             "description": "Seven pairs (every group of size 2)",
             "params": ["hand"],
@@ -1186,11 +1358,11 @@ def _aliases():
                 "Meld-aware winning hand. Second arg ``melds`` is the player's "
                 "open melds: the standard form checks the CONCEALED hand UNION "
                 "meld tiles (副露计入胡牌结构), while 七对 / 十三幺 / 呖咕呖咕 "
-                "require melds empty (门清). guangdong/hongzhong/blood = 7 pairs, "
+                "require melds empty (门清). guangdong/hongzhong = 7 pairs, "
                 "thirteen orphans, or standard 4 melds + pair (14); taiwan = "
                 "呖咕呖咕 or standard 5 melds + pair (17); changsha = 7 pairs / "
-                "将将胡 / 258将小胡 / 大胡(碰碰胡·清一色)乱将; sichuan = base wins "
-                "AND 缺一门 gate (m/p/s distinct < 3)."
+                "将将胡 / 258将小胡 / 大胡(碰碰胡·清一色)乱将; sichuan & blood "
+                "(血战到底/血流成河) = base wins AND 缺一门 gate (m/p/s distinct < 3)."
             ),
             "params": ["hand", "melds"],
             "expr": IF(
@@ -1211,7 +1383,13 @@ def _aliases():
                         AND(_standard_win(full), OR(CALL("fan_pengpenghu", full), CALL("fan_qingyise", full))),
                     ),
                     IF(
-                        EQ(V("$constants.variant"), C("sichuan")),
+                        # 血流成河 (blood) 与血战到底 (sichuan) 同款胡牌判定：
+                        # 七对/十三幺/标准形 + 缺一门（108 张无字牌，定缺门
+                        # 是两种川麻的共同前置）。
+                        OR(
+                            EQ(V("$constants.variant"), C("sichuan")),
+                            EQ(V("$constants.variant"), C("blood")),
+                        ),
                         AND(
                             OR(
                                 AND(EQ(COUNT(V("$melds")), C(0)), CALL("is_qidui", hand)),
@@ -1219,20 +1397,41 @@ def _aliases():
                                     EQ(COUNT(V("$melds")), C(0)),
                                     EQ(COUNT(hand), C(14)),
                                     ALL(V("$constants.thirteen_orphans"), {"contains": [hand, V("$node")]}),
+                                    # 双向：手牌也必须全是幺九（否则 13 幺九+1 普通牌骗和）。
+                                    ALL(hand, {"contains": [V("$constants.thirteen_orphans"), V("$node")]}),
                                 ),
                                 _standard_win(full),
                             ),
                             # 缺一门 gate: fewer than 3 suits incl. meld tiles.
                             NOT(EQ(COUNT(DISTINCT(_suits_noz_expr(full))), C(3))),
                         ),
-                        OR(
-                            AND(EQ(COUNT(V("$melds")), C(0)), CALL("is_qidui", hand)),
+                        IF(
+                            EQ(V("$constants.variant"), C("international")),
                             AND(
-                                EQ(COUNT(V("$melds")), C(0)),
-                                EQ(COUNT(hand), C(14)),
-                                ALL(V("$constants.thirteen_orphans"), {"contains": [hand, V("$node")]}),
+                                OR(
+                                    AND(EQ(COUNT(V("$melds")), C(0)), CALL("is_qidui", hand)),
+                                    AND(
+                                        EQ(COUNT(V("$melds")), C(0)),
+                                        EQ(COUNT(hand), C(14)),
+                                        ALL(V("$constants.thirteen_orphans"), {"contains": [hand, V("$node")]}),
+                                        # 双向：手牌也必须全是幺九（否则 13 幺九+1 普通牌骗和）。
+                                        ALL(hand, {"contains": [V("$constants.thirteen_orphans"), V("$node")]}),
+                                    ),
+                                    _standard_win(full),
+                                ),
+                                GTE(CALL("fan_sum", hand, C("p0"), C(False)), C(8)),
                             ),
-                            _standard_win(full),
+                            OR(
+                                AND(EQ(COUNT(V("$melds")), C(0)), CALL("is_qidui", hand)),
+                                AND(
+                                    EQ(COUNT(V("$melds")), C(0)),
+                                    EQ(COUNT(hand), C(14)),
+                                    ALL(V("$constants.thirteen_orphans"), {"contains": [hand, V("$node")]}),
+                                    # 双向：手牌也必须全是幺九（否则 13 幺九+1 普通牌骗和）。
+                                    ALL(hand, {"contains": [V("$constants.thirteen_orphans"), V("$node")]}),
+                                ),
+                                _standard_win(full),
+                            ),
                         ),
                     ),
                 ),
@@ -1243,13 +1442,61 @@ def _aliases():
             "params": ["hand", "pid", "self_win"],
             "expr": fan_sum_expr,
         },
+        # 付分人数：player_count − done（退场）−（本次 winner 已入 done ? 0 : 1）。
+        # 结算发生在 do_win 把 winner 计入 winners 之后：sichuan 的 winner 同时
+        # 入 done（血战到底胡家退场），其余变体 done 不含本次 winner（仍在局中
+        # ——blood 血流成河胡家继续、普通变体游戏直接结束）。
         "payoff_for": {
-            "description": "Net score for one player when ``winner`` wins ``fan_pay``",
-            "params": ["pid", "winner", "fan_pay"],
+            "description": (
+                "本次胡 pid 的得分增量。自摸：赢家收 fan_pay×付分人数，其余"
+                "在局玩家各付 fan_pay；荣和：点炮者（last_discarder）包铳付全部"
+                "份额，其余玩家 0——此前荣和与自摸同构，无辜玩家被扣分。"
+            ),
+            "params": ["pid", "winner", "fan_pay", "self_win"],
             "expr": IF(
                 EQ(V("pid"), V("winner")),
-                MUL(V("fan_pay"), SUB(V("$constants.player_count"), COUNT(V("$env.done")))),
-                IF({"contains": [V("$env.done"), V("pid")]}, C(0), SUB(C(0), V("fan_pay"))),
+                MUL(
+                    V("fan_pay"),
+                    SUB(
+                        SUB(V("$constants.player_count"), COUNT(V("$env.done"))),
+                        IF({"contains": [V("$env.done"), V("winner")]}, C(0), C(1)),
+                    ),
+                ),
+                IF(
+                    V("self_win"),
+                    IF({"contains": [V("$env.done"), V("pid")]}, C(0), SUB(C(0), V("fan_pay"))),
+                    IF(
+                        EQ(V("pid"), V("$env.last_discarder")),
+                        SUB(
+                            C(0),
+                            MUL(
+                                V("fan_pay"),
+                                SUB(
+                                    SUB(V("$constants.player_count"), COUNT(V("$env.done"))),
+                                    IF({"contains": [V("$env.done"), V("winner")]}, C(0), C(1)),
+                                ),
+                            ),
+                        ),
+                        C(0),
+                    ),
+                ),
+            ),
+        },
+        # 血战累计结算：每次胡牌把 ``payoff_for`` 的增量**加**到既有
+        # payoffs 上（而非覆写）——先前胡家（已进 done，delta=0）的分数
+        # 得以保留；普通变种单胡 = 初始 0 + delta，与旧覆写行为等价。
+        "payoff_after": {
+            "description": "Accumulated payoff for ``pid`` after the current win ($env.last_winner)",
+            "params": ["pid"],
+            "expr": ADD(
+                AT(V("$env.payoffs"), CALL("seat_of", V("pid"))),
+                CALL(
+                    "payoff_for",
+                    V("pid"),
+                    V("$env.last_winner"),
+                    V("$env.fan_pay"),
+                    V("self_win"),
+                ),
             ),
         },
         **fans,
@@ -1298,10 +1545,11 @@ def build() -> dict:
             "gameId": "mahjong",
             "version": "5.2.0",
             "description": (
-                "Mahjong — guangdong jihu / hongzhong wild / blood "
-                "variants × 2-4 players. The JSON's ``variants`` section "
-                "declares every option (v5.2); the engine selects a variant "
-                "and player count without any adapter injection. "
+                "Mahjong — guangdong / hongzhong (wild z5) / blood (血流成河) / "
+                "sichuan (血战到底) / changsha (258将) / taiwan (16张) / "
+                "international (国标) × 2-4 players (default 4). The JSON's "
+                "``variants`` section declares every option (v5.2); the engine "
+                "selects a variant and player count without any adapter injection. "
                 "Pure-expression aliases (zero builtins)."
             ),
         },
@@ -1314,7 +1562,11 @@ def build() -> dict:
             "options": {
                 "guangdong": {},
                 "hongzhong": {"constants": {"wild_tile": "z5"}},
-                "blood": {},
+                # 血流成河 (blood): 108 no-honor deck（与血战到底同款牌池
+                # 与缺一门胡牌判定）；区别在结算——胡家不退场继续摸打
+                # （done 仅 sichuan 追加），可多点重复胡牌累计分数，终局
+                # 条件 player_count-1 家胡过或牌墙抽干（do_win）。
+                "blood": {"constants": {"tile_ids": TILE_IDS_108}},
                 # Sichuan 血战到底: 108 no-honor deck (win gate 缺一门 and
                 # no-chi are expressed via ``$constants.variant`` in rules).
                 "sichuan": {"constants": {"tile_ids": TILE_IDS_108}},
@@ -1330,6 +1582,9 @@ def build() -> dict:
                 },
                 # Taiwan 16张 (no-flower simplification): 5 melds + pair = 17.
                 "taiwan": {"constants": {"win_tiles": 17, "meld_k": 5}},
+                # International / 国标（Botzone 复式国标接入）：136 张无花，
+                # 保留标准 4 副+将/七对/十三幺结构，按近似国标番表 8 番起胡。
+                "international": {"constants": {"fan_pay": FAN_PAY_INTERNATIONAL}},
             },
             "player_ids": {
                 "map": {
@@ -1353,7 +1608,10 @@ def build() -> dict:
             "suit_of": SUIT_OF,
             "chi_runs": CHI_RUNS,
             "thirteen_orphans": THIRTEEN_ORPHANS,
-            "wild_tile": "z5",
+            # 癞子（万能牌）仅红中麻将变体声明（variants.options.hongzhong
+            # 补丁 "z5"）；默认空串 = 无癞子——广东/血战/四川/长沙/台湾/国标的
+            # 红中都是普通字牌（wild 计数路径对空串恒为 0，无需分支）。
+            "wild_tile": "",
             "fan_pay": FAN_PAY,
             # Win-structure parametrization (v5.3): standard form is
             # ``meld_k`` melds + 1 pair = ``win_tiles``; taiwan 16-tile

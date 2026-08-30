@@ -258,8 +258,11 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
             hole = hole_of.get(pid)
             return list(arrs.get(hole, [])) if hole else []
 
-        def _hand_name(pid: str) -> str | None:
-            if not over:
+        def _hand_name(pid: str, *, gate: bool) -> str | None:
+            # P1-2 修复：牌型类别按显式门计算（人类 ``over`` / AI ``revealed``），
+            # 与 games.py 的 _poker_snapshot 同步——否则弃牌局会从 AI 隐藏底牌
+            # 反推 AI 牌型类别，击穿 reveal-gate 红线。
+            if not gate:
                 return None
             cards = list(_cards(pid))
             if community_name:
@@ -292,8 +295,8 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
             "last_action": env.get("last_action"),
             "last_ai_action": session.last_ai_info.get("action"),
             "call_to": int(env.get("last_call_to", 0)),
-            "my_hand_name": _hand_name(session.player_pid),
-            "ai_hand_name": _hand_name(session.ai_pid),
+            "my_hand_name": _hand_name(session.player_pid, gate=over),
+            "ai_hand_name": _hand_name(session.ai_pid, gate=revealed),
             "payoff": session.engine.get_utility(session.state, session.player_pid) if over else None,
             "legal": legal,
             "raise_amounts": raise_amts,

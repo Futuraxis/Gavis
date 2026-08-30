@@ -19,18 +19,31 @@ Semantics stay fail-soft (matching every previous client): transport /
 parse failures return ``""`` / empty ``tool_calls`` instead of raising, so
 callers keep their existing template / random fallback contracts.  No
 third-party HTTP dependency (stdlib ``urllib`` only).
+
+Error observability (审查: LLM 兜底系统性排查): every swallowed failure
+is now classified and logged — HTTP 4xx/5xx (``HTTPError``) with its
+status + error body, transport failures with their reason — and recorded
+on ``LLMClient.last_error`` (thread-safe).  ``LLMConfig.fail_hard`` opts a
+client into raising :class:`LLMClientError` on any failure instead of
+returning ``""``, so callers that *require* LLM output (e.g. explicit
+``use_llm=True`` rule translation) surface the real API error instead of
+silently degrading.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
+import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
 from .api_key import resolve_api_key
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "qwen3:8b"
@@ -49,7 +62,14 @@ def sanitize_text(text: str, max_len: int | None = None) -> str:
 
 
 class LLMClientError(Exception):
-    """Raised by callers on empty/malformed LLM output; transport stays fail-soft."""
+    """LLM request/response failure.
+
+    Raised by transport when ``LLMConfig.fail_hard`` is set (API 4xx/5xx,
+    unreachable endpoint, timeout, malformed envelope), and by callers on
+    empty/malformed LLM output.  With the default fail-soft config the
+    transport never raises — failures surface as ``""`` plus
+    ``LLMClient.last_error`` and a warning log.
+    """
 
 
 @dataclass
@@ -62,14 +82,23 @@ class LLMConfig:
     timeout_s: float = DEFAULT_TIMEOUT_S
     temperature: float = 0.2
     max_tokens: int = 2048
+    #: 严格模式：任何调用失败（API 4xx/5xx、端点不可达、超时、畸形响应）
+    #: 抛 :class:`LLMClientError` 而不是返回空串。默认 False 保持 fail-soft。
+    fail_hard: bool = False
 
 
 @dataclass
 class ToolCall:
-    """One function-calling invocation returned by the model."""
+    """One function-calling invocation returned by the model.
+
+    ``id`` echoes the endpoint's ``tool_calls[i].id`` (fallback: ``""``).
+    Multi-turn tool loops need it to pair the ``role: "tool"`` result
+    message back with the assistant message that requested the call.
+    """
 
     name: str
     arguments: dict[str, Any] = field(default_factory=dict)
+    id: str = ""
 
 
 @dataclass
@@ -86,6 +115,9 @@ class LLMClient:
     Construction never fails (fail-soft): an unreachable or missing
     backend surfaces as ``""`` from :meth:`complete` /
     :meth:`complete_tools`, letting every caller keep its fallback path.
+    Each failed call is logged with its cause and recorded on
+    :attr:`last_error`; ``LLMConfig.fail_hard`` switches the transport to
+    raise :class:`LLMClientError` instead.
     """
 
     def __init__(
@@ -98,6 +130,7 @@ class LLMClient:
         timeout_s: float | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        fail_hard: bool | None = None,
     ) -> None:
         """Accept a :class:`LLMConfig` or individual overrides (drop-in for
         the removed per-layer clients that took flat kwargs)."""
@@ -110,6 +143,7 @@ class LLMClient:
                 timeout_s=self.config.timeout_s,
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
+                fail_hard=self.config.fail_hard,
             )
         overrides = {
             "base_url": base_url,
@@ -117,6 +151,7 @@ class LLMClient:
             "timeout_s": timeout_s,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "fail_hard": fail_hard,
         }
         for name, value in overrides.items():
             if value is not None:
@@ -126,12 +161,15 @@ class LLMClient:
         self.model = self.config.model
         self.base_url = self.config.base_url.rstrip("/")
         self.timeout_s = self.config.timeout_s
+        #: 最近一次调用的失败原因（无失败时为 None；线程安全、每次调用刷新）。
+        self._last_error: Exception | None = None
+        self._last_error_lock = threading.Lock()
 
     # ── Public surface ─────────────────────────────────────────────
 
     def complete(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> str:
@@ -147,7 +185,7 @@ class LLMClient:
 
     def complete_tools(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         max_tokens: int | None = None,
         temperature: float | None = None,
@@ -156,6 +194,10 @@ class LLMClient:
 
         Models/endpoints without tool support simply reply with text and
         an empty ``tool_calls`` list — the caller decides the fallback.
+
+        ``messages`` may include full agentic-loop shapes (assistant
+        messages carrying ``tool_calls`` and ``role: "tool"`` result
+        messages), not just plain text turns.
         """
         return self._chat(messages, tools=tools, max_tokens=max_tokens, temperature=temperature)
 
@@ -172,9 +214,43 @@ class LLMClient:
 
     # ── Transport ──────────────────────────────────────────────────
 
+    @property
+    def last_error(self) -> Exception | None:
+        """失败原因 of the most recent :meth:`_chat` call (``None`` on success)."""
+        with self._last_error_lock:
+            return self._last_error
+
+    def _set_last_error(self, exc: Exception | None) -> None:
+        with self._last_error_lock:
+            self._last_error = exc
+
+    def _fail(self, message: str, exc: Exception | None) -> ChatReply:
+        """Record + log a transport failure; fail-soft or raise per config.
+
+        ``last_error`` 存携带完整格式化信息（HTTP 状态码 + 错误体片段）的
+        :class:`LLMClientError`，而不是裸 ``HTTPError``（其 ``str()`` 只有
+        状态行）——调用方（``complete_with_retry``、chat、solver）据此拿到
+        可用的失败原因。
+        """
+        recorded: Exception = LLMClientError(message)
+        self._set_last_error(recorded)
+        logger.warning("LLM 调用失败: %s (base_url=%s, model=%s)", message, self.base_url, self.model)
+        if self.config.fail_hard:
+            raise LLMClientError(message) from exc
+        return ChatReply(text="", tool_calls=[])
+
+    @staticmethod
+    def _http_error_detail(exc: urllib.error.HTTPError) -> str:
+        """Extract a short snippet of the API error body (best effort)."""
+        try:
+            snippet = exc.read(300).decode("utf-8", "replace").strip()
+        except Exception:  # noqa: BLE001 — body 可能已被读取/非字节流，放弃提取
+            return ""
+        return f": {snippet}" if snippet else ""
+
     def _chat(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
@@ -199,18 +275,27 @@ class LLMClient:
             data=json.dumps(payload).encode("utf-8"),
             headers=headers,
         )
+        # 失败分类（审查：LLM 兜底系统性排查）——API 4xx/5xx、端点不可达/
+        # 超时、响应超限、畸形响应分别记录真实原因，而不是统一吞成空串。
+        # ``HTTPError`` 是 ``URLError`` 的子类，必须先于它捕获。
+        self._set_last_error(None)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
                 raw = resp.read(_MAX_RESPONSE_BYTES + 1)
-                if len(raw) > _MAX_RESPONSE_BYTES:
-                    return ChatReply(text="", tool_calls=[])
-                body = json.loads(raw.decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
-            return ChatReply(text="", tool_calls=[])
+        except urllib.error.HTTPError as exc:
+            return self._fail(f"LLM API 错误 HTTP {exc.code} {exc.reason}{self._http_error_detail(exc)}", exc)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            return self._fail(f"LLM 端点不可达/超时: {exc}", exc)
+        if len(raw) > _MAX_RESPONSE_BYTES:
+            return self._fail(f"LLM 响应超过 {_MAX_RESPONSE_BYTES} 字节上限", None)
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            return self._fail(f"LLM 响应不是有效 JSON: {exc}", exc)
         try:
             message = body["choices"][0]["message"]
-        except (KeyError, IndexError, TypeError):
-            return ChatReply(text="", tool_calls=[])
+        except (KeyError, IndexError, TypeError) as exc:
+            return self._fail("LLM 响应缺少 choices[0].message 结构", exc)
         text = sanitize_text(str(message.get("content") or ""))
         tool_calls: list[ToolCall] = []
         for call in message.get("tool_calls") or []:
@@ -224,7 +309,7 @@ class LLMClient:
             except json.JSONDecodeError:
                 args = {}
             if isinstance(args, dict):
-                tool_calls.append(ToolCall(name=name, arguments=args))
+                tool_calls.append(ToolCall(name=name, arguments=args, id=str(call.get("id") or "")))
         return ChatReply(text=text, tool_calls=tool_calls)
 
 

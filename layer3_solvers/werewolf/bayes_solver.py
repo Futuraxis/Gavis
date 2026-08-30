@@ -67,6 +67,8 @@ class BayesSolver(SolverBase):
         flat = belief_obs(obs, self.player_id)
         self._ensure_tracker()
         self._fold_incremental(flat)
+        # NOTE: select_action 现在会真正被调用——既有测试 test_solver_plays_full_game_randomly
+        # (seed=5) 从未落到 p0 的回合故未暴露 P1-1（_ensure_tracker 缺参 TypeError）。
 
         phase = str(flat.get("phase"))
         action = None
@@ -101,7 +103,13 @@ class BayesSolver(SolverBase):
 
     # ── 信念管理 ────────────────────────────────────────────────────
 
-    def _ensure_tracker(self, obs: dict) -> None:
+    def _ensure_tracker(self) -> None:
+        """惰性构建信念跟踪器（P1-1 修复：``obs`` 形参未在体内使用，调用点
+        ``select_action`` 又漏传实参导致每次绑定玩家决策必 TypeError）。
+
+        重建路径在 :meth:`_fold_incremental` 检测到新对局时仍走此方法——
+        ``obs`` 由 ``_fold_incremental`` 直接消费，本方法无需它。
+        """
         if self._tracker is None:
             self._tracker = BeliefTracker.from_engine(
                 self.engine, self.player_id, seed=getattr(self.config, "seed", None)
@@ -116,7 +124,7 @@ class BayesSolver(SolverBase):
         if self._tracker is not None and (len(speech) < self._seen_speech or len(votes) < self._seen_votes):
             # 观察历史比上次更短 → 新对局开始，重建信念防止跨局泄漏。
             self.reset()
-            self._ensure_tracker(obs)
+            self._ensure_tracker()
         if len(speech) > self._seen_speech or len(votes) > self._seen_votes:
             snapshot = dict(obs)
             snapshot["speech_log"] = speech[self._seen_speech :]

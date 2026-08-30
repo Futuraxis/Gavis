@@ -89,7 +89,10 @@ class RulePromptBuilder:
         return {
             "game_id": rule_input.game_id,
             "family": rule_input.family,
-            "rule_text": rule_input.rule_text,
+            # P2-24 修复：外部载荷的规则文本同样走清洗截断（此前只有
+            # ``rule_text`` 字段被 sanitize —— 控制字符/超长文本可经
+            # external_frontend 溜进 prompt，破坏 JSON 上下文或撑爆输入）。
+            "rule_text": sanitize_rule_text(rule_input.rule_text),
             "parameters": rule_input.parameters,
             "source": rule_input.source,
             "warnings": rule_input.warnings,

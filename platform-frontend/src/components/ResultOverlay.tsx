@@ -1,4 +1,4 @@
-import type { GameInfo, PokerSnapshot, Snapshot } from '../types'
+import type { GameInfo, MahjongSnapshot, PokerSnapshot, Snapshot } from '../types'
 
 interface Props {
   snapshot: Snapshot
@@ -9,9 +9,21 @@ interface Props {
 
 export default function ResultOverlay({ snapshot, game, onReplay, onRestart }: Props) {
   const { winner, player_pid } = snapshot
-  const won = winner === player_pid
-  const title = winner == null ? '🤝 平局' : won ? '🎉 你赢了！' : '😢 AI 获胜'
-  const cls = winner == null ? 'draw' : won ? 'win' : 'lose'
+
+  // 血战等多胡局没有单一 winner：按 winners 列表展示（旧逻辑会误报「平局」）。
+  const mahjong = game.kind === 'mahjong' ? (snapshot as MahjongSnapshot) : null
+  const winners = mahjong?.winners ?? []
+  let title: string
+  let cls: string
+  if (winner == null && winners.length > 0) {
+    const won = winners.includes(player_pid)
+    title = won ? '🎉 你胡了！' : `🏆 本局胡家：${winners.join('、')}`
+    cls = won ? 'win' : 'lose'
+  } else {
+    const won = winner === player_pid
+    title = winner == null ? '🤝 平局' : won ? '🎉 你赢了！' : '😢 AI 获胜'
+    cls = winner == null ? 'draw' : won ? 'win' : 'lose'
+  }
 
   return (
     <div className="result-overlay panel">
@@ -27,6 +39,17 @@ export default function ResultOverlay({ snapshot, game, onReplay, onRestart }: P
               ? `+${(snapshot as PokerSnapshot).payoff}`
               : (snapshot as PokerSnapshot).payoff}{' '}
             筹码
+          </div>
+        </div>
+      )}
+      {mahjong && mahjong.payoffs.length > 0 && (
+        <div style={{ color: 'var(--muted)' }}>
+          <div>
+            结算:{' '}
+            {mahjong.payoffs
+              .map((p, i) => `p${i}${i === 0 ? '(庄)' : ''} ${p >= 0 ? '+' : ''}${p}`)
+              .join('　')}
+            （血战局按胡牌顺序累计）
           </div>
         </div>
       )}

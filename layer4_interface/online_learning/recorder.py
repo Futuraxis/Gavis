@@ -114,13 +114,17 @@ class TrajectoryRecorder:
         engine: GameEngine = session.engine
         info_key = self._info_key(engine, state, player)
         legal = [a.canonical_key for a in engine.get_legal_actions(state)]
+        # 隐私红线（审计 B7）：不落盘 god-view 全量状态（含对手底牌/手牌的
+        # ``_arrays``）；只存决策者自己的信息集投影——对手建模（empirical
+        # table）与信号转换（signals）消费的正是这一层，字段名保持 ``state``。
+        observation = engine.project_observation(state, player)
         return {
             "match_id": self.match_id,
             "game_id": self.game_id,
             "step": len(self.pending) + 1,
             "actor": actor,
             "player": player,
-            "state": jsonable(state),
+            "state": jsonable(observation),
             "action": jsonable(asdict(action)),
             "info_key": info_key,
             "legal": legal,

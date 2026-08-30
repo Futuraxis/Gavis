@@ -43,7 +43,6 @@ class TestDeterministicPath:
             ),
             ("moon_chess", "月亮棋 4x4 每方4枚 四连获胜", {"board_size": 4, "win_length": 4, "max_pieces": 4}),
             ("texas_holdem", "德州扑克，盲注 1/2，筹码 80", {"small_blind": 1, "big_blind": 2, "stack_size": 80}),
-            ("mahjong", "红中麻将 2人", {"variant": "hongzhong", "player_count": 2}),
             ("werewolf", "狼人杀 9人局，3狼，1预言家，1女巫，1猎人", {"player_count_hint": 9}),
         ],
     )
@@ -121,14 +120,116 @@ class TestDeterministicPath:
         assert not response.rules_json
 
     def test_mahjong_player_shape_updated(self) -> None:
+        """T1 修复后的断言面：翻译产物写 ``variants`` 规约（声明式），
+        而非 constants —— 引擎 ``_resolve_variants`` 构造期才把
+        variant/player_count 合并进运行时 constants。旧断言
+        ``constants.variant == "hongzhong"`` 检查的是一个从未生效的表面
+        （运行时仍按 guangdong/4 人装配）。"""
         response = translate_variant_rules("mahjong", "红中麻将 2人", use_llm=False)
 
-        constants = response.rules_json["constants"]
-        assert constants["variant"] == "hongzhong"
-        assert constants["player_count"] == 2
-        assert constants["player_ids"] == ["p0", "p1"]
-        assert constants["deal_target"] == 27
-        assert response.rules_json["players"] == ["p0", "p1"]
+        assert response.validation is not None
+        assert response.validation.valid
+        spec = response.rules_json["variants"]
+        assert spec["variant"] == "hongzhong"
+        assert spec["player_count"] == 2
+        # 运行时验证：GameEngine 按 variants 规约装配（真正的判据）。
+        engine = GameEngine(response.rules_json)
+        assert engine._constants["variant"] == "hongzhong"  # noqa: SLF001
+        assert engine._constants["player_count"] == 2  # noqa: SLF001
+        state = engine.create_initial_state()
+        while engine.get_node_type(state) == "chance":  # deal chance 发牌
+            _, state = engine.sample_chance(state)
+        assert len(state["_arrays"]["hand_p0"]) == 14  # 2 人 13+1 发牌
+        assert len(state["_arrays"]["hand_p1"]) == 13
+
+    @pytest.mark.parametrize(
+        ("change_text", "expected_variant"),
+        [
+            ("四川麻将 4人", "sichuan"),
+            ("血战到底 2人", "sichuan"),
+            ("血流成河 4人", "blood"),
+            ("长沙麻将 2人", "changsha"),
+            ("台湾麻将 4人", "taiwan"),
+            ("红中麻将 2人", "hongzhong"),
+            ("广东麻将 4人", "guangdong"),
+            ("鸡胡 2人", "guangdong"),
+        ],
+    )
+    def test_mahjong_variant_keywords(self, change_text: str, expected_variant: str) -> None:
+        """T2 修复：四川/血战到底/血流成河/长沙/台湾 关键词全部解析到
+        声明的变体（旧版只认 红中/血战/广东，且 血战→blood 映射错误）。"""
+        response = translate_variant_rules("mahjong", change_text, use_llm=False)
+
+        assert response.validation is not None
+        assert response.validation.valid
+        engine = GameEngine(response.rules_json)
+        assert engine._constants["variant"] == expected_variant  # noqa: SLF001
+
+    def test_mahjong_unknown_variant_warns_and_keeps_default(self) -> None:
+        response = translate_variant_rules("mahjong", "麻将 2人", use_llm=False)
+
+        assert response.validation is not None
+        assert response.validation.valid
+        spec = response.rules_json["variants"]
+        assert spec["variant"] == "guangdong"  # 未识别变体 → 模板默认
+        assert spec["player_count"] == 2
+
+    def test_mahjong_bad_player_count_warns(self) -> None:
+        response = translate_variant_rules("mahjong", "红中麻将 3人", use_llm=False)
+
+        assert response.validation is not None
+        assert response.validation.valid
+        spec = response.rules_json["variants"]
+        assert spec["player_count"] == 4  # 非法人数 → 模板默认 4
+        assert any("2 或 4 人" in w for w in response.validation.warnings)
+
+    def test_oversized_template_uses_patch_protocol_not_rewrite(self) -> None:
+        """T3 护栏 → 补丁协议（v5.5）：mahjong 模板 ≈87k 字符不能全量改写
+        （回复上限装不下），但**增量补丁**输出极小 —— 改走补丁协议调用 LLM；
+        LLM 传输不可用时仍确定性兜底（patch_mode=False 保留旧护栏行为）。"""
+
+        class ExplodingClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete(self, messages, max_tokens=None):  # noqa: ANN001, ANN202
+                self.calls += 1
+                raise RuntimeError("inference down")
+
+        client = ExplodingClient()
+        response = translate_variant_rules("mahjong", "红中麻将 2人", use_llm=True, llm_client=client, patch_mode=False)
+
+        assert client.calls == 0
+        assert response.validation is not None
+        assert response.validation.valid, "护栏短路后确定性路径应产出有效规则"
+        assert any("过大" in w for w in response.validation.warnings)
+
+        # 补丁协议（默认/自动模式）下大模板不再短路 —— LLM 被调用（重试一次），
+        # 失败后确定性兜底。
+        auto_client = ExplodingClient()
+        response = translate_variant_rules("mahjong", "红中麻将 2人", use_llm=True, llm_client=auto_client)
+        assert auto_client.calls == 2  # complete_with_retry 立即重试一次
+        assert response.validation is not None
+        assert response.validation.valid
+        assert any("LLM 生成失败" in w for w in response.validation.warnings)
+
+    def test_strict_llm_surfaces_failure_without_deterministic_fallback(self) -> None:
+        """审查（LLM 兜底系统性排查）：``strict_llm=True`` 时 LLM 路径失败
+        直接返回失败响应（真实原因进 ``validation.errors``），绝不静默回退
+        确定性路径产出与变更描述不符的游戏。"""
+
+        class DeadClient:
+            def complete(self, messages, max_tokens=None):  # noqa: ANN001, ANN202
+                raise ConnectionError("LLM API 连接失败")
+
+        response = translate_variant_rules(
+            "stochastic_gomoku", "15x15", use_llm=True, llm_client=DeadClient(), strict_llm=True
+        )
+
+        assert response.validation is not None
+        assert not response.validation.valid
+        assert response.rules_json == {}  # 没有确定性模板产物
+        assert any("LLM API 连接失败" in e for e in response.validation.errors)
 
     def test_werewolf_matching_composition_keeps_template(self) -> None:
         response = translate_variant_rules("werewolf", "狼人杀 9人局，3狼，1预言家，1女巫，1猎人", use_llm=False)
@@ -298,7 +399,9 @@ class TestLLMPath:
         assert response.validation is not None
         assert response.validation.valid
         assert response.rules_json["constants"]["board_size"] == 15
-        assert any("LLM 不可用" in w for w in response.validation.warnings)
+        # 修复后：真实失败原因（端点不可达 / HTTP 400/404）上浮，不再笼统
+        # 报「LLM 不可用（未返回内容）」，且仍确定性兜底。
+        assert any("LLM 生成失败" in w for w in response.validation.warnings)
 
     def test_bad_llm_client_falls_back(self) -> None:
         class BrokenClient:
@@ -333,6 +436,172 @@ class TestLLMPath:
         assert response.validation is not None
         assert response.validation.valid
         assert response.rules_json["constants"]["board_size"] == 15
+
+
+# ── LLM 增量补丁协议（v5.5）───────────────────────────────────────
+
+
+class TestLLMPatchPath:
+    """完整 LLM 增量补丁协议：模型输出 ``{"patch": [...]}`` 操作而非完整
+    rules JSON，由 ``rule_patch`` 应用到基础模板。
+
+    覆盖：补丁成功 / 补丁格式修复循环 / 补丁始终无效回退确定性 / 自动
+    模式按模板尺寸选补丁 / 巨型模板（mahjong）经补丁协议可走 LLM。
+    """
+
+    def test_patch_success(self, gomoku_rules: dict) -> None:
+        class PatchClient:
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 8192) -> str:
+                payload = {"patch": [{"op": "replace", "path": "constants.board_size", "value": 15}]}
+                return json.dumps(payload, ensure_ascii=False)
+
+        response = translate_variant_rules(
+            "stochastic_gomoku", "15x15", use_llm=True, llm_client=PatchClient(), patch_mode=True
+        )
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["constants"]["board_size"] == 15
+        assert any("增量补丁" in w for w in response.validation.warnings)
+
+    def test_patch_repairs_invalid_format(self, gomoku_rules: dict) -> None:
+        class RepairPatchClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 8192) -> str:
+                self.calls += 1
+                if self.calls == 1:
+                    # 非补丁格式（未知 op）→ 修复循环回喂错误
+                    return json.dumps({"patch": [{"op": "upsert", "path": "x", "value": 1}]}, ensure_ascii=False)
+                return json.dumps(
+                    {"patch": [{"op": "replace", "path": "constants.board_size", "value": 15}]},
+                    ensure_ascii=False,
+                )
+
+        client = RepairPatchClient()
+        response = translate_variant_rules(
+            "stochastic_gomoku", "15x15", use_llm=True, llm_client=client, patch_mode=True
+        )
+
+        assert client.calls == 2
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["constants"]["board_size"] == 15
+
+    def test_patch_repairs_validation_failure(self, gomoku_rules: dict) -> None:
+        class ValidationRepairClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 8192) -> str:
+                self.calls += 1
+                if self.calls == 1:
+                    # 合法格式但破坏 schema（删掉 actions）→ 校验失败进修复循环
+                    return json.dumps({"patch": [{"op": "remove", "path": "actions"}]}, ensure_ascii=False)
+                return json.dumps(
+                    {"patch": [{"op": "replace", "path": "constants.board_size", "value": 15}]},
+                    ensure_ascii=False,
+                )
+
+        client = ValidationRepairClient()
+        response = translate_variant_rules(
+            "stochastic_gomoku", "15x15", use_llm=True, llm_client=client, patch_mode=True
+        )
+
+        assert client.calls == 2
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["constants"]["board_size"] == 15
+
+    def test_patch_never_valid_falls_back_to_deterministic(self) -> None:
+        class NeverValidPatchClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 8192) -> str:
+                self.calls += 1
+                # 每次都破坏 schema 的补丁
+                return json.dumps({"patch": [{"op": "remove", "path": "actions"}]}, ensure_ascii=False)
+
+        client = NeverValidPatchClient()
+        response = translate_variant_rules(
+            "stochastic_gomoku", "五子棋 15x15 连五", use_llm=True, llm_client=client, patch_mode=True
+        )
+
+        assert client.calls == 2  # 初始 + 1 次 repair
+        assert response.validation is not None
+        assert response.validation.valid  # 回退确定性路径
+        assert response.rules_json["constants"]["board_size"] == 15
+        assert any("增量补丁" in w or "补丁" in w for w in response.validation.warnings)
+
+    def test_patch_message_carries_base_template_and_patch_instruction(self) -> None:
+        captured: list[list[dict[str, str]]] = []
+
+        class CapturingClient:
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 8192) -> str:
+                captured.append(messages)
+                return json.dumps({"patch": []}, ensure_ascii=False)
+
+        translate_variant_rules(
+            "stochastic_gomoku", "15x15", use_llm=True, llm_client=CapturingClient(), patch_mode=True
+        )
+
+        assert captured, "补丁路径必须调用 LLM"
+        assert captured[0][0]["role"] == "system"
+        assert "增量补丁" in captured[0][0]["content"]
+        assert "base_rules_json" in captured[0][1]["content"]
+        assert '"patch"' in captured[0][1]["content"]
+
+    def test_auto_mode_uses_patch_for_oversized_template(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """自动模式：模板超过全量改写护栏 → 补丁协议（无需显式 patch_mode）。"""
+        import layer1_translator.variant_translator as vt
+
+        monkeypatch.setattr(vt, "_MAX_LLM_TEMPLATE_CHARS", 1)  # 任何模板都“超大”
+
+        class PatchClient:
+            calls = 0
+
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 8192) -> str:
+                PatchClient.calls += 1
+                return json.dumps(
+                    {"patch": [{"op": "replace", "path": "constants.board_size", "value": 15}]},
+                    ensure_ascii=False,
+                )
+
+        client = PatchClient()
+        response = translate_variant_rules("stochastic_gomoku", "15x15", use_llm=True, llm_client=client)
+
+        assert client.calls == 1  # 只走补丁，不重复调用
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["constants"]["board_size"] == 15
+
+    def test_mahjong_oversized_translates_via_patch(self) -> None:
+        """补齐暂缓项：巨型模板（mahjong ≈87k 字符）经增量补丁协议走 LLM ——
+        旧护栏只允许确定性路径。"""
+        from layer1_translator.variant_translator import _MAX_LLM_TEMPLATE_CHARS
+
+        with open(RULES_DIR / "mahjong.json", "r", encoding="utf-8") as f:
+            template = json.load(f)
+        assert len(json.dumps(template, ensure_ascii=False)) > _MAX_LLM_TEMPLATE_CHARS, "fixture 前提"
+
+        class PatchClient:
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 8192) -> str:
+                # 只改声明式变体节的默认变体 —— 极小的一处补丁
+                return json.dumps(
+                    {"patch": [{"op": "replace", "path": "variants.variant", "value": "hongzhong"}]},
+                    ensure_ascii=False,
+                )
+
+        response = translate_variant_rules("mahjong", "红中麻将", use_llm=True, llm_client=PatchClient())
+
+        assert response.validation is not None
+        assert response.validation.valid, response.validation.errors
+        assert response.rules_json["variants"]["variant"] == "hongzhong"
+        # 运行时装配验证：补丁真的生效了（声明式变体经引擎解析）
+        engine = GameEngine(response.rules_json)
+        assert engine._constants["variant"] == "hongzhong"  # noqa: SLF001
 
 
 # ── Layer 2 engine switch (A1) ───────────────────────────────────

@@ -13,6 +13,11 @@ python -m pytest tests/test_layer2_engine/test_uno.py -v   # 引擎级测试
 python train-cli/train.py --list    # 查看注册表（含 6 个 uno_* 条目）
 ```
 
+**平台对局**：六款 UNO 已登记平台注册表（游戏大厅可见，徽标 🎴 UNO），
+默认 4 人（1 人 + 3 AI），UNO 桌面组件按颜色分组展示手牌、台面顶牌与
+罚牌状态。启动平台：`python -m layer4_interface.frontend.platform.server`
+（需先 `cd platform-frontend && npm run build`）。
+
 训练 / 运行时装配走 `train-cli/games.py` 注册表：`uno` 与
 `uno_seven_zero` / `uno_jump_in` / `uno_stacking` / `uno_draw_until` /
 `uno_strict_wild4` 六个条目，默认 4 人，Hybrid 求解器以
@@ -21,10 +26,12 @@ python train-cli/train.py --list    # 查看注册表（含 6 个 uno_* 条目�
 ## 基础规则
 
 - 每人 7 张手牌，翻一张作为弃牌（首张特殊效果按规则结算）。
-- 出牌必须同色或同符号；`万能(wild)` 与 `万能+4(wild4)` 任意时刻可出并选色。
+- 出牌必须同色或同符号；`万能(wild)` 与 `万能+4(wild4)` 任意时刻可出并选色
+  （牌 id 形如 `wild_2` / `wild4_2`——后缀数字是 4 张副本的编号，同 `r7a`/`r7b`）。
 - `跳过`：下家被跳过；`反转`：方向反转（2 人局等价跳过）；`+2`/`+4`：
   下家吃对应罚牌并跳过（罚牌经 penalty_pick 逐张结算）。
-- 摸牌后若可接可 `play_drawn`，否则 `pass` 过。
+- 摸牌后若可接可 `play_drawn`（万能牌走 `play_drawn_wild`，同样四选一
+  颜色），否则 `pass` 过。
 - 终局：手牌清空即胜（`hand_empty`）；牌堆空且当前玩家无可打 → `stuck`
   卡死；回合数上限 2000（`max_turns`）。胜者 = 手牌最少者
   （`least_player`），收益 +1 / 其余 -1。

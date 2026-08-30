@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from layer2_engine.core.llm import LLMClient
 
+from .coach import Coach, TeachContext, extract_hand
 from .dialogue_engine import AgentMessage, DialogueEngine
 from .evaluation import evaluate
 from .hidden_guard import assert_no_hidden, scan
@@ -22,14 +23,17 @@ OllamaClient = LLMClient
 
 __all__ = [
     "AgentMessage",
+    "Coach",
     "DialogueEngine",
     "Persona",
     "PERSONAS",
     "SCENARIOS",
     "SkillContext",
     "Skills",
+    "TeachContext",
     "assert_no_hidden",
     "evaluate",
+    "extract_hand",
     "scan",
     "LLMClient",
     "OllamaClient",

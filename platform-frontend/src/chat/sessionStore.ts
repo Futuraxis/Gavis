@@ -6,13 +6,22 @@ export type ViewMode = 'chat' | 'platform'
 export interface ChatStore {
   viewMode: ViewMode
   activeGameId: string | null
+  /** 对局界面已收起（「专心对话」模式）：对局不结束、后台继续，随时可再展开。 */
+  boardCollapsed: boolean
+  /** 当前对话存档 id（后端 data/conversations/<id>.json；null = 新对话，首条消息时懒建）。 */
+  conversationId: string | null
 }
 
 const KEY = 'gavis.chat.v1'
 const VIEW_EVENT = 'gavis:view-chat'
 const PLATFORM_EVENT = 'gavis:view-platform'
 
-const DEFAULT_STORE: ChatStore = { viewMode: 'chat', activeGameId: null }
+const DEFAULT_STORE: ChatStore = {
+  viewMode: 'chat',
+  activeGameId: null,
+  boardCollapsed: false,
+  conversationId: null,
+}
 
 export function loadChatStore(): ChatStore {
   try {
@@ -22,6 +31,8 @@ export function loadChatStore(): ChatStore {
     return {
       viewMode: parsed.viewMode === 'platform' ? 'platform' : 'chat',
       activeGameId: typeof parsed.activeGameId === 'string' ? parsed.activeGameId : null,
+      boardCollapsed: parsed.boardCollapsed === true,
+      conversationId: typeof parsed.conversationId === 'string' ? parsed.conversationId : null,
     }
   } catch {
     return { ...DEFAULT_STORE }

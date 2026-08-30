@@ -22,8 +22,9 @@ export default function ReviewCard({ report, matchId }: Props) {
         <ul className="chat-review-nodes">
           {report.key_nodes.map((n, i) => (
             <li key={i} className="chat-review-node">
-              <span className="chat-review-step">第 {n.step} 手</span>
+              <span className="chat-review-step">第 {n.step + 1} 手</span>
               <span className="chat-review-kind">{KIND_LABEL[n.kind] ?? n.kind}</span>
+              {n.what && <span className="chat-review-what">{n.what}</span>}
               <span>{n.why}</span>
             </li>
           ))}

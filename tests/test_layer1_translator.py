@@ -21,6 +21,7 @@ from layer1_translator import (
     ValidationResult,
     translate_rules_json,
 )
+from layer1_translator.variant_translator import VariantTranslator
 
 RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
 
@@ -953,9 +954,13 @@ class TestTemplateTranslator:
         translator = TemplateTranslator(run_engine_validation=False)
         response = translator.translate(TranslateRequest(rule_text="血战麻将 4人局"))
 
-        assert response.rules_json["constants"]["variant"] == "blood"
-        assert response.rules_json["constants"]["player_count"] == 4
-        assert response.rules_json["constants"]["deal_target"] == 53
+        # T1/T2 修复后的契约：变体/人数写入声明式 ``variants`` 规约 —— 旧
+        # ``constants`` 注入无运行时效果（引擎 ``_resolve_variants`` 覆写
+        # constants.variant/player_count，"红中麻将 2人"实际仍跑 guangdong/
+        # 4人）；且"血战到底"= sichuan（"血流成河"才是 blood）。
+        spec = response.rules_json["variants"]
+        assert spec["variant"] == "sichuan"
+        assert spec["player_count"] == 4
         assert response.rules_json["players"] == ["p0", "p1", "p2", "p3"]
 
     def test_werewolf_unsupported_composition_warns_and_keeps_template(self) -> None:
@@ -980,6 +985,30 @@ class TestTemplateTranslator:
         assert response.rules_json["constants"]["big_blind"] == 4
         assert response.rules_json["constants"]["stack_size"] == 80
         assert max(response.rules_json["constants"]["raise_grid"]) == 80
+
+    def test_uno_parameters_update_variants_spec(self) -> None:
+        """P1-5 回归：UNO 变体/人数此前被 ``_apply_parameters`` 静默丢弃
+        （无 uno 分支 → 落到 ``return []``，"UNO 4人 叠加"返回 classic 默认）。
+        修复后写入声明式 ``variants`` 规约默认值，引擎纯数据解析即按所选变体装配。
+        """
+        translator = TemplateTranslator(run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="UNO 4人，叠加变体"))
+
+        assert response.validation is not None, response
+        assert response.validation.valid, response.validation.errors
+        spec = response.rules_json["variants"]
+        assert spec["variant"] == "stacking"
+        assert spec["player_count"] == 4
+
+    def test_uno_unknown_variant_warns_and_keeps_default(self) -> None:
+        """P1-5：未声明的变体名不得被写进 variants 默认值（引擎对未知 variant
+        抛 ValueError），应保留默认并给出警告。"""
+        translator = TemplateTranslator(run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="UNO 经典变体"))
+
+        assert response.validation is not None
+        assert response.validation.valid
+        assert response.rules_json["variants"]["variant"] == "classic"
 
     def test_translate_unknown_game_fails_cleanly(self) -> None:
         translator = TemplateTranslator(run_engine_validation=False)
@@ -1102,4 +1131,301 @@ class TestLLMRuleTranslator:
         assert response.validation is not None
         assert response.validation.valid
         assert response.rules_json["meta"]["gameId"] == "stochastic_gomoku"
-        assert any("本地 LLM 不可用" in warning for warning in response.validation.warnings)
+        # 修复后：真实失败原因（端点不可达 / HTTP 404 model not found）由
+        # 统一客户端记录并上浮到警告，不再笼统报「本地 LLM 不可用（未返回内容）」。
+        assert any("LLM" in warning and "兜底" in warning for warning in response.validation.warnings)
+
+    def test_strict_llm_surfaces_transport_error_without_template_fallback(self) -> None:
+        """审查（LLM 兜底系统性排查）：``strict_llm=True`` 时 LLM 传输失败
+        直接返回失败响应（真实原因进 ``validation.errors``），绝不静默走
+        模板兜底产出与描述不符的游戏。"""
+
+        class DeadClient:
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 4096) -> str:
+                raise ConnectionError("LLM 服务不可达")
+
+        translator = LLMRuleTranslator(DeadClient(), strict_llm=True, run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="随机五子棋，9x9，五连获胜"))
+
+        assert response.validation is not None
+        assert not response.validation.valid
+        assert response.rules_json == {}  # 没有模板产物
+        assert any("LLM 服务不可达" in error for error in response.validation.errors)
+
+    def test_translate_rules_json_strict_surfaces_failure_without_fallback(self) -> None:
+        class DeadClient:
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 4096) -> str:
+                raise TimeoutError("LLM 请求超时")
+
+        response = translate_rules_json(
+            "随机五子棋，9x9，五连获胜",
+            run_engine_validation=False,
+            use_llm=True,
+            strict_llm=True,
+            llm_client=DeadClient(),
+        )
+
+        assert response.validation is not None
+        assert not response.validation.valid
+        assert response.rules_json == {}
+        assert any("超时" in error for error in response.validation.errors)
+
+
+class TestVariantTranslator:
+    def test_variant_llm_non_json_falls_back_deterministically(self) -> None:
+        """P1-5 回归：变体 LLM 路径返回非 JSON/散文时 ``_parse_rules`` 抛
+        ``LLMTranslatorError``。修复前该调用未守卫、异常直穿 ``_try_llm`` →
+        ``translate`` 使变体翻译崩溃而非回退确定性路径（违反文档契约）。
+        修复后捕获并回退，与 ``llm_translator.py:70-75`` 对齐。
+        """
+
+        class ProseClient:
+            """Returns prose with no JSON object — forces _parse_rules to raise."""
+
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 4096) -> str:
+                return "抱歉，我无法生成这个变体的规则。"
+
+        translator = VariantTranslator(run_engine_validation=False)
+        # 修复前此调用抛 LLMTranslatorError（"无法从 LLM 输出中解析 JSON object"）
+        response = translator.translate(
+            "stochastic_gomoku",
+            "随机五子棋，9x9，五连获胜",
+            use_llm=True,
+            llm_client=ProseClient(),
+        )
+
+        assert response.validation is not None
+        assert response.validation.valid  # 确定性兜底成功
+        assert response.rules_json  # 非空模板
+        assert any("确定性" in w for w in response.validation.warnings)
+
+
+class TestLLMTransportAndTemperature:
+    """P2-22/P2-23：规则翻译的确定性与传输重试。"""
+
+    def test_transport_failure_retries_once_before_fallback(self, gomoku_rules: dict) -> None:
+        """P2-23 回归：首次传输异常 → 立即重试一次；重试成功则不兜底。
+
+        修复前传输异常直接退出循环走模板兜底（只有"校验失败"进修复循环），
+        冷启动 Ollama 的首次超时即触发兜底。
+        """
+
+        class FlakyClient:
+            """第一次调用抛异常，第二次成功返回有效 gomoku rules。"""
+
+            def __init__(self, rules: dict) -> None:
+                self.rules = rules
+                self.calls = 0
+
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 4096) -> str:
+                self.calls += 1
+                if self.calls == 1:
+                    raise ConnectionError("模型加载中（冷启动）")
+                return "```json\n" + json.dumps(self.rules, ensure_ascii=False) + "\n```"
+
+        client = FlakyClient(gomoku_rules)
+        translator = LLMRuleTranslator(client, run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="9x9 五子棋"))
+
+        assert client.calls == 2  # 重试后成功
+        assert response.validation is not None
+        assert response.validation.valid  # LLM 路径成功，未走模板兜底
+        assert response.rules_json["meta"]["gameId"] == "stochastic_gomoku"
+
+    def test_transport_failure_persists_after_retry_falls_back(self) -> None:
+        """P2-23：重试仍传输失败 → 记录"已重试"警告并走模板兜底。"""
+
+        class DeadClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 4096) -> str:
+                self.calls += 1
+                raise ConnectionError("连接拒绝")
+
+        client = DeadClient()
+        translator = LLMRuleTranslator(client, run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="随机五子棋，9x9，五连获胜"))
+
+        assert client.calls == 2  # 重试过一次
+        assert response.validation is not None
+        assert response.validation.valid  # 模板兜底成功
+        assert any("已重试" in w for w in response.validation.warnings)
+
+    def test_rule_llm_temperature_is_zero(self) -> None:
+        """P2-22 回归：规则翻译默认客户端必须 temperature=0（确定性/可复现）。
+
+        统一客户端默认 0.2 会让同一规则文本跨次产出不同 rules.json；注入的
+        fake 客户端走协议面、不受影响。
+        """
+        from unittest.mock import patch
+
+        from layer1_translator.local_client import RULE_LLM_TEMPERATURE
+        from layer2_engine.core.llm import LLMClient
+
+        captured: dict = {}
+        real_init = LLMClient.__init__
+
+        def fake_init(self: LLMClient, *args: object, **kwargs: object) -> None:
+            captured["temperature"] = kwargs.get("temperature")
+            real_init(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        def fake_complete(self: LLMClient, messages: list, max_tokens: int = 8192) -> str:  # noqa: ANN001
+            return ""  # 模拟 LLM 不可用：translate 走模板兜底，不打真实网络
+
+        with patch.object(LLMClient, "__init__", fake_init), patch.object(LLMClient, "complete", fake_complete):
+            LLMRuleTranslator(llm_model="qwen3:8b", run_engine_validation=False).translate(
+                TranslateRequest(rule_text="9x9 五子棋")
+            )
+        assert RULE_LLM_TEMPERATURE == 0.0
+        assert captured.get("temperature") == 0.0, "规则翻译默认客户端必须 temperature=0"
+
+
+# ── v5.5：variant-aware smoke / variants schema / 外部文本清洗 ─────────
+
+
+def _v5_rules_with_variants() -> dict:
+    """最小 v5 规则 + 声明式 variants（schema 与 smoke 都可通过的基线）。"""
+    return {
+        "meta": {"gameId": "toy", "version": "5.5"},
+        "players": [{"id": "p0"}],
+        "groundState": {"env": {"type": "env", "fields": {"phase": {"type": "string", "initial": "playing"}}}},
+        "derivedViews": {},
+        "constants": {"board_size": 3},
+        "actions": [
+            {
+                "id": "pass_turn",
+                "phases": ["playing"],
+                "params": {},
+                "legal": {"const": True},
+                "effectRef": "do_pass",
+                "canonicalKey": {"const": "pass_turn"},
+            }
+        ],
+        "effectors": {"do_pass": {"ops": []}},
+        "phases": [{"id": "playing", "actions": ["pass_turn"]}],
+        "chance": [],
+        "terminal": [{"id": "game_over", "condition": {"const": False}}],
+        "utility": [{"player": "p0", "value": {"const": 0}}],
+        "visibility": {"default": "public"},
+        "variants": {
+            "variant": "base",
+            "player_count": 2,
+            "options": {
+                "base": {},
+                "fat": {"constants": {"board_size": 5}},
+            },
+        },
+    }
+
+
+class TestEngineValidatorVariantAware:
+    """L1 → L2 冒烟闸门遍历声明变体（v5.5 补齐暂缓项）。"""
+
+    def test_validate_probes_every_declared_variant(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import layer1_translator.engine_validator as ev_module
+        from layer2_engine.core.smoke_validator import SmokeValidation
+
+        captured: dict = {}
+
+        def fake_smoke(rules: dict, seed: int = 42, variants: object = None) -> SmokeValidation:
+            captured["rules"] = rules
+            captured["variants"] = variants
+            return SmokeValidation()
+
+        monkeypatch.setattr(ev_module, "smoke_validate", fake_smoke)
+        result = EngineValidator().validate(_v5_rules_with_variants())
+        assert result.valid
+        assert captured["variants"] == "all"
+
+    def test_validate_passes_when_all_variants_boot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 未打桩：真实 smoke 遍历 base+fat 两个变体 → 全过。
+        result = EngineValidator().validate(_v5_rules_with_variants())
+        assert result.valid
+        assert result.errors == []
+
+    def test_broken_variant_fails_validation_with_label(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import layer1_translator.engine_validator as ev_module
+        from layer2_engine.core.smoke_validator import SmokeValidation
+
+        def fake_smoke(rules: dict, seed: int = 42, variants: object = None) -> SmokeValidation:
+            return SmokeValidation(errors=["[variant=broken] GameEngine 构造失败: ValueError: boom"])
+
+        monkeypatch.setattr(ev_module, "smoke_validate", fake_smoke)
+        result = EngineValidator().validate(_v5_rules_with_variants())
+        assert not result.valid
+        assert any("[variant=broken]" in e for e in result.errors)
+
+
+class TestSchemaValidatorVariants:
+    """P2-25：v5.2 声明式 variants 节的结构校验。"""
+
+    def test_valid_variants_pass(self) -> None:
+        result = SchemaValidator.validate(_v5_rules_with_variants())
+        assert result.valid
+
+    def test_variants_not_dict(self) -> None:
+        rules = _v5_rules_with_variants()
+        rules["variants"] = ["base"]
+        result = SchemaValidator.validate(rules)
+        assert any("variants 必须是对象" in e for e in result.errors)
+
+    def test_unknown_default_variant_rejected(self) -> None:
+        rules = _v5_rules_with_variants()
+        rules["variants"]["variant"] = "ghost"
+        result = SchemaValidator.validate(rules)
+        assert any("ghost" in e and "未在" in e for e in result.errors)
+
+    def test_empty_options_rejected(self) -> None:
+        rules = _v5_rules_with_variants()
+        rules["variants"]["options"] = {}
+        result = SchemaValidator.validate(rules)
+        assert any("不能为空" in e for e in result.errors)
+
+    def test_option_constants_must_be_dict(self) -> None:
+        rules = _v5_rules_with_variants()
+        rules["variants"]["options"]["fat"] = {"constants": "oh-no"}
+        result = SchemaValidator.validate(rules)
+        assert any("constants 必须是对象" in e for e in result.errors)
+
+    def test_bad_player_count_rejected(self) -> None:
+        rules = _v5_rules_with_variants()
+        rules["variants"]["player_count"] = 0
+        result = SchemaValidator.validate(rules)
+        assert any("player_count" in e for e in result.errors)
+
+    def test_bad_trim_flag_rejected(self) -> None:
+        rules = _v5_rules_with_variants()
+        rules["variants"]["trim_players"] = "yes"
+        result = SchemaValidator.validate(rules)
+        assert any("trim_players" in e for e in result.errors)
+
+    def test_missing_variants_still_valid(self) -> None:
+        rules = _v5_rules_with_variants()
+        rules.pop("variants")
+        result = SchemaValidator.validate(rules)
+        assert result.valid
+
+
+class TestPromptBuilderSanitizesExternalText:
+    """P2-24：外部前端载荷的规则文本同样走清洗截断。"""
+
+    def _prompt_content(self, payload: dict) -> str:
+        from layer1_translator.prompt_builder import RulePromptBuilder
+
+        builder = RulePromptBuilder()
+        messages = builder.build_initial_messages(TranslateRequest(rule_text="模板兜底文本", external_frontend=payload))
+        return messages[1]["content"]
+
+    def test_control_chars_removed_from_external_text(self) -> None:
+        content = self._prompt_content({"text": "9x9 棋盘\x00\x1f\x7f\n控制字符"})
+        assert "\x00" not in content and "\x1f" not in content
+        assert "rule_text" in content
+
+    def test_external_text_length_capped(self) -> None:
+        long_text = "五子棋 " + "x" * 30_000
+        content = self._prompt_content({"text": long_text})
+        # prompt 内含清洗后的 rule_text（≤ MAX_RULE_TEXT_LEN=12000，前缀占位后
+        # x 序列 < 12000）
+        assert "x" * 11_000 in content
+        assert "x" * 12_000 not in content

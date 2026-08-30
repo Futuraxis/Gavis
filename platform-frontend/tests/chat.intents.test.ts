@@ -9,13 +9,21 @@ import { test } from 'node:test'
 import { classifyLocal } from '../src/chat/intents.ts'
 
 const GAMES = [
-  { game_id: 'moon_chess', display_name: '月亮棋' },
-  { game_id: 'stochastic_gomoku', display_name: '随机五子棋' },
-  { game_id: 'texas_holdem', display_name: '德州扑克' },
+  { game_id: 'moon_chess', display_name: '月亮棋', description: '3×3 经典月亮棋：三子连珠即胜，棋盘满时最旧的棋子被挤出。' },
+  { game_id: 'stochastic_gomoku', display_name: '随机五子棋', description: '9×9 五子棋变体：每次落子后棋子有 50% 概率被随机抹去。' },
+  { game_id: 'texas_holdem', display_name: '德州扑克', description: '双人德州扑克：翻前/翻牌/转牌/河牌四轮下注，AI 使用混合求解器。' },
+]
+
+// UNO 短名匹配的问题形态：display_name 带括注/空格，靠 aliases + 大小写
+// 不敏感命中（与后端 game_knowledge.GAME_ALIASES 对齐）。
+const UNO_GAMES = [
+  { game_id: 'uno', display_name: 'UNO（经典）', description: '四人经典 UNO：108 张牌，同色或同符号接牌，先清空手牌者胜。', aliases: ['UNO', '优诺'] },
+  { game_id: 'uno_seven_zero', display_name: 'UNO 7-0（换手/移交）', description: 'UNO 7-0 变体：打出 7 可与任一玩家换手。', aliases: ['UNO 7-0', 'UNO7-0', 'UNO 70', '换手'] },
 ]
 
 const NO_SESSION = { games: GAMES, activeGameId: null, activeDisplay: null }
 const WITH_SESSION = { games: GAMES, activeGameId: 'sess-1', activeDisplay: '月亮棋' }
+const NO_SESSION_UNO = { games: UNO_GAMES, activeGameId: null, activeDisplay: null }
 
 test('play：点名游戏 → intent play + game_id', () => {
   const r = classifyLocal('我想玩月亮棋', NO_SESSION)
@@ -80,4 +88,40 @@ test('priority：点名游戏优先于功能面板关键词', () => {
   const r = classifyLocal('玩德州扑克能看胜率吗', NO_SESSION)
   assert.equal(r.intent, 'play')
   assert.equal(r.params.game_id, 'texas_holdem')
+})
+
+test('what-is：问规则 → chat + 权威简介 + “来一局” chips（audit §5-2）', () => {
+  const r = classifyLocal('月亮棋是什么', NO_SESSION)
+  assert.equal(r.intent, 'chat')
+  assert.equal(r.params.game_id, 'moon_chess')
+  assert.ok(r.text.includes('3×3')) // 来自游戏目录 description（确定性数据）
+  assert.deepEqual(r.params.chips, ['玩月亮棋'])
+})
+
+test('what-is：先于 play —— “怎么下”含开局动词但语义是问规则', () => {
+  const r = classifyLocal('月亮棋怎么下', NO_SESSION)
+  assert.equal(r.intent, 'chat')
+  assert.ok(r.text.includes('3×3'))
+})
+
+test('what-is：不点名已注册游戏 → 维持原兜底（不猜、不编）', () => {
+  const r = classifyLocal('围棋是什么', NO_SESSION)
+  assert.equal(r.intent, 'chat')
+  assert.ok(!r.params.game_id)
+  assert.ok(!r.text.includes('3×3'))
+})
+
+test('alias：UNO 短名 + 大小写不敏感命中（audit §5-5）', () => {
+  const r = classifyLocal('UNO的规则', NO_SESSION_UNO)
+  assert.equal(r.intent, 'chat')
+  assert.equal(r.params.game_id, 'uno')
+  assert.ok(r.text.includes('108'))
+  const r2 = classifyLocal('玩uno', NO_SESSION_UNO)
+  assert.equal(r2.intent, 'play')
+  assert.equal(r2.params.game_id, 'uno')
+})
+
+test('alias：最长匹配胜出 —— “UNO 7-0” 优先于裸 “UNO”', () => {
+  const r = classifyLocal('UNO 7-0怎么玩', NO_SESSION_UNO)
+  assert.equal(r.params.game_id, 'uno_seven_zero')
 })

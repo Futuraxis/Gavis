@@ -25,7 +25,7 @@ from layer4_interface.frontend.platform.games import GAMES
 from ..solver_provider import SolverHandle, SolverProvider
 from .models import OnlineModelStore
 from .recorder import RecordingHandle, TrajectoryRecorder
-from .store import LearningStore
+from .store import LearningStore, LearningStoreError
 
 
 @dataclass
@@ -87,6 +87,12 @@ class LearningManager:
 
     def on_finished(self, session: Any) -> None:
         """Persist the finished match's decisions + terminal record."""
+        if session.recorder is None:
+            # 开局时学习未启用的会话没有装配录制器（B5 门控按开局判定），
+            # 整局从未采集——没有轨迹可落盘，静默返回。回归：旧实现在此
+            # 无条件调 ``session.recorder.finish``，未启用学习的游戏（默认
+            # 配置下的月亮棋）终局最后一手直接 500（NoneType.finish）。
+            return
         session.recorder.finish(session)
 
     # ── Config ────────────────────────────────────────────────────
@@ -188,6 +194,12 @@ class LearningManager:
             b_rate = gate_result["baseline_win_rate"]
             if c_rate + self._gate_tolerance >= b_rate:
                 model = self._model_store.publish(game_id, table, samples=samples, coverage=coverage, gate=gate_result)
+                # 留存上界（设计文档 §2 承诺，此前从未接线）：发布成功后
+                # 收缩轨迹库至最新 N 局，防止 jsonl 无限增长。
+                try:
+                    self._store.trim(game_id)
+                except (LearningStoreError, ValueError, OSError):
+                    pass  # 留存收缩失败不影响发布结果
                 return ApplyResult(
                     game_id=game_id,
                     applied=True,

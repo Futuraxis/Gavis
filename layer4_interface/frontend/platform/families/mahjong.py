@@ -14,7 +14,10 @@ read seats, variant defaults and player counts from the rules data:
   passed, so the engine uses the rules' declared default
   (``variants.variant``) — no variant name is hardcoded;
 - the AI drives every non-human seat (2-player: the single AI; 4-player:
-  all remaining seats) through their draw / claim / discard turns;
+  all remaining seats) through their draw / claim / discard turns; the
+  human's no-choice claim rounds (legal actions are ``claim_pass`` only)
+  are auto-passed by ``mahjong_auto_pass_claim`` so the snapshot only
+  surfaces real decision points;
 - ``ai_hand`` is only serialized after ``over`` — the rules'
   ``visibility`` section marks every ``hand_*`` view hidden to
   non-owners (the hidden-information red line); ``hand_counts`` /
@@ -35,7 +38,7 @@ from layer2_engine.core.state_graph import ActionInstance
 
 from ....solver_provider import SolverHandle, SolverProvider
 from ...engine_helpers import mahjong_tile_name
-from ..games import GameSpec, PlayError
+from ..games import GameSpec, PlayError, mahjong_auto_pass_claim
 from .helpers import (
     declared_player_counts,
     engine_from_rules_dict,
@@ -148,8 +151,16 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
         session.state = resolve_all_chance(session.engine, session.state)
 
     def _run_ai(session: GameSession, on_ai_action: Callable[[ActionInstance], None] | None = None) -> None:
-        """Drive every non-human seat through draw / claim / discard turns."""
-        while not session.over and session.current_player is not None and session.current_player != session.player_pid:
+        """Drive every non-human seat through draw / claim / discard turns.
+
+        人类的无选择 claim 回合由 :func:`mahjong_auto_pass_claim` 自动跳过
+        （合法动作只剩「过」时直接替玩家执行）；只在真实决策点交还控制权。
+        """
+        while not session.over and session.current_player is not None:
+            if session.current_player == session.player_pid:
+                if mahjong_auto_pass_claim(session):
+                    continue
+                break  # 真实决策点：交还控制权
             action = session.solver.select_action(session.state)
             if action is None:  # heuristic found nothing — random fallback
                 legal = session.engine.get_legal_actions(session.state)
@@ -206,6 +217,8 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
             "discards": {pid: _discards(pid) for pid in seats},
             "wall_remaining": int(env.get("wall_count", 0)),
             "last_discard": env.get("last_discard"),
+            #: 谁打的这张牌（claim 操作条用它提示「对家打出了 X，请响应」）。
+            "last_discarder": env.get("last_discarder"),
             #: 刚摸进的牌（do_draw 写 env.last_drawn）：轮到你且 phase=action
             #: 时就是你这手刚摸的那张，前端用于高亮「新摸的牌」。
             "last_drawn": env.get("last_drawn"),

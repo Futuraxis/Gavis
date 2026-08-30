@@ -61,9 +61,9 @@ class TestGames:
         data = _get(base_url + "/api/games")
         assert data["ok"] is True
         by_id = {g["game_id"]: g for g in data["games"]}
-        # 平台注册表覆盖 rules/mahjong.json 声明的全部麻将变体 + 3 个
-        # 其余游戏 —— 与 test_platform_session.py::TestGameRegistrySpec 的游戏
-        # 契约一致；新增/移除变体必须同步两处断言与文档 docs/user/play_mahjong.md。
+        # 16 款 = 月亮棋/随机五子棋/德州 + 麻将七变种（v5.2 variants）+
+        # UNO 六变体 —— 与 test_platform_session.py::TestGameSpecRegistry 的
+        # 16 游戏契约一致；新增/移除必须同步两处断言与用户文档。
         assert set(by_id) == {
             "moon_chess",
             "stochastic_gomoku",
@@ -75,10 +75,17 @@ class TestGames:
             "mahjong_changsha",
             "mahjong_taiwan",
             "mahjong_international",
+            "uno",
+            "uno_seven_zero",
+            "uno_jump_in",
+            "uno_stacking",
+            "uno_draw_until",
+            "uno_strict_wild4",
         }
         assert by_id["moon_chess"]["board_size"] == 3
         assert by_id["stochastic_gomoku"]["board_size"] == 9
         assert by_id["texas_holdem"]["kind"] == "poker"
+        assert by_id["uno"]["kind"] == "uno"
         assert "cfr" not in by_id["texas_holdem"]["solver_options"]
         assert by_id["moon_chess"]["solver_options"] == ["mcts", "cfr", "hybrid", "random"]
 
@@ -97,6 +104,28 @@ class TestGames:
             assert isinstance(g.get("family"), str) and g["family"], (
                 f"{g['game_id']} 的 family 缺失/为空，前端会把非 grid 快照误路由到 grid 棋盘"
             )
+
+    def test_no_cors_wildcard_headers(self, base_url: str):
+        """审计 B6：同源服务不得发 CORS 通配头——否则本机浏览器里任意网页
+        都能跨域读 /api/*（对局史/画像）并触发写操作。默认同源策略即可；
+        对外暴露属于后续鉴权议题（docs/design/security-notes.md）。"""
+        req = urllib.request.Request(base_url + "/api/games", headers={"Origin": "https://evil.example"})
+        with _NO_PROXY_OPENER.open(req) as resp:
+            assert resp.headers.get("Access-Control-Allow-Origin") is None
+            assert resp.headers.get("Access-Control-Allow-Methods") is None
+
+    def test_dist_missing_serves_html_guide(self, base_url: str):
+        """审计 B25：dist 未构建时给浏览器一页可读的三步自救引导（503），
+        而非裸 JSON 报错——新手第一屏最重要的体验。"""
+        req = urllib.request.Request(base_url + "/")
+        try:
+            with _NO_PROXY_OPENER.open(req) as resp:
+                raise AssertionError(f"dist 缺失应 503，got {resp.status}")
+        except urllib.error.HTTPError as err:
+            assert err.code == 503
+            body = err.read().decode("utf-8")
+            assert "npm run build" in body and "<html" in body.lower()
+            assert err.headers.get("Content-Type", "").startswith("text/html")
 
 
 class TestMatch:
@@ -445,7 +474,19 @@ class TestCompanionIntegration:
 
 
 class TestChatEndpoint:
-    """POST /api/chat 契约：一句 → {intent, text, mood, params}，history 可选透传。"""
+    """POST /api/chat 契约：一句 → {intent, text, mood, params}，history 可选透传。
+
+    本类钉死确定性回退路径（monkeypatch 掉共享 LLM 单例）：开发机若恰有
+    Ollama 在线，真实 LLM 对「你好」这类寒暄的分类不稳定（实测会返回
+    help 而非 chat）——HTTP 冒烟测试只验证端点接线，LLM 行为由
+    test_chat.py 以注入 mock 覆盖。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _pin_fallback_path(self, monkeypatch: pytest.MonkeyPatch):
+        import layer4_interface.frontend.platform.server as server_mod
+
+        monkeypatch.setattr(server_mod, "_get_chat_llm", lambda: None)
 
     def test_chat_with_history(self, base_url: str):
         data = _post(

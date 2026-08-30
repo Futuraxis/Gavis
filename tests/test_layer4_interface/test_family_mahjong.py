@@ -54,6 +54,7 @@ MAHJONG_SNAPSHOT_KEYS = frozenset(
         "discards",
         "wall_remaining",
         "last_discard",
+        "last_discarder",
         "last_drawn",
         "last_action",
         "done",
@@ -235,7 +236,9 @@ class TestMahjongSession:
     def test_ai_opens_when_human_not_first_seat(self, manager: PlayManager):
         session = manager.start("custom_mahjong", "p1", "easy", player_count=4)
         snap = session.snapshot()
-        assert len(snap["my_hand"]) == 13  # AI（庄家 p0）已先开一张
+        # AI（庄家 p0）已先开一张；无选择 claim 自动过后轮到 p1 摸牌
+        # （14 张 / action），碰/杠可选时则停在 claim（13 张）。
+        assert len(snap["my_hand"]) in (13, 14)
         assert snap["ai_hand"] == []
         assert len(session.log) >= 1  # AI 开局动作已记录
 

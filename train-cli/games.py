@@ -374,7 +374,7 @@ GAMES: dict[str, GameSpec] = {
     ),
     "mahjong_guangdong": _mahjong_spec("mahjong_guangdong", "广东麻将（鸡胡）", "guangdong"),
     "mahjong_hongzhong": _mahjong_spec("mahjong_hongzhong", "红中麻将", "hongzhong"),
-    "mahjong_blood": _mahjong_spec("mahjong_blood", "血战到底", "blood"),
+    "mahjong_blood": _mahjong_spec("mahjong_blood", "血流成河", "blood"),
     "mahjong_sichuan": _mahjong_spec("mahjong_sichuan", "四川麻将（血战到底）", "sichuan"),
     "mahjong_changsha": _mahjong_spec("mahjong_changsha", "长沙麻将（258将）", "changsha"),
     "mahjong_taiwan": _mahjong_spec("mahjong_taiwan", "台湾麻将（16张）", "taiwan"),

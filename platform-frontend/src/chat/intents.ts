@@ -5,7 +5,7 @@
 import type { ChatIntent, ChatTurnResult } from '../types'
 
 export interface LocalContext {
-  games: { game_id: string; display_name: string }[]
+  games: { game_id: string; display_name: string; description?: string; aliases?: string[] }[]
   activeGameId: string | null
   activeDisplay: string | null
 }
@@ -22,6 +22,9 @@ const PLATFORM_RE = /(?:平台界面|完整界面|平台模式|打开平台|回�
 const BENCHMARK_RE = /(?:评测|benchmark|模拟对局|求解器对比)/
 const LEARNING_RE = /(?:在线学习|学习状态|自动学习)/
 const HELP_RE = /(?:帮助|能做什么|怎么用|你有什么功能|你会什么)/
+// 「X 是什么/怎么玩」类知识问句 — 与后端 chat.py 的 _WHAT_IS_RE 对齐；
+// description 是确定性数据，断连时也能零幻觉作答。
+const WHAT_IS_RE = /(?:是什么|什么叫|什么游戏|怎么玩|怎么下|怎么打|规则|玩法|介绍一?下|简介)/
 
 const HELP_TEXT = [
   '你可以直接用大白话跟我说话，例如：',
@@ -34,15 +37,21 @@ const HELP_TEXT = [
   '· “设置” / “评测中心” / “在线学习” —— 各功能面板',
 ].join('\n')
 
-function findGame(text: string, games: LocalContext['games']): { game_id: string; display_name: string } | null {
-  let best: { game_id: string; display_name: string } | null = null
+function findGame(text: string, games: LocalContext['games']): LocalContext['games'][number] | null {
+  // 与后端 _find_game 对齐：display_name / game_id / 别名子串匹配，
+  // 大小写不敏感（"uno" 命中 "UNO"），最长匹配胜出（"UNO 7-0" 优先
+  // 于裸 "UNO"）——display_name 带括注（「UNO（经典）」）时短名也能命中。
+  const lowered = text.toLowerCase()
+  let best: LocalContext['games'][number] | null = null
   let bestLen = 0
   for (const g of games) {
-    for (const key of ['display_name', 'game_id'] as const) {
-      const name = g[key]
-      if (name && text.includes(name) && name.length > bestLen) {
+    const names = [g.display_name, g.game_id, ...(g.aliases ?? [])]
+    for (const name of names) {
+      if (!name) continue
+      const lname = name.toLowerCase()
+      if (lowered.includes(lname) && lname.length > bestLen) {
         best = g
-        bestLen = name.length
+        bestLen = lname.length
       }
     }
   }
@@ -53,6 +62,25 @@ export function classifyLocal(text: string, ctx: LocalContext): ChatTurnResult {
   const game = findGame(text, ctx.games)
   const hasSession = Boolean(ctx.activeGameId)
   const chips = ctx.games.slice(0, 8).map((g) => g.display_name)
+
+  // 「X 是什么/怎么玩/规则」→ 确定性知识回答（游戏目录 description，
+  // 零幻觉）。必须先于 play —— “怎么下/怎么打”也含开局动词，语义却是
+  // 问规则；未点名任何已注册游戏则维持原兜底（不猜、不编）。
+  if (game && WHAT_IS_RE.test(text)) {
+    const desc = game.description ?? ''
+    // description 多以名字开头（“3×3 经典月亮棋：…”），避免复读式拼接
+    const body = desc
+      ? desc.includes(game.display_name)
+        ? desc
+        : `${game.display_name}：${desc}`
+      : `${game.display_name}是平台支持的一款游戏。`
+    return {
+      intent: 'chat',
+      text: `${body}\n想试一试的话，说“玩${game.display_name}”即可开局。`,
+      mood: 'thinking',
+      params: { game_id: game.game_id, chips: [`玩${game.display_name}`] },
+    }
+  }
 
   if (game && PLAY_RE.test(text)) {
     return { intent: 'play', text: `好，来一局${game.display_name}！对局正在创建…`, mood: 'happy', params: { game_id: game.game_id } }

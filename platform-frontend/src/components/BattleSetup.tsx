@@ -9,6 +9,7 @@ export interface BattleConfig {
   hintLevel: HintLevel
   pacing: Pacing
   adaptive: boolean
+  teaching: boolean
 }
 
 interface Props {
@@ -62,7 +63,10 @@ const RULES_SUMMARY: Record<string, string> = {
   texas_holdem: '双人德州扑克：每人两张底牌，依次翻牌/转牌/河牌，比五张最大牌型。',
   mahjong_guangdong: '四人广东鸡胡：吃碰杠、自摸荣和、清一色等番种。',
   mahjong_hongzhong: '红中万能牌：红中可代任意牌凑搭子，其余规则同鸡胡。',
-  mahjong_blood: '血战到底：胡牌后不退出，剩余玩家继续，直到两家胡或牌墙摸空。',
+  mahjong_blood: '血流成河：胡牌后不退场继续摸打（不能重复胡），可多次胡牌累计番分，直到三家胡牌或牌墙摸空。',
+  mahjong_sichuan: '四人四川麻将（血战到底）：108 张无字牌，缺一门才能胡，禁吃，胡牌后胡家退场，直到三家胡牌或牌墙摸空。',
+  mahjong_changsha: '四人长沙麻将：258将为将的小胡 + 大胡（碰碰胡/清一色等）乱将豁免。',
+  mahjong_taiwan: '四人台湾麻将（16 张）：5 副露 + 将成胡，呖咕呖咕（八对半）可胡。',
 }
 
 export default function BattleSetup({ game, busy, error, onStart }: Props) {
@@ -73,6 +77,7 @@ export default function BattleSetup({ game, busy, error, onStart }: Props) {
   const [hintLevel, setHintLevel] = useState<HintLevel>('off')
   const [pacing, setPacing] = useState<Pacing>('standard')
   const [adaptive, setAdaptive] = useState(true)
+  const [teaching, setTeaching] = useState(false)
   const [showRules, setShowRules] = useState(false)
 
   // 座位按人数取前 N 个（麻将默认 4 人 → 显 p0-p3）——避免选到人数外的座位造成死局。
@@ -82,6 +87,12 @@ export default function BattleSetup({ game, busy, error, onStart }: Props) {
     setPlayerCount(n)
     const valid = game.seat_options.slice(0, n)
     if (playerPid !== 'random' && !valid.includes(playerPid)) setPlayerPid('random')
+  }
+
+  function toggleTeaching(next: boolean) {
+    setTeaching(next)
+    // 教学对局默认搭配「认真教学」人格（仍可手动改选其它性格）。
+    if (next && persona === 'gentle') setPersona('teacher')
   }
 
   return (
@@ -134,6 +145,13 @@ export default function BattleSetup({ game, busy, error, onStart }: Props) {
           ))}
         </select>
       </div>
+      {game.kind === 'mahjong' && !game.custom && (
+        <div className="form-row" style={{ marginTop: -6 }}>
+          <span style={{ color: 'var(--muted)', fontSize: 13 }}>
+            ℹ️ 麻将 AI 当前为固定强度的启发式策略，三档难度暂无实际差异
+          </span>
+        </div>
+      )}
       <div className="form-row">
         <label>性格:</label>
         <select value={persona} onChange={(e) => setPersona(e.target.value as PersonaKey)}>
@@ -171,10 +189,23 @@ export default function BattleSetup({ game, busy, error, onStart }: Props) {
           <span>{adaptive ? '开启' : '关闭'}</span>
         </label>
       </div>
+      <div className="form-row">
+        <label>教学对局:</label>
+        <label
+          style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+          title="教练 Agent 能看到你的牌并推理：每步走完会对照参考动作讲评，轮到你时会读牌导读。它看不到 AI/对手的牌。"
+        >
+          <input type="checkbox" checked={teaching} onChange={(e) => toggleTeaching(e.target.checked)} />
+          <span>{teaching ? '开启 📖' : '关闭'}</span>
+          <span style={{ color: 'var(--muted)', fontSize: 13 }}>
+            教练看你的牌带你打、走完点评
+          </span>
+        </label>
+      </div>
       <button
         className="btn btn-primary"
         disabled={busy}
-        onClick={() => onStart({ playerPid, difficulty, playerCount, persona, hintLevel, pacing, adaptive })}
+        onClick={() => onStart({ playerPid, difficulty, playerCount, persona, hintLevel, pacing, adaptive, teaching })}
       >
         {busy ? '加载中…' : '开始对局'}
       </button>

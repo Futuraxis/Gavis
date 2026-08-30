@@ -1658,6 +1658,42 @@
             "array": {
               "template": "hand_{$env.turn}"
             }
+          },
+          "filter": {
+            "not": {
+              "or": [
+                {
+                  "eq": [
+                    {
+                      "call": [
+                        "symbol_of",
+                        {
+                          "var": "$card"
+                        }
+                      ]
+                    },
+                    {
+                      "const": "wild"
+                    }
+                  ]
+                },
+                {
+                  "eq": [
+                    {
+                      "call": [
+                        "symbol_of",
+                        {
+                          "var": "$card"
+                        }
+                      ]
+                    },
+                    {
+                      "const": "wild4"
+                    }
+                  ]
+                }
+              ]
+            }
           }
         }
       },
@@ -1694,6 +1730,98 @@
       "effectRef": "do_play_drawn",
       "canonicalKey": {
         "template": "play:{card}"
+      }
+    },
+    {
+      "id": "play_drawn_wild",
+      "type": "move",
+      "phases": [
+        "draw_result"
+      ],
+      "params": {
+        "card": {
+          "domain": {
+            "array": {
+              "template": "hand_{$env.turn}"
+            }
+          },
+          "filter": {
+            "or": [
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "symbol_of",
+                      {
+                        "var": "$card"
+                      }
+                    ]
+                  },
+                  {
+                    "const": "wild"
+                  }
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "call": [
+                      "symbol_of",
+                      {
+                        "var": "$card"
+                      }
+                    ]
+                  },
+                  {
+                    "const": "wild4"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "color": {
+          "domain": [
+            "r",
+            "b",
+            "g",
+            "y"
+          ]
+        }
+      },
+      "legal": {
+        "and": [
+          {
+            "eq": [
+              {
+                "var": "$card"
+              },
+              {
+                "var": "$env.drawnCard"
+              }
+            ]
+          },
+          {
+            "call": [
+              "can_play",
+              {
+                "var": "$card"
+              },
+              {
+                "call": [
+                  "hand_of",
+                  {
+                    "var": "$env.turn"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "effectRef": "do_play_drawn_wild",
+      "canonicalKey": {
+        "template": "play:{card}:{color}"
       }
     },
     {
@@ -2633,6 +2761,13 @@
                   ]
                 },
                 {
+                  "op": "setEnv",
+                  "key": "handsSnapshot",
+                  "value": {
+                    "const": []
+                  }
+                },
+                {
                   "op": "branch",
                   "if": {
                     "var": "$advance"
@@ -2813,6 +2948,13 @@
                         "const": 0
                       }
                     ]
+                  }
+                },
+                {
+                  "op": "setEnv",
+                  "key": "handsSnapshot",
+                  "value": {
+                    "const": []
                   }
                 },
                 {
@@ -3705,7 +3847,7 @@
       ]
     },
     "do_play_drawn": {
-      "description": "打出刚摸的牌",
+      "description": "打出刚摸的牌（非万能）",
       "ops": [
         {
           "op": "callEffect",
@@ -3719,6 +3861,44 @@
             },
             "color": {
               "const": null
+            },
+            "swapTarget": {
+              "const": null
+            },
+            "advance": {
+              "const": true
+            }
+          }
+        },
+        {
+          "op": "setEnv",
+          "key": "drawnCard",
+          "value": {
+            "const": null
+          }
+        },
+        {
+          "op": "callEffect",
+          "effectRef": "do_end_check",
+          "args": {}
+        }
+      ]
+    },
+    "do_play_drawn_wild": {
+      "description": "打出刚摸的万能牌（选色；play_wild 的摸牌即出对应版）",
+      "ops": [
+        {
+          "op": "callEffect",
+          "effectRef": "do_play_card",
+          "args": {
+            "player": {
+              "var": "$env.turn"
+            },
+            "card": {
+              "var": "$card"
+            },
+            "color": {
+              "var": "$color"
             },
             "swapTarget": {
               "const": null
@@ -4550,9 +4730,10 @@
       "id": "draw_result",
       "actions": [
         "play_drawn",
+        "play_drawn_wild",
         "pass"
       ],
-      "description": "玩家：可打出刚摸的牌或过"
+      "description": "玩家：可打出刚摸的牌（万能牌选色）或过"
     },
     {
       "id": "jump",
@@ -4760,7 +4941,14 @@
           "id": "hidden"
         }
       }
-    ]
+    ],
+    "env": {
+      "handsSnapshot": {
+        "filter": {
+          "const": false
+        }
+      }
+    }
   },
   "terminal": [
     {

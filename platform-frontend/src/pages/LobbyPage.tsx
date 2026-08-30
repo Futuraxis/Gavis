@@ -3,7 +3,21 @@ import { useNavigate } from 'react-router-dom'
 import { apiGet, deleteCustomGame } from '../api/client'
 import type { GameInfo } from '../types'
 
-const FAMILY_LABELS: Record<string, string> = { grid: '网格', poker: '扑克', mahjong: '麻将', social: '社交' }
+const FAMILY_LABELS: Record<string, string> = { grid: '网格', poker: '扑克', mahjong: '麻将', social: '社交', uno: 'UNO' }
+
+/** 大厅卡片徽标：按 kind 分发——非棋盘类没有 board_size，旧逻辑会渲染「🎯 null×null」。 */
+function kindBadge(game: GameInfo): string {
+  switch (game.kind) {
+    case 'poker':
+      return '🃏 扑克'
+    case 'mahjong':
+      return '🀄 麻将'
+    case 'uno':
+      return '🎴 UNO'
+    default:
+      return game.board_size != null ? `🎯 ${game.board_size}×${game.board_size}` : '🎲 对战'
+  }
+}
 
 export default function LobbyPage() {
   const [games, setGames] = useState<GameInfo[]>([])
@@ -51,7 +65,7 @@ export default function LobbyPage() {
             <h3 style={{ marginBottom: 8 }}>
               {game.display_name}
               <span className="badge accent" style={{ marginLeft: 10 }}>
-                {game.kind === 'poker' ? '🃏 扑克' : `🎯 ${game.board_size}×${game.board_size}`}
+                {kindBadge(game)}
               </span>
               {game.custom && (
                 <span className="badge accent" style={{ marginLeft: 6 }}>

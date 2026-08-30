@@ -896,6 +896,13 @@ table.data tr.clickable:hover td {
   justify-content: center;
 }
 
+/* claim 响应提示：「对家 AI 打出了 3筒，请选择：」 */
+.claim-prompt {
+  color: #ffd9a0;
+  font-size: 14px;
+  margin-right: 6px;
+}
+
 .hint {
   color: var(--muted);
   font-size: 12px;

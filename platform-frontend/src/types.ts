@@ -4,7 +4,7 @@ export interface GameInfo {
   game_id: string
   display_name: string
   description: string
-  kind: 'board' | 'poker' | 'mahjong'
+  kind: 'board' | 'poker' | 'mahjong' | 'uno'
   board_size: number | null
   seat_options: string[]
   seat_label: string
@@ -14,6 +14,7 @@ export interface GameInfo {
   family: string // 族: grid / poker / mahjong / social（渲染以 family 为准）
   custom: boolean // 是否来自自定义游戏注册表
   created_at?: string // 自定义游戏创建时间（自定义条目携带）
+  aliases?: string[] // 短名/别名（内置游戏携带；断连兜底 classifyLocal 的短名匹配用）
 }
 
 // ── 自定义游戏 (A2 后端契约 / A3 前端) ──────────────────────────
@@ -36,11 +37,23 @@ export interface CustomCreateResult {
 
 // ── 快照 (snapshot) ────────────────────────────────────────────
 
+/**
+ * 局势评估（后端 session.snapshot() 统一注入，人类视角；agent 关闭时为 null）。
+ * score ∈ [-1, 1]（正 = 人类占优）；summary 为一句中文局势描述，
+ * mechanical_text 为可悬浮查看的机械化依据。
+ */
+export interface EvaluationInfo {
+  score: number
+  summary: string
+  mechanical_text?: string
+}
+
 export interface BoardSnapshot {
   game_id: string
   family?: string // 族（后端 session 统一注入，快照自描述；social 快照为必填）
   player_pid: string
   difficulty: string
+  evaluation?: EvaluationInfo | null // 局势评估（agent 关闭时为 null）
   board: (string | null)[]
   board_size?: number // 自定义 grid 游戏: N×N 边长（既有 moon/gomoku 快照不含）
   win_length?: number // 自定义 grid 游戏: 连珠长度（仅展示/信息用途）
@@ -62,6 +75,7 @@ export interface PokerSnapshot {
   player_pid: string
   ai_pid: string
   difficulty: string
+  evaluation?: EvaluationInfo | null // 局势评估（agent 关闭时为 null）
   over: boolean
   winner: string | null
   turn: string | null
@@ -102,6 +116,7 @@ export interface MahjongSnapshot {
   player_pid: string
   ai_pid: string
   difficulty: string
+  evaluation?: EvaluationInfo | null // 局势评估（agent 关闭时为 null）
   over: boolean
   winner: string | null
   turn: string | null
@@ -113,6 +128,7 @@ export interface MahjongSnapshot {
   discards: Record<string, string[]>
   wall_remaining: number
   last_discard: string | null
+  last_discarder?: string | null // 谁打的（claim 提示用；旧后端快照可能缺省）
   last_drawn: string | null
   last_action: string | null
   done: string[]
@@ -137,11 +153,13 @@ export interface SocialSnapshot {
   game_id: string
   player_pid: string
   difficulty: string
+  evaluation?: EvaluationInfo | null // 局势评估（agent 关闭时为 null）
   over: boolean
   winner: string | null
   turn: string | null
   phase: string | null
   my_role: string | null
+  my_word?: string | null // 卧底局：自己的词卡（狼人杀等无词卡玩法为 null）
   alive: string[]
   discourse: SocialDiscourseEntry[]
   last_action: string | null
@@ -150,7 +168,63 @@ export interface SocialSnapshot {
   ai_mode: 'ollama' | 'random'
 }
 
-export type Snapshot = BoardSnapshot | PokerSnapshot | MahjongSnapshot | SocialSnapshot
+export type Snapshot = (BoardSnapshot | PokerSnapshot | MahjongSnapshot | SocialSnapshot | UnoSnapshot) & SnapshotExtras
+
+/**
+ * 会话级注入键（每条快照统一带上，不属于某族快照本体契约）：
+ *   - ``chat`` — 后端 pending_chat 增量（陪伴 Agent / 教练待投递消息）。
+ *   - ``teaching`` — 教学对局标记（教练能看到玩家自己的牌并推理）。
+ */
+export interface SnapshotExtras {
+  chat?: SnapshotChatEntry[]
+  teaching?: boolean
+}
+
+/** 后端 session.snapshot() 的 chat 增量条目（agent 消息，按 step 排序）。 */
+export interface SnapshotChatEntry {
+  scenario: string
+  text: string
+  mood: Mood
+  step: number
+}
+
+// ── UNO 族 ────────────────────────────────────────────────────────
+
+/** UNO 动作（与后端 _uno_snapshot 的 legal 条目一一对应）。 */
+export interface UnoLegalAction {
+  type: string
+  card?: string
+  color?: string
+  target?: string
+}
+
+export interface UnoSnapshot {
+  family?: string // 族（后端 session 统一注入）
+  game_id: string
+  player_pid: string
+  ai_pid: string
+  difficulty: string
+  evaluation?: EvaluationInfo | null // 局势评估（agent 关闭时为 null）
+  over: boolean
+  winner: string | null
+  turn: string | null
+  phase: string | null
+  direction: number // 1 顺时针 / -1 逆时针
+  top_color: string | null // 台面顶牌颜色（wild 后为所选色）
+  top_symbol: string | null // 台面顶牌符号（数字 / skip / reverse / draw2 / wild / wild4）
+  my_hand: string[]
+  ai_hand: string[] // 仅终局展示（隐藏信息红线）
+  hand_counts: Record<string, number> // 他人只暴露张数
+  discard_top: string | null
+  discard_recent: string[]
+  deck_count: number
+  pending_draw: number
+  penalty_target: string | null
+  last_action: string | null
+  last_ai_action: string | null
+  legal: UnoLegalAction[]
+  payoff: number | null
+}
 
 // ── 历史与回放 ─────────────────────────────────────────────────
 
@@ -168,6 +242,7 @@ export interface MatchMeta {
   persona?: PersonaKey | null
   hinted?: boolean
   ai_strength?: string | null
+  teaching?: boolean | null
 }
 
 export interface MoveEntry {
@@ -323,6 +398,24 @@ export interface ChatMessage {
   pending?: boolean
 }
 
+// ── 对话管理与存档 (conversations, 与后端 conversations.py 契约对齐) ──
+
+/** 会话列表条目（/api/conversations 与 append/update 响应携带）。 */
+export interface ConversationMeta {
+  conv_id: string
+  title: string
+  archived: boolean
+  created_at: string
+  updated_at: string
+  message_count: number
+  preview: string
+}
+
+/** 完整会话记录（/api/conversations/<id> 携带，含消息流）。 */
+export interface Conversation extends ConversationMeta {
+  messages: ChatMessage[]
+}
+
 export interface ChatState {
   messages: ChatMessage[]
   muted: boolean
@@ -338,6 +431,7 @@ export interface ActiveSession {
   difficulty: string
   persona: PersonaKey | null
   hint_level: HintLevel
+  teaching?: boolean
   step: number
   started_at: string
 }
@@ -366,6 +460,8 @@ export interface KeyNode {
   step: number
   kind: KeyNodeKind
   why: string
+  /** 该手的动作内容（后端 moves[].action，如 cell_1_2 / raise 40） */
+  what?: string
 }
 
 export interface ReviewReport {

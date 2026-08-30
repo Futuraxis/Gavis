@@ -28,6 +28,23 @@ pip install "gavis[psro]"      # PSRO 求解器
 pip install "gavis[all]"       # 全部
 ```
 
+## 玩一局（平台前端）
+
+```bash
+# 1. 构建前端（首次需要 Node.js ≥ 18）
+cd platform-frontend && npm install && npm run build && cd ..
+
+# 2. 启动平台服务（默认 http://127.0.0.1:8770/）
+python -m layer4_interface.frontend.platform.server
+
+# 3. 浏览器打开 http://127.0.0.1:8770/ → 游戏大厅 → 选游戏开战
+```
+
+平台内置 15 款游戏（月亮棋 / 随机五子棋 / 德州扑克 / 麻将六变种 / UNO 六变种），
+支持聊天开局、人机对战、复盘回放、在线学习开关；自定义游戏经「创建游戏」页
+接入（见 `docs/user/custom_games.md`）。前端开发模式：`cd platform-frontend && npm run dev`
+（5173 端口，`/api` 自动代理到 8770）。
+
 ## 训练 CLI（游戏注册制）
 
 所有游戏在 `train-cli/games.py` 注册表中登记（引擎构造、座位、可训练求解器
@@ -54,7 +71,7 @@ python -m train_cli --game texas_holdem --solver hybrid
 ## 项目结构
 
 ```
-layer1_translator/      # (预留) LLM 规则翻译层
+layer1_translator/      # LLM 规则翻译层（模板 + LLM 编排 + schema 校验）
 layer2_engine/          # 游戏引擎核心（无 per-game 适配器）
   core/                 # GameEngine + state_graph + expr_eval
 layer3_solvers/         # 求解器
@@ -67,14 +84,17 @@ layer3_solvers/         # 求解器
 layer4_interface/       # 交互界面
   binding/              # VLM 图片识别
   encoding/             # 状态特征编码
-  frontend/             # Web 服务 + 前端
-  online_learning/      # (预留) 在线自学习
+  frontend/             # Web 服务 + 平台前端
+  online_learning/      # 在线学习（轨迹捕获 + 经验对手模型 + 门禁发布）
+  agent/                # 陪伴 Agent（性格/场景对话/局势评估）
   vision_bridge.py      # 识别→求解器的桥梁
 train-cli/              # 训练 CLI：games.py 游戏注册表 + train.py 统一训练脚本
 train_cli.py            # 根目录导入桥（train-cli/ 的模块化别名）
+platform-frontend/      # 平台前端（React + Vite + TS，构建产物 dist/）
+rules/                  # 游戏规则 JSON（v5.2 零 BUILTIN + variants 声明式）
 tests/                  # 测试
 archive/                # 原始旧代码存档
-docs/merge/             # 架构设计文档
+docs/                   # 架构设计 + 用户文档 + 审计
 ```
 
 ## 四层详解

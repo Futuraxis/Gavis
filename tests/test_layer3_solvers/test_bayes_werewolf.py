@@ -160,7 +160,7 @@ def test_solver_vote_targets_most_suspicious():
         {"speaker": "p2", "intent": "accuse", "text": "p3 是狼", "round": 1},
         {"speaker": "p4", "intent": "accuse", "text": "p3 是狼", "round": 1},
     ]
-    solver._ensure_tracker(obs)
+    solver._ensure_tracker()
     solver._fold_incremental(obs)
     assert solver._tracker.wolf_prob("p3") > solver._tracker.wolf_prob("p1")
     action = solver._vote_action([a for a in legal if a.template_id == "vote"])
@@ -202,3 +202,66 @@ def test_solver_plays_full_game_randomly():
             break
     winner = state["env"].get("winner")
     assert winner in ("wolf", "good"), f"game did not terminate properly: {winner}"
+
+
+# ── P1-1 回归：_ensure_tracker / select_action 缺参 TypeError ────────
+
+
+def test_ensure_tracker_callable_without_obs_arg():
+    """P1-1 回归：``_ensure_tracker`` 必须无参可调。
+
+    ``select_action`` 以 ``self._ensure_tracker()`` 调用它（无 ``obs`` 实参）；
+    修复前签名要求 ``obs`` → 每次绑定玩家决策必 ``TypeError``，狼人杀唯一的
+    非 LLM 求解器整体不可用。``obs`` 形参在方法体内本就未使用。
+    """
+    adapter = _engine(1)
+    solver = BayesSolver(adapter, BayesConfig(seed=1), player_id="p0")
+    # 修复前此行抛 TypeError: _ensure_tracker() missing 1 required positional argument: 'obs'
+    solver._ensure_tracker()
+    assert solver._tracker is not None
+
+
+def test_select_action_exercised_on_p0_turn():
+    """P1-1 回归（端到端）：推进到 p0 的玩家回合，``select_action`` 必须不抛、返回动作。
+
+    既有 ``test_solver_plays_full_game_randomly``（seed=5）从不落到 p0 的回合
+    （p0 先死），故 ``select_action`` 从未被调用、bug 未暴露。本测试遍历种子
+    直到 p0 行动，真正走一次 ``select_action → _ensure_tracker()`` 路径。
+    """
+    from dataclasses import replace
+
+    exercised = False
+    for seed in range(1, 17):
+        adapter = _engine(seed)
+        solver = BayesSolver(adapter, BayesConfig(seed=seed), player_id="p0")
+        rng = random.Random(seed)
+        state = adapter.create_initial_state()
+        for _ in range(400):
+            nt = adapter.get_node_type(state)
+            if nt == "chance":
+                outs = adapter.get_chance_outcomes(state)
+                if not outs:
+                    break
+                state = adapter.apply_chance(state, rng.choices(outs, weights=[o.probability for o in outs], k=1)[0])
+                continue
+            if nt != "player":
+                break
+            cur = adapter.get_current_player(state)
+            legal = adapter.get_legal_actions(state)
+            if not legal:
+                break
+            if cur == "p0":
+                # 修复前此行抛 TypeError；修复后返回一个合法动作（含 fallback）。
+                action = solver.select_action(state)
+                assert action is not None, "select_action must return an action at a legal player state"
+                exercised = True
+                break
+            a = rng.choice(legal)
+            if a.template_id == "speak" and not a.params.get("text"):
+                a = replace(a, params={**a.params, "text": "x"})
+            state = adapter.apply_action(state, a)
+            if adapter.is_terminal(state):
+                break
+        if exercised:
+            break
+    assert exercised, "no seed reached p0's turn — P1-1 select_action path not exercised"
