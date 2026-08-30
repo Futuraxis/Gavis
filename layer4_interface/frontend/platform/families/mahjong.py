@@ -37,7 +37,7 @@ from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import ActionInstance
 
 from ....solver_provider import SolverHandle, SolverProvider
-from ...engine_helpers import mahjong_tile_name
+from ...engine_helpers import canonical_family_text, mahjong_tile_name
 from ..games import GameSpec, PlayError, mahjong_auto_pass_claim
 from .helpers import (
     declared_player_counts,
@@ -263,7 +263,7 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
             return f"加杠 {_tile_label(action.params.get('tile'))}"
         if action.template_id == "claim_pass":
             return "过"
-        return action.canonical_key
+        return canonical_family_text("mahjong", action.canonical_key)
 
     return GameSpec(
         game_id=game_id,

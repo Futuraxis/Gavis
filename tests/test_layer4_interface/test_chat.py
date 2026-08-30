@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import pytest
 
-from layer2_engine.core.llm import ChatReply, ToolCall
+from layer2_engine.core.llm import ChatReply, StreamChunk, ToolCall
 from layer4_interface.frontend.platform.chat import (
     build_tools,
     chat_turn,
+    chat_turn_stream,
     fallback_intent,
 )
 from layer4_interface.frontend.platform.game_knowledge import game_knowledge_text
@@ -663,3 +664,167 @@ def _games(manager: PlayManager) -> list[dict]:
             "family": "uno",
         },
     ]
+
+
+class _StreamFakeLLM:
+    """流式假 LLM：跨轮按序弹出脚本化的 ``StreamChunk``（无网络）。"""
+
+    def __init__(self, chunks: list[StreamChunk]) -> None:
+        self._chunks = list(chunks)
+        self.seen: list[list[dict]] = []
+
+    def complete_stream(self, messages: list[dict], tools: list[dict], **_: object):
+        self.seen.append(list(messages))
+        while self._chunks:
+            chunk = self._chunks.pop(0)
+            yield chunk
+            if chunk.done:
+                return
+        yield StreamChunk(done=True)
+
+
+class _RaisingStreamLLM:
+    """流式假 LLM：transport 中途抛错（fail-hard 路径）。"""
+
+    def complete_stream(self, messages: list[dict], tools: list[dict], **_: object):
+        raise RuntimeError("connection refused")
+
+
+class _StrictStreamLLM:
+    """流式假 LLM：签名与真实 ``LLMClient.complete_stream`` 一致 —— ``tools``
+    是 keyword-only（真实客户端如此声明）。调用方若把 ``tools`` 当位置参数传，
+    此处会立刻 ``TypeError``，正好复现线上「LLM 流式调用中断 → 正则兜底」的
+    回归；同时把每次收到的 ``tools`` 记下来供断言。"""
+
+    def __init__(self, chunks: list[StreamChunk]) -> None:
+        self._chunks = list(chunks)
+        self.tools_seen: list[list[dict] | None] = []
+
+    def complete_stream(
+        self, messages: list[dict], *, tools: list[dict] | None = None, **_: object
+    ):
+        self.tools_seen.append(tools)
+        while self._chunks:
+            chunk = self._chunks.pop(0)
+            yield chunk
+            if chunk.done:
+                return
+        yield StreamChunk(done=True)
+
+
+def _event_tuples(events: list[dict]) -> list[tuple[str, dict]]:
+    return [(e["event"], e["data"]) for e in events]
+
+
+class TestChatTurnStream:
+    """chat_turn_stream（SSE 事件生成器）：增量正文/思维链、工具循环、失败兜底."""
+
+    def test_text_deltas_then_intent(self, manager: PlayManager) -> None:
+        fake = _StreamFakeLLM(
+            [
+                StreamChunk(text="你"),
+                StreamChunk(text="好"),
+                StreamChunk(text="，这步建议占中心。", done=True),
+            ]
+        )
+        events = list(chat_turn_stream(manager, "我该怎么走？", llm=fake))
+        tuples = _event_tuples(events)
+        assert tuples[0] == ("text", {"delta": "你"})
+        assert tuples[1] == ("text", {"delta": "好"})
+        assert tuples[2][0] == "text"
+        assert tuples[3][0] == "intent"
+        assert tuples[3][1]["intent"] == "chat"
+        assert tuples[3][1]["text"] == "你好，这步建议占中心。"
+        assert tuples[4] == ("done", {})
+        assert len(fake.seen) == 1
+
+    def test_reasoning_deltas_stream(self, manager: PlayManager) -> None:
+        fake = _StreamFakeLLM(
+            [
+                StreamChunk(reasoning="先看中心"),
+                StreamChunk(reasoning="再判断危险"),
+                StreamChunk(text="建议占中心。", done=True),
+            ]
+        )
+        events = list(chat_turn_stream(manager, "我该怎么走？", llm=fake))
+        tuples = _event_tuples(events)
+        assert tuples[0] == ("reasoning", {"delta": "先看中心"})
+        assert tuples[1] == ("reasoning", {"delta": "再判断危险"})
+        assert tuples[2] == ("text", {"delta": "建议占中心。"})
+        assert tuples[3][0] == "intent"
+        assert tuples[3][1]["text"] == "建议占中心。"
+
+    def test_action_tool_round_emits_intent_with_model_text(self, manager: PlayManager) -> None:
+        fake = _StreamFakeLLM(
+            [
+                StreamChunk(
+                    text="好，来一局月亮棋！",
+                    tool_calls=[ToolCall("play_game", {"game_id": "moon_chess"})],
+                    done=True,
+                )
+            ]
+        )
+        events = list(chat_turn_stream(manager, "我想玩月亮棋", llm=fake))
+        tuples = _event_tuples(events)
+        intent = tuples[-2][1]
+        assert intent["intent"] == "play"
+        assert intent["params"] == {"game_id": "moon_chess"}
+        assert intent["text"] == "好，来一局月亮棋！"
+
+    def test_info_tool_loop_feeds_back_then_answers(self, manager: PlayManager) -> None:
+        fake = _StreamFakeLLM(
+            [
+                StreamChunk(tool_calls=[ToolCall("describe_game", {"game_id": "moon_chess"})], done=True),
+                StreamChunk(text="月亮棋是双人策略棋盘游戏，落子占中心。", done=True),
+            ]
+        )
+        events = list(chat_turn_stream(manager, "月亮棋是什么？", llm=fake))
+        tuples = _event_tuples(events)
+        assert len(fake.seen) == 2  # 工具调用轮 + 带 role:"tool" 结果的成文轮
+        assert fake.seen[1][-1]["role"] == "tool"
+        assert tuples[-2][0] == "intent"
+        assert tuples[-2][1]["intent"] == "chat"
+        assert "月亮棋是双人" in tuples[-2][1]["text"]
+
+    def test_no_llm_falls_back_with_single_intent(self, manager: PlayManager) -> None:
+        events = list(chat_turn_stream(manager, "我想玩月亮棋"))
+        tuples = _event_tuples(events)
+        assert tuples[0][0] == "intent"
+        assert tuples[0][1]["intent"] == "play"
+        assert tuples[0][1]["params"]["game_id"] == "moon_chess"
+        assert tuples[1] == ("done", {})
+
+    def test_error_chunk_then_fallback_intent(self, manager: PlayManager) -> None:
+        fake = _StreamFakeLLM([StreamChunk(error="LLM 端点不可达/超时", done=True)])
+        events = list(chat_turn_stream(manager, "我想玩月亮棋", llm=fake))
+        tuples = _event_tuples(events)
+        assert tuples[0][0] == "error"
+        assert "不可达" in tuples[0][1]["error"]
+        assert tuples[1][0] == "intent"  # 兜底 intent 仍给出（error 不中断流）
+        assert tuples[-1] == ("done", {})
+
+    def test_stream_exception_falls_back_with_error_event(self, manager: PlayManager) -> None:
+        events = list(chat_turn_stream(manager, "我想玩月亮棋", llm=_RaisingStreamLLM()))
+        tuples = _event_tuples(events)
+        assert tuples[0][0] == "error"
+        assert "流式" in tuples[0][1]["error"]  # last_error 空 → 通用文案
+        assert tuples[1][0] == "intent"
+
+    def test_stream_passes_tools_keyword_only(self, manager: PlayManager) -> None:
+        """回归：``chat_turn_stream`` 必须用关键字传 ``tools``（真实客户端
+        ``LLMClient.complete_stream`` 声明为 keyword-only）。
+
+        曾以位置传参 → ``TypeError`` 立即抛出（尚未发任何 HTTP 请求，
+        ``last_error`` 为空）→ 线上表现为「LLM 流式调用中断 → 正则兜底」。
+        用与真实签名一致的假 LLM 复现该调用形态，确保增量正文正常上浮。
+        """
+        fake = _StrictStreamLLM([StreamChunk(text="你好，我在！", done=True)])
+        events = list(chat_turn_stream(manager, "你好", llm=fake))
+        tuples = _event_tuples(events)
+        assert len(fake.tools_seen) == 1  # 每轮都以 keyword 收到工具
+        assert isinstance(fake.tools_seen[0], list) and fake.tools_seen[0]  # 非 None 且非空
+        assert tuples[0] == ("text", {"delta": "你好，我在！"})
+        assert tuples[-2][0] == "intent"
+        assert tuples[-2][1]["intent"] == "chat"
+        assert tuples[-2][1]["text"] == "你好，我在！"
+        assert tuples[-1] == ("done", {})

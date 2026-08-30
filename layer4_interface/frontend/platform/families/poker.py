@@ -33,6 +33,7 @@ from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import ActionInstance
 
 from ....solver_provider import SolverHandle, SolverProvider
+from ...engine_helpers import canonical_family_text
 from ..games import GameSpec, PlayError
 from .helpers import (
     declared_player_counts,
@@ -303,7 +304,7 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
         }
 
     def _describe_action(action: ActionInstance) -> str:
-        return action.canonical_key
+        return canonical_family_text("poker", action.canonical_key)
 
     return GameSpec(
         game_id=game_id,

@@ -13,10 +13,18 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+from typing import Iterator
 
 import pytest
 
-from layer2_engine.core.llm import LLMClient, LLMClientError, LLMConfig, ToolCall, sanitize_text
+from layer2_engine.core.llm import (
+    LLMClient,
+    LLMClientError,
+    LLMConfig,
+    StreamChunk,
+    ToolCall,
+    sanitize_text,
+)
 
 
 class _FakeResponse:
@@ -168,6 +176,36 @@ class TestLLMClientApiKey:
         assert client.base_url == "http://host:11434"
 
 
+class TestLLMClientEndpointModelResolution:
+    """Endpoint/model 统一优先级：显式配置 > LLM_BASE_URL/LLM_MODEL > 内置默认。"""
+
+    def test_env_overrides_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LLM_BASE_URL", "http://env-host:9999")
+        monkeypatch.setenv("LLM_MODEL", "env-model")
+        assert LLMClient().base_url == "http://env-host:9999"
+        assert LLMClient().model == "env-model"
+
+    def test_explicit_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LLM_BASE_URL", "http://env-host:9999")
+        monkeypatch.setenv("LLM_MODEL", "env-model")
+        client = LLMClient(base_url="http://explicit:8888", model="explicit-model")
+        assert client.base_url == "http://explicit:8888"
+        assert client.model == "explicit-model"
+
+    def test_blank_env_falls_back_to_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("LLM_BASE_URL", raising=False)
+        monkeypatch.delenv("LLM_MODEL", raising=False)
+        client = LLMClient()
+        assert client.base_url == "http://127.0.0.1:11434"
+        assert client.model == "qwen3:8b"
+
+    def test_available_probe_uses_env_base_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """探测端点与实例化同源：``available()`` 也吃 LLM_BASE_URL。"""
+        monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:59995")
+        monkeypatch.delenv("LLM_MODEL", raising=False)
+        assert LLMClient.available() is False  # 该端口必然不可达
+
+
 def _http_error(url: str, code: int, body: str) -> urllib.error.HTTPError:
     """Construct a real ``HTTPError`` carrying an API error body."""
     return urllib.error.HTTPError(url, code, "err", {}, io.BytesIO(body.encode("utf-8")))
@@ -270,3 +308,245 @@ class TestLLMClientErrorClassification:
         assert client.last_error is not None
         assert client.complete([{"role": "user", "content": "hi"}]) == "回复"
         assert client.last_error is None
+
+
+class _FakeStreamResponse:
+    """urlopen 风格的 SSE 响应：按行 ``readline()`` 喂数据."""
+
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = [line.encode("utf-8") for line in lines]
+        self._idx = 0
+
+    def readline(self) -> bytes:
+        if self._idx >= len(self._lines):
+            return b""
+        line = self._lines[self._idx]
+        self._idx += 1
+        return line
+
+    def __enter__(self) -> _FakeStreamResponse:
+        return self
+
+    def __exit__(self, *args) -> bool:
+        return False
+
+
+def _sse(payload: object) -> str:
+    """一行 OpenAI 系 SSE ``data:`` 帧（含换行）。"""
+    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n"
+
+
+class TestCompleteStream:
+    """流式传输：SSE 增量、三种终态、思维链双来源、工具分片、失败收尾."""
+
+    def _patch(self, monkeypatch: pytest.MonkeyPatch, resp: object) -> None:
+        monkeypatch.setattr("layer2_engine.core.llm.urllib.request.urlopen", lambda req, timeout=None: resp)
+
+    def _collect(self, chunks: Iterator[StreamChunk]) -> tuple[str, str, list[ToolCall], str]:
+        """收拢 (text, reasoning, tool_calls, error)。"""
+        text = ""
+        reasoning = ""
+        tool_calls: list[ToolCall] = []
+        error = ""
+        for chunk in chunks:
+            text += chunk.text
+            reasoning += chunk.reasoning
+            if chunk.tool_calls:
+                tool_calls = chunk.tool_calls
+            if chunk.error:
+                error = chunk.error
+            assert chunk.done or chunk.text or chunk.reasoning or chunk.tool_calls or chunk.error
+        return text, reasoning, tool_calls, error
+
+    def test_delta_text_and_stop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        lines = [
+            _sse({"choices": [{"delta": {"content": "你"}}]}),
+            _sse({"choices": [{"delta": {"content": "好"}}]}),
+            _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        ]
+        self._patch(monkeypatch, _FakeStreamResponse(lines))
+        text, reasoning, tool_calls, error = self._collect(
+            LLMClient().complete_stream([{"role": "user", "content": "hi"}])
+        )
+        assert text == "你好"
+        assert reasoning == ""
+        assert tool_calls == []
+        assert error == ""
+
+    def test_done_marker_terminates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        lines = [_sse({"choices": [{"delta": {"content": "嗨"}}]}), "data: [DONE]\n"]
+        self._patch(monkeypatch, _FakeStreamResponse(lines))
+        text, _, _, _ = self._collect(LLMClient().complete_stream([{"role": "user", "content": "hi"}]))
+        assert text == "嗨"
+
+    def test_ollama_native_done_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        lines = [
+            _sse({"choices": [{"delta": {"content": "哈"}}], "done": False}),
+            _sse({"choices": [], "done": True}),
+        ]
+        self._patch(monkeypatch, _FakeStreamResponse(lines))
+        text, _, _, _ = self._collect(LLMClient().complete_stream([{"role": "user", "content": "hi"}]))
+        assert text == "哈"
+
+    def test_reasoning_content_delta(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        lines = [
+            _sse({"choices": [{"delta": {"reasoning_content": "先看中心"}}]}),
+            _sse({"choices": [{"delta": {"content": "建议占中心。"}}]}),
+            _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        ]
+        self._patch(monkeypatch, _FakeStreamResponse(lines))
+        text, reasoning, _, _ = self._collect(LLMClient().complete_stream([{"role": "user", "content": "hi"}]))
+        assert text == "建议占中心。"
+        assert reasoning == "先看中心"
+
+    def test_reasoning_fallback_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        lines = [
+            _sse({"choices": [{"delta": {"reasoning": "兜底键"}}]}),
+            _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        ]
+        self._patch(monkeypatch, _FakeStreamResponse(lines))
+        _, reasoning, _, _ = self._collect(LLMClient().complete_stream([{"role": "user", "content": "hi"}]))
+        assert reasoning == "兜底键"
+
+    def test_think_tags_across_chunks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 标签被三个 chunk 切开（``<thi | nk>… | nk>…``），不得丢字。
+        lines = [
+            _sse({"choices": [{"delta": {"content": "开场<thi"}}]}),
+            _sse({"choices": [{"delta": {"content": "nk>先想</thi"}}]}),
+            _sse({"choices": [{"delta": {"content": "nk>收尾"}}]}),
+            _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        ]
+        self._patch(monkeypatch, _FakeStreamResponse(lines))
+        text, reasoning, _, _ = self._collect(LLMClient().complete_stream([{"role": "user", "content": "hi"}]))
+        assert text == "开场收尾"
+        assert reasoning == "先想"
+
+    def test_unclosed_close_at_eof_kept_in_reasoning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        lines = [_sse({"choices": [{"delta": {"content": "开场<think>思考"}}]})]
+        self._patch(monkeypatch, _FakeStreamResponse(lines))
+        text, reasoning, _, _ = self._collect(LLMClient().complete_stream([{"role": "user", "content": "hi"}]))
+        assert text == "开场"
+        assert reasoning == "思考"
+
+    def test_unclosed_open_at_eof_as_literal_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        lines = [_sse({"choices": [{"delta": {"content": "开场<thi"}}]})]
+        self._patch(monkeypatch, _FakeStreamResponse(lines))
+        text, _, _, _ = self._collect(LLMClient().complete_stream([{"role": "user", "content": "hi"}]))
+        assert text == "开场<thi"
+
+    def test_stray_close_without_open_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        lines = [
+            _sse({"choices": [{"delta": {"content": "一句</think>两句"}}]}),
+            _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        ]
+        self._patch(monkeypatch, _FakeStreamResponse(lines))
+        text, reasoning, _, _ = self._collect(LLMClient().complete_stream([{"role": "user", "content": "hi"}]))
+        assert text == "一句两句"
+        assert reasoning == ""
+
+    def test_non_data_lines_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        lines = [
+            ": keep-alive 注释\n",
+            "\n",
+            _sse({"choices": [{"delta": {"content": "正常"}}]}),
+            _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        ]
+        self._patch(monkeypatch, _FakeStreamResponse(lines))
+        text, _, _, _ = self._collect(LLMClient().complete_stream([{"role": "user", "content": "hi"}]))
+        assert text == "正常"
+
+    def test_tool_fragments_accumulated_parsed_at_end(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        lines = [
+            _sse(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {"index": 0, "id": "call_1", "function": {"name": "play", "arguments": '{"game'}}
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ),
+            _sse(
+                {
+                    "choices": [
+                        {"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '_id": "moon_chess"}'}}]}}
+                    ]
+                }
+            ),
+            _sse({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+        ]
+        self._patch(monkeypatch, _FakeStreamResponse(lines))
+        text, _, tool_calls, _ = self._collect(
+            LLMClient().complete_stream([{"role": "user", "content": "hi"}], tools=[{"type": "function"}])
+        )
+        assert text == ""
+        assert len(tool_calls) == 1
+        call = tool_calls[0]
+        assert call.name == "play"
+        assert call.arguments == {"game_id": "moon_chess"}
+        assert call.id == "call_1"
+
+    def test_bad_json_line_fails_soft(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch(monkeypatch, _FakeStreamResponse(["data: not json\n"]))
+        client = LLMClient()
+        _, _, _, error = self._collect(client.complete_stream([{"role": "user", "content": "hi"}]))
+        assert error
+        assert client.last_error is not None
+
+    def test_http_error_fails_soft_with_error_chunk(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def boom(req, timeout=None):
+            raise _http_error(req.full_url, 401, '{"error": "invalid api key"}')
+
+        monkeypatch.setattr("layer2_engine.core.llm.urllib.request.urlopen", boom)
+        client = LLMClient()
+        _, _, _, error = self._collect(client.complete_stream([{"role": "user", "content": "hi"}]))
+        assert "401" in error
+        assert "invalid api key" in error
+        assert client.last_error is not None
+
+    def test_fail_hard_stream_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def boom(req, timeout=None):
+            raise urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr("layer2_engine.core.llm.urllib.request.urlopen", boom)
+        client = LLMClient(fail_hard=True)
+        with pytest.raises(LLMClientError) as excinfo:
+            list(client.complete_stream([{"role": "user", "content": "hi"}]))
+        assert "connection refused" in str(excinfo.value)
+
+
+class TestChatReplyReasoning:
+    """非流式路径的思维链提取（complete_chat_reply → ChatReply.reasoning）."""
+
+    def test_reasoning_field_and_think_span(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        body = json.dumps(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "reasoning_content": "直接想法",
+                            "content": "开场<think>先想</think>答案",
+                        }
+                    }
+                ]
+            }
+        ).encode("utf-8")
+        monkeypatch.setattr(
+            "layer2_engine.core.llm.urllib.request.urlopen", lambda req, timeout=None: _FakeResponse(body)
+        )
+        reply = LLMClient().complete_chat_reply("sys", "usr", 64)
+        assert reply.text == "开场答案"
+        assert reply.reasoning == "直接想法先想"
+
+    def test_no_reasoning_keeps_text_whole(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        body = json.dumps({"choices": [{"message": {"content": "普通回复"}}]}).encode("utf-8")
+        monkeypatch.setattr(
+            "layer2_engine.core.llm.urllib.request.urlopen", lambda req, timeout=None: _FakeResponse(body)
+        )
+        reply = LLMClient().complete_chat_reply("sys", "usr", 64)
+        assert reply.text == "普通回复"
+        assert reply.reasoning == ""

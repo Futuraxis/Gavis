@@ -36,6 +36,7 @@ ts        int（毫秒 epoch；缺失时补当前时间）
 mood      happy | thinking | sorry | neutral（可选）
 intent    15 个平台意图白名单（可选）
 params    dict，序列化 ≤ 8KB（超限整体丢弃，fail-soft）
+reasoning 思维链文本（可选；剔控制字符 + ≤ 4000 字符，非字符串丢弃）
 ========  ==========================================================
 """
 
@@ -50,6 +51,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from layer2_engine.core.llm import sanitize_text
 
 #: conv_id 白名单：仅字母数字、下划线、连字符（与 history.match_id 同款，
 #: 杜绝路径分隔符/`..` 逃逸出 data 目录）。
@@ -84,6 +87,8 @@ _INTENTS = frozenset(
 
 #: 单条消息 params 的序列化预算（字符）。超限丢 params 保消息。
 _PARAMS_MAX_CHARS = 8192
+#: 单条消息 reasoning（思维链）的存档上限（字符）。超限截断、非字符串丢弃（fail-soft）。
+_REASONING_MAX = 4000
 #: 单次 append 的消息条数上限（防一次请求撑爆文件）。
 _APPEND_MAX = 50
 #: 单个对话的消息条数上限（超限从头裁剪——对话档是可再生的展示记录）。
@@ -130,6 +135,9 @@ def _sanitize_message(item: Any) -> dict[str, Any] | None:
     intent = item.get("intent")
     if intent in _INTENTS:
         msg["intent"] = str(intent)
+    reasoning = item.get("reasoning")
+    if isinstance(reasoning, str) and reasoning.strip():
+        msg["reasoning"] = sanitize_text(reasoning, _REASONING_MAX).strip()
     params = item.get("params")
     if isinstance(params, dict) and params:
         try:

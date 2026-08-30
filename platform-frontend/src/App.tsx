@@ -8,6 +8,7 @@ import BenchmarkPage from './pages/BenchmarkPage'
 import HistoryPage from './pages/HistoryPage'
 import HomePage from './pages/HomePage'
 import LearningPage from './pages/LearningPage'
+import LlmConfigPage from './pages/LlmConfigPage'
 import LobbyPage from './pages/LobbyPage'
 import ProfilePage from './pages/ProfilePage'
 import ReviewPage from './pages/ReviewPage'
@@ -46,6 +47,7 @@ export default function App() {
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/llm" element={<LlmConfigPage />} />
           <Route path="/review/:matchId" element={<ReviewPage />} />
           <Route path="/replay/:matchId" element={<ReviewPage />} />
         </Route>

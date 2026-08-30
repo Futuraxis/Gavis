@@ -1,5 +1,7 @@
 // API 客户端 — 解包 {"ok": ...} 信封, 失败时抛出 ApiError
 
+import { SseParser, type SseEvent } from '../chat/sse.ts'
+
 const BASE = '/api'
 
 export class ApiError extends Error {
@@ -48,15 +50,108 @@ export function apiPost<T>(path: string, body: unknown): Promise<T> {
 // ── Chat-first (agent 聊天模式) ─────────────────────────────────
 // POST /api/chat — 一句话 → 意图+参数（LLM function calling + 正则兜底）。
 // history: 之前若干轮 user/assistant 文本（最新的在后），让 LLM 有对话上下文。
+export type ChatHistoryTurn = { role: 'user' | 'assistant'; content: string }
+
 export function chatTurn(
   text: string,
   gameId?: string,
-  history?: { role: 'user' | 'assistant'; content: string }[],
+  history?: ChatHistoryTurn[],
 ): Promise<import('../types').ChatTurnResult> {
   return apiPost<import('../types').ChatTurnResult>('/chat', {
     text,
     ...(gameId ? { game_id: gameId } : {}),
     ...(history && history.length > 0 ? { history } : {}),
+  })
+}
+
+// ── Chat-first 流式模式（SSE）───────────────────────────────────
+// 同一 /api/chat 路由，带 Accept: text/event-stream（+ ?stream=1），
+// 后端按 chat_turn_stream 事件契约发流：
+//   reasoning{delta} / text{delta} / intent{ChatTurnResult} / error{error} / done{}
+// 回调在事件到达时同步触发（onText/onReasoning 供前端逐字渲染与思维链展示）；
+// 最终以 intent 事件 resolve；error 事件或流意外中断以 ApiError reject。
+export interface ChatStreamHandlers {
+  onText?: (delta: string) => void
+  onReasoning?: (delta: string) => void
+}
+
+export function chatTurnStream(
+  text: string,
+  gameId?: string,
+  history?: ChatHistoryTurn[],
+  handlers: ChatStreamHandlers = {},
+): Promise<import('../types').ChatTurnResult> {
+  return new Promise<import('../types').ChatTurnResult>((resolve, reject) => {
+    void (async () => {
+      try {
+        let resp: Response
+        try {
+          resp = await fetch(BASE + '/chat?stream=1', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'text/event-stream',
+            },
+            body: JSON.stringify({
+              text,
+              ...(gameId ? { game_id: gameId } : {}),
+              ...(history && history.length > 0 ? { history } : {}),
+            }),
+          })
+        } catch {
+          throw new ApiError(
+            '无法连接服务器，请确认平台服务已启动 (python -m layer4_interface.frontend.platform.server)',
+          )
+        }
+        if (!resp.ok || !resp.body) {
+          let detail = `服务器返回异常 (HTTP ${resp.status})`
+          const ct = resp.headers.get('Content-Type') ?? ''
+          if (ct.includes('application/json')) {
+            try {
+              const data = (await resp.json()) as { error?: string }
+              if (data?.error) detail = data.error
+            } catch {
+              /* 保持默认文案 */
+            }
+          }
+          throw new ApiError(detail)
+        }
+        const reader = resp.body.getReader()
+        const decoder = new TextDecoder('utf-8')
+        const parser = new SseParser()
+        let intent: import('../types').ChatTurnResult | null = null
+        let streamError: string | null = null
+        const handle = (ev: SseEvent): void => {
+          if (ev.event === 'reasoning') {
+            const d = JSON.parse(ev.data) as { delta?: string }
+            handlers.onReasoning?.(d.delta ?? '')
+          } else if (ev.event === 'text') {
+            const d = JSON.parse(ev.data) as { delta?: string }
+            handlers.onText?.(d.delta ?? '')
+          } else if (ev.event === 'intent') {
+            intent = JSON.parse(ev.data) as import('../types').ChatTurnResult
+          } else if (ev.event === 'error') {
+            const d = JSON.parse(ev.data) as { error?: string }
+            streamError = d.error ?? 'LLM 对话流失败'
+          }
+          // done 无业务载荷；无 intent 的 done 由收尾处判失败。
+        }
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          for (const ev of parser.push(decoder.decode(value, { stream: true }))) handle(ev)
+        }
+        for (const ev of parser.finish()) handle(ev)
+        if (intent) {
+          resolve(intent)
+          return
+        }
+        throw new ApiError(streamError ?? '对话流意外结束（未收到 intent 事件）')
+      } catch (err) {
+        reject(err instanceof ApiError ? err : new ApiError((err as Error).message))
+      }
+    })()
   })
 }
 
@@ -165,6 +260,41 @@ export function saveProfile(profile: import('../types').Profile): Promise<import
 
 export function clearProfile(): Promise<{ ok: boolean }> {
   return apiPost<{ ok: boolean }>('/profile/clear', {})
+}
+
+// ── LLM 配置 API ────────────────────────────────────────────────
+// 平台持久化配置（data/llm_config.json）> 环境变量 > 内置默认；保存后
+// 聊天 / Agent 对话 / 规则翻译 / 社交 AI 立即使用新端点与模型。
+// 密钥只写不回显：GET 只给 has_api_key；保存时省略 api_key = 保持不变，
+// 传空串 = 清除。
+
+export interface LlmConfigInfo {
+  base_url: string
+  model: string
+  has_api_key: boolean
+  effective_base_url: string
+  effective_model: string
+  source: 'platform' | 'env' | 'default'
+  available?: boolean
+}
+
+export function getLlmConfig(): Promise<{ config: LlmConfigInfo }> {
+  return apiGet<{ config: LlmConfigInfo }>('/llm/config')
+}
+
+export function saveLlmConfig(patch: {
+  base_url?: string
+  model?: string
+  api_key?: string
+}): Promise<{ config: LlmConfigInfo }> {
+  return apiPut<{ config: LlmConfigInfo }>('/llm/config', patch)
+}
+
+export function testLlmConnection(patch: {
+  base_url?: string
+  api_key?: string
+}): Promise<{ reachable: boolean; error: string; base_url: string }> {
+  return apiPost<{ reachable: boolean; error: string; base_url: string }>('/llm/test', patch)
 }
 
 export function getReview(matchId: string): Promise<import('../types').ReviewReport> {

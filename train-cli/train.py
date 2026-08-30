@@ -69,7 +69,9 @@ from layer2_engine.core.engine import GameEngine  # noqa: E402
 from layer3_solvers.base import SolverBase, SolverMetrics  # noqa: E402
 
 #: 评估对局最大步数护栏（超出按当前效用截断，防死循环）。
-MAX_EVAL_STEPS = 600
+#: 麻将自然局以墙尽或胡牌结束，实测约 1000-1100 步——600 会把大多数
+#: 墙尽局与晚胡截断成误判平局，故抬到 1200（仍远低于病理死循环）。
+MAX_EVAL_STEPS = 1200
 
 #: 评估对手 —— MCTS 基线的通用搜索预算（与 Hybrid 自身 mcts_budget 同量级，
 #: 使“vs 基线”与“vs 自己”的对比在同一规模下进行）。
@@ -296,9 +298,14 @@ def play_episode(
         legal = engine.get_legal_actions(state)
         if not legal:
             break
+        # 强制单动作（如麻将无选择的 claim_pass 回合）直接执行、跳过求解器：
+        # 结果是确定性的，语义等价；麻将局此类步骤占约 3/4，跳过使评估/MCTS
+        # 基线耗时降低一个数量级（与 marl/env.py run_episode 的同一优化一致）。
+        if len(legal) == 1:
+            action = legal[0]
         # own 座位用求解器；其余座位（owners 中为 None）按均匀随机落子——
         # 这是评估协议“vs 均匀随机”的语义，不能把 None 当成“无代理→中止”。
-        if solver is None:
+        elif solver is None:
             action = rng.choice(legal)
         else:
             action = solver.select_action(state)
@@ -338,7 +345,11 @@ def evaluate(
         if opp in ("random", "self"):
             continue
         if opp in spec.runtime_solvers:
-            baselines[opp] = create_solver(spec.game_id, opp, engine, base_seed, budget=eval_budget)
+            # 每对手预算覆盖（GameSpec.eval_budgets，如麻将 mcts→30）：缺省用全局
+            # EVAL_MCTS_BUDGET。麻将的 MCTS 每决策 ~200ms/迭代，全局 300 预算在该
+            # 游戏上单局数小时——注册表数据驱动覆盖让基线保持“可执行 + 语义一致”。
+            opp_budget = spec.eval_budgets.get(opp, eval_budget)
+            baselines[opp] = create_solver(spec.game_id, opp, engine, base_seed, budget=opp_budget)
         else:
             print(f"  [提示] {spec.game_id} 未登记 '{opp}' 运行时求解器，跳过该评估列")
 

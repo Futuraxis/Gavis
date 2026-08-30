@@ -9,6 +9,7 @@ const NAV = [
   { to: '/history', label: '对局记录', icon: '📜', end: false },
   { to: '/profile', label: '个人中心', icon: '👤', end: false },
   { to: '/settings', label: '设置', icon: '⚙️', end: false },
+  { to: '/llm', label: 'LLM 配置', icon: '🔌', end: false },
   { to: '/benchmark', label: '求解器评测', icon: '📊', end: false },
   { to: '/learning', label: '在线学习', icon: '🧠', end: false },
 ]

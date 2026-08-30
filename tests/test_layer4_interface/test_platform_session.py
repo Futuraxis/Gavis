@@ -1,4 +1,4 @@
-"""Tests for the platform's generic game sessions (all three games).
+"""Tests for the platform's generic game sessions (builtin registry games).
 
 Engine and solver are both seeded (MCTS seeds its own RNG), so the
 AI's choices are deterministic for a fixed seed — the "play to the
@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from layer2_engine.core.llm import LLMClient
 from layer4_interface.frontend.platform.games import GAMES, PlayError
 from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.session import _BUILTIN_FAMILY, PlayManager
@@ -180,10 +181,11 @@ class TestTexasHoldem:
 
 class TestGameSpecRegistry:
     def test_all_games_present(self):
-        # 15 款 = 月亮棋/随机五子棋/德州 + 麻将六变种 + UNO 六变体
+        # 16 款 = 月亮棋/随机五子棋/德州 + 麻将六变种 + UNO 六变体
+        # + 谁是卧底（undercover，social 族）
         # （uno 基类 + seven_zero/jump_in/stacking/draw_until/strict_wild4）。
-        # UNO 前端 FAMILY_BOARDS 尚无 "uno" 条目：大厅对 uno 族置灰标注
-        # 「前端界面开发中」，后端契约先按 15 款锁定（与
+        # UNO/social 前端棋盘均已接入 FAMILY_BOARDS（旧「置灰标注」说明已过时）
+        # 后端契约按 16 款锁定（与
         # test_platform_server.py::TestGames::test_list_games 同步维护）。
         assert set(GAMES) == {
             "moon_chess",
@@ -201,6 +203,7 @@ class TestGameSpecRegistry:
             "uno_stacking",
             "uno_draw_until",
             "uno_strict_wild4",
+            "undercover",
         }
 
     def test_seat_options_consistent(self):
@@ -466,3 +469,90 @@ class TestSessionSeed:
         second = manager.start("mahjong_guangdong", "p0", "easy", player_count=4)
         assert manager._build_record(first)["seed"] == 42  # noqa: SLF001
         assert manager._build_record(second)["seed"] == 43  # noqa: SLF001
+
+
+# ── 谁是卧底（undercover，social 族平台接入）──────────────────────────
+
+
+class TestUndercover:
+    """谁是卧底平台会话：social 族快照契约 + 完整人机对局闭环。
+
+    AI 求解器固定走 ``random``（monkeypatch ``LLMClient.available`` → False，
+    与本地无 Ollama 的部署一致）：会话确定、可复现，不做真实 LLM 调用。
+    """
+
+    def test_registry_spec(self):
+        spec = GAMES["undercover"]
+        assert spec.display_name == "谁是卧底"
+        assert spec.description
+        assert spec.kind == "board"
+        # 12 个声明座位（rules/undercover.json players）；人数 8 为首位默认，
+        # 4..12 全档可选（docs/user/play_undercover.md「默认 8、4..12」）。
+        assert len(spec.seat_options) == 12
+        assert spec.seat_options[0] == "p0"
+        assert spec.player_counts[0] == 8
+        assert set(spec.player_counts) == set(range(4, 13))
+        assert spec.seat_label == "座位"
+        assert spec.difficulty_budgets  # 社交族三档预算非空
+
+    def test_builtin_family_is_social(self):
+        assert _BUILTIN_FAMILY["undercover"] == "social"
+
+    def test_start_deals_roles_and_words(self, manager: PlayManager, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(LLMClient, "available", staticmethod(lambda *args, **kwargs: False))
+        session = manager.start("undercover", "p0", "easy")
+        snap = session.snapshot()
+        assert snap["family"] == "social"
+        assert snap["over"] is False
+        assert snap["phase"] == "describe"
+        assert snap["turn"] == "p0"  # 首座先发言（describe 从第一个存活者开始）
+        assert snap["my_role"] in ("civilian", "undercover", "blank")
+        assert snap["my_word"] in ("苹果", "香蕉", "白板")
+        assert len(snap["alive"]) == 8
+        assert snap["legal"] == [{"type": "speak", "text": ""}]
+        # 隐藏信息红线：快照只由投影构建——他人身份/词语数组与 AI 词语不得泄露。
+        assert "roles" not in snap and "words" not in snap
+        assert "ai_word" not in snap and "ai_role" not in snap
+
+    def test_player_count_6(self, manager: PlayManager, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(LLMClient, "available", staticmethod(lambda *args, **kwargs: False))
+        session = manager.start("undercover", "p0", "easy", player_count=6)
+        snap = session.snapshot()
+        assert len(snap["alive"]) == 6
+        assert snap["my_role"] in ("civilian", "undercover", "blank")
+
+    def test_unknown_player_count_raises(self, manager: PlayManager, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(LLMClient, "available", staticmethod(lambda *args, **kwargs: False))
+        with pytest.raises(PlayError, match="不支持"):
+            manager.start("undercover", "p0", "easy", player_count=3)
+
+    def test_full_game_terminates(self, manager: PlayManager, monkeypatch: pytest.MonkeyPatch):
+        """人机整局自动打完：发言→投票→结算→（平票/淘汰）→下一轮，直至终局。
+
+        回归守护：社交族在 resolve 机会节点后由 ``run_ai`` 的逐动作
+        ``resolve_all_chance`` 继续推进（不留卡死的 chance 残局）；每轮
+        投票不能投自己（``alive_others`` 域）。
+        """
+        monkeypatch.setattr(LLMClient, "available", staticmethod(lambda *args, **kwargs: False))
+        session = manager.start("undercover", "p0", "easy")
+        guard = 0
+        checked_vote = False
+        while not session.over and guard < 400:
+            snap = session.snapshot()
+            if snap["turn"] != snap["player_pid"] or not snap["legal"]:
+                break
+            if not checked_vote and snap["phase"] == "vote":
+                checked_vote = True
+                vote_actions = [a for a in snap["legal"] if a["type"] == "vote"]
+                assert vote_actions, "投票阶段必须提供投票动作"
+                assert all(a["target"] != snap["player_pid"] for a in vote_actions), "不能投自己"
+            act = snap["legal"][0]
+            if act["type"] == "speak":
+                payload = {"type": "speak", "text": "一个水果，很常见"}
+            else:
+                payload = {"type": act["type"], "target": act["target"]}
+            manager.move(session.game_id, payload)
+            guard += 1
+        assert session.over, f"应在轮次上限内终局（guard={guard}）"
+        assert session.snapshot()["winner"] in (None, "civilian", "undercover", "blank")
+        assert checked_vote, "对局中人类必须至少轮到一次投票"

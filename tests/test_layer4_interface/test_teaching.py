@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from layer2_engine.core.llm import ChatReply
 from layer4_interface.agent import (
     PERSONAS,
     SCENARIOS,
@@ -207,6 +208,11 @@ class _RecordingLLM:
         self.system = system
         self.user = user
         return self.reply
+
+    def complete_chat_reply(self, system: str, user: str, max_tokens: int) -> ChatReply:
+        self.system = system
+        self.user = user
+        return ChatReply(text=self.reply)
 
 
 class TestDialogueTeach:

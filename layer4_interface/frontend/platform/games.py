@@ -29,7 +29,13 @@ from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import ActionInstance
 
 from ...solver_provider import SolverHandle, SolverProvider
-from ..engine_helpers import engine_from_rules, mahjong_tile_name, resolve_all_chance, texas_hand_name
+from ..engine_helpers import (
+    canonical_family_text,
+    engine_from_rules,
+    mahjong_tile_name,
+    resolve_all_chance,
+    texas_hand_name,
+)
 
 if TYPE_CHECKING:
     from .session import GameSession
@@ -138,7 +144,8 @@ def _moon_snapshot(session: GameSession) -> dict:
 
 def _moon_describe_action(action: ActionInstance) -> str:
     cell = action.params.get("cell", {})
-    return cell.get("id", "") if isinstance(cell, dict) else str(cell)
+    cell_id = cell.get("id", "") if isinstance(cell, dict) else str(cell)
+    return canonical_family_text("grid", cell_id) if cell_id else str(action.canonical_key)
 
 
 # ── Stochastic Gomoku ─────────────────────────────────────────────
@@ -242,7 +249,9 @@ def _gomoku_snapshot(session: GameSession) -> dict:
 
 def _gomoku_describe_action(action: ActionInstance) -> str:
     idx = _gomoku_cell_index(action)
-    return f"cell_{idx // 9}_{idx % 9}" if idx >= 0 else "?"
+    if idx < 0:
+        return "?"
+    return canonical_family_text("grid", f"cell_{idx // 9}_{idx % 9}")
 
 
 # ── Texas Hold'em ─────────────────────────────────────────────────
@@ -364,7 +373,7 @@ def _poker_snapshot(session: GameSession) -> dict:
 
 
 def _poker_describe_action(action: ActionInstance) -> str:
-    return action.canonical_key
+    return canonical_family_text("poker", action.canonical_key)
 
 
 # ── Mahjong (guangdong / hongzhong / blood) ───────────────────────
@@ -381,8 +390,12 @@ def _make_mahjong_engine(variant: str) -> Callable[..., GameEngine]:
 
 
 def _make_mahjong_solver(game_id: str) -> Callable[[SolverProvider, GameEngine, int, int], SolverHandle]:
+    """装配麻将默认 AI：优先已训练 MAAC 模型（``maac`` 运行时工厂自动加载
+    ``models/train/<game_id>/maac.pt``），产物缺失时工厂回退到启发式，
+    平台永不因缺模型而崩溃。
+    """
     def _create(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
-        return provider.create_solver(game_id, "mahjong", engine, seed, budget)
+        return provider.create_solver(game_id, "maac", engine, seed, budget)
 
     return _create
 
@@ -722,7 +735,7 @@ def _uno_snapshot(session: GameSession) -> dict:
 
 
 def _uno_describe_action(action: ActionInstance) -> str:
-    return action.canonical_key
+    return canonical_family_text("uno", action.canonical_key)
 
 
 def _uno_ai_opens(session: GameSession) -> bool:
@@ -731,15 +744,53 @@ def _uno_ai_opens(session: GameSession) -> bool:
     return session.current_player != session.player_pid
 
 
-# 注意：平台注册表共 15 款 = 月亮棋/随机五子棋/德州 + 麻将六变种
+# ── Undercover（谁是卧底）─────────────────────────────────────────
+
+
+def _undercover_spec() -> GameSpec:
+    """谁是卧底 spec（social 族）：4..12 人（默认 8），词对场景 fruit。
+
+    直接复用 ``families.social.build_spec`` 的社交装配——每个 AI 座位独立
+    求解器（Ollama 可用时走本地大模型发言，否则随机）、快照只从
+    ``project_observation`` 投影构建（隐藏信息红线：他人身份/词语永不读
+    ``_arrays``）。之所以用懒导入：social 模块在模块级 ``from ..games``
+    导入，若本文件顶层再反向导入 social 会成环；在函数体内导入时
+    ``GameSpec`` 已定义完毕，安全。此处仅覆盖展示元数据：中文名/简介/
+    人数档（family 默认取 ``_player_counts`` 的声明人数 8；补 4..12 使
+    平台可人数选择，8 置于首位保持「默认 8」语义，与
+    docs/user/play_undercover.md 一致）。
+    """
+    import json
+    from dataclasses import replace
+
+    from ..engine_helpers import RULES_DIR
+    from .families.social import build_spec
+
+    rules = json.loads((RULES_DIR / "undercover.json").read_text(encoding="utf-8"))
+    spec = build_spec("undercover", rules)
+    return replace(
+        spec,
+        display_name="谁是卧底",
+        description=(
+            "经典派对语言游戏：平民拿到同一个词、卧底拿到相似词、白板无词；"
+            "轮流一句话描述后投票，票数最多者出局（平票无人出局）。"
+            "默认 8 人（1 卧底 + 1 白板 + 6 平民），人数 4..12；"
+            "AI 座位各自独立推理（本地大模型可用时发言，否则随机策略）。"
+        ),
+        player_counts=(8, 4, 5, 6, 7, 9, 10, 11, 12),
+    )
+
+
+# 注意：平台注册表共 16 款 = 月亮棋/随机五子棋/德州 + 麻将六变种
 # （guangdong / hongzhong / blood / sichuan / changsha / taiwan，v5.2
-# variants）+ UNO 六变体。三个消费注册点必须同步，否则各自漂移（曾漏挂
-# 四川/长沙/台湾，导致文档承诺六变种但大厅只有三个）：
-#   - 平台：本文件（平台 /api/games → 大厅；UNO 已注册但前端
-#     FAMILY_BOARDS 尚无 "uno" 条目——LobbyPage 对 uno 族卡片置灰标注
-#     「前端界面开发中」，BattlePage 有占位守卫防崩溃）
-#   - 训练：train-cli/games.py `_mahjong_spec`（六变体 × MARL 管线）
-#   - 文档：docs/user/play_mahjong.md（六变体 × 默认 4 人）
+# variants）+ UNO 六变体 + 谁是卧底（undercover，social 族）。三个消费
+# 注册点必须同步，否则各自漂移（曾漏挂四川/长沙/台湾，导致文档承诺六
+# 变种但大厅只有三个）：
+#   - 平台：本文件（平台 /api/games → 大厅）+ session.py `_BUILTIN_FAMILY`
+#     （undercover → "social"，缺项会让快照 family 为 None、前端误路由）
+#   - 训练：train-cli/games.py（undercover 条目已登记：rules/undercover.json
+#     × variant=fruit × player_count=8，runtime_solvers=ollama/random）
+#   - 文档：docs/user/play_undercover.md（4..12 人 × 场景词对）
 GAMES: dict[str, GameSpec] = {
     "moon_chess": GameSpec(
         game_id="moon_chess",
@@ -801,7 +852,7 @@ GAMES: dict[str, GameSpec] = {
     "mahjong_guangdong": GameSpec(
         game_id="mahjong_guangdong",
         display_name="广东麻将（鸡胡）",
-        description="四人广东鸡胡：吃碰杠、自摸荣和、清一色等番种，AI 使用启发式策略。",
+        description="四人广东鸡胡：吃碰杠、自摸荣和、清一色等番种。默认 AI=已训练 MAAC 模型（产物缺失时回退启发式）。",
         kind="mahjong",
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
@@ -823,7 +874,7 @@ GAMES: dict[str, GameSpec] = {
     "mahjong_hongzhong": GameSpec(
         game_id="mahjong_hongzhong",
         display_name="红中麻将",
-        description="红中万能牌：红中可代任意牌凑搭子，其余规则同鸡胡。",
+        description="红中万能牌：红中可代任意牌凑搭子，其余规则同鸡胡。默认 AI=已训练 MAAC（136 张共享模型，缺失回退启发式）。",
         kind="mahjong",
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
@@ -847,7 +898,7 @@ GAMES: dict[str, GameSpec] = {
         # 可多点累计胡牌），与四川麻将的血战到底（胡家退场）相区分——
         # 旧名「血战到底」与 mahjong_sichuan 撞名，大厅出现两个血战到底。
         display_name="血流成河",
-        description="血流成河：胡牌后不退场继续摸打（不能重复胡），可多次胡牌累计番分，直到三家胡牌或牌墙摸空；108 张无字牌、缺一门、禁吃，与四川麻将同源。",
+        description="血流成河：胡牌后不退场继续摸打（不能重复胡），可多次胡牌累计番分，直到三家胡牌或牌墙摸空；108 张无字牌、缺一门、禁吃，与四川麻将同源。默认 AI=已训练 MAAC（108 张共享模型，缺失回退启发式）。",
         kind="mahjong",
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
@@ -868,7 +919,7 @@ GAMES: dict[str, GameSpec] = {
     "mahjong_sichuan": GameSpec(
         game_id="mahjong_sichuan",
         display_name="四川麻将（血战到底）",
-        description="四人四川麻将（血战到底）：108 张无字牌，缺一门才能胡（硬门槛），禁吃，胡牌后胡家退场、剩余玩家继续，直到三家胡牌或牌墙摸空；番种：平胡 1/对对胡 2/清一色 4/七对 4/龙七对 8/将对 8。",
+        description="四人四川麻将（血战到底）：108 张无字牌，缺一门才能胡（硬门槛），禁吃，胡牌后胡家退场、剩余玩家继续，直到三家胡牌或牌墙摸空；番种：平胡 1/对对胡 2/清一色 4/七对 4/龙七对 8/将对 8。默认 AI=已训练 MAAC（108 张共享模型，缺失回退启发式）。",
         kind="mahjong",
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
@@ -889,7 +940,7 @@ GAMES: dict[str, GameSpec] = {
     "mahjong_changsha": GameSpec(
         game_id="mahjong_changsha",
         display_name="长沙麻将（258将）",
-        description="四人长沙麻将（258将）：108 张无字牌，小胡必须 2/5/8 为将，大胡（碰碰胡/清一色/七对/将将胡）乱将豁免；番制：小胡 1 番→10 / 大胡 6 番→60 / 番上番 12 番→120。",
+        description="四人长沙麻将（258将）：108 张无字牌，小胡必须 2/5/8 为将，大胡（碰碰胡/清一色/七对/将将胡）乱将豁免；番制：小胡 1 番→10 / 大胡 6 番→60 / 番上番 12 番→120。默认 AI=已训练 MAAC（108 张共享模型，缺失回退启发式）。",
         kind="mahjong",
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
@@ -910,7 +961,7 @@ GAMES: dict[str, GameSpec] = {
     "mahjong_taiwan": GameSpec(
         game_id="mahjong_taiwan",
         display_name="台湾麻将（16张）",
-        description="四人台湾麻将（16张）：无花简化 136 张，庄 17 张闲 16 张，5 副+将成胡，呖咕呖咕（八对半）可胡；台数：平胡 2/门清 1/自摸 1/碰碰胡 4/混一色 4/清一色 8。",
+        description="四人台湾麻将（16张）：无花简化 136 张，庄 17 张闲 16 张，5 副+将成胡，呖咕呖咕（八对半）可胡；台数：平胡 2/门清 1/自摸 1/碰碰胡 4/混一色 4/清一色 8。默认 AI=已训练 MAAC（136 张共享模型，缺失回退启发式）。",
         kind="mahjong",
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
@@ -1052,4 +1103,7 @@ GAMES: dict[str, GameSpec] = {
         build_snapshot=_uno_snapshot,
         describe_action=_uno_describe_action,
     ),
+    # 谁是卧底（social 族，v5.2 声明式 variants：1 卧底 + 1 白板 + N 平民）；
+    # 与 train-cli/games.py 的 undercover 条目同源（同一 undercover.json）。
+    "undercover": _undercover_spec(),
 }

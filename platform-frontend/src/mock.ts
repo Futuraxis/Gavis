@@ -64,6 +64,21 @@ export const MOCK_GAMES: GameInfo[] = [
     family: 'poker',
     custom: false,
   },
+  {
+    game_id: 'undercover',
+    display_name: '谁是卧底',
+    description: '平民同词、卧底近义词、白板无词；轮流一句话描述后投票，票最多者出局（平票无人出局）。默认 8 人，可 4-12 人。',
+    kind: 'board',
+    board_size: null,
+    seat_options: ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'p9', 'p10', 'p11'],
+    seat_label: '座位',
+    player_counts: [8, 4, 5, 6, 7, 9, 10, 11, 12],
+    difficulties: ['easy', 'normal', 'hard'],
+    // 社交游戏走 ollama/random 运行时求解器，不参与 AI-vs-AI 评测（与后端 SOLVER_OPTIONS 一致留空）。
+    solver_options: [],
+    family: 'social',
+    custom: false,
+  },
 ]
 
 function board9(...cells: (string | null)[]): (string | null)[] {

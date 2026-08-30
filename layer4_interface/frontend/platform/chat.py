@@ -64,12 +64,21 @@ import json
 import logging
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Iterator
 
 from layer2_engine.core.llm import LLMClient
 
 from ...review import ReviewReport
 from ...review import analyze as review_analyze
+from ..engine_helpers import (
+    canonical_family_text,
+    game_family,
+    mahjong_tile_name,
+    piece_names,
+    seat_label,
+    social_role_name,
+    uno_card_name,
+)
 from .custom_games import CustomGameRegistry
 from .game_knowledge import GAME_ALIASES, game_knowledge_text, game_rules_text
 from .games import GAMES
@@ -92,6 +101,9 @@ _HISTORY_MAX_CHARS = 6000
 #: 一次用户消息最多几次 LLM 往返（信息工具可多轮取数后作答）。
 #: 有界 agentic loop：防模型无限调用工具 / prompt 无限膨胀。
 _MAX_TOOL_ROUNDS = 3
+
+#: 单回合思维链（reasoning）流式上浮的总字符上限 —— 防 prompt/响应无限膨胀。
+_REASONING_MAX_CHARS = 8000
 
 #: 信息类工具 —— 后端就地执行、把结果以 ``role:"tool"`` 回传，模型基于
 #: 资料组织最终回答。动作类工具仍走 intent 映射（fail-soft 校验）。
@@ -270,6 +282,176 @@ def _game_brief(g: dict) -> str:
     return f"{g['display_name']}({g['game_id']})" + (f"：{desc}" if desc else "")
 
 
+# ── 传给 LLM 的信息「不过分技术化」：快照/合法动作 → 中文读法 ──────
+# 机器契约（快照 id、canonical key、工具参数）原样保留在别处；这里只
+# 是 LLM 直面文本的出口 —— 牌/卡/角色/动作全走 engine_helpers 名称层。
+
+#: 各族合法动作 payload 的“类型 → 中文名”映射（未知直出原 type）。
+_LEGAL_TYPE_NAMES: dict[str, dict[str, str]] = {
+    "mahjong": {
+        "discard": "打出",
+        "win_self": "自摸",
+        "claim_win": "荣和",
+        "claim_peng": "碰",
+        "claim_gang": "明杠",
+        "gang_concealed": "暗杠",
+        "gang_added": "加杠",
+        "claim_chi": "吃",
+        "claim_pass": "过",
+    },
+    "social": {
+        "speak": "发言",
+        "vote": "投票",
+        "kill": "击杀",
+        "check": "查验",
+        "shoot": "开枪",
+        "heal": "救援",
+        "poison": "下毒",
+        "guard": "守护",
+        "pass": "过",
+    },
+}
+_UNO_FIXED_NAMES = {"draw": "摸牌", "pass": "过", "jump_pass": "放弃抢牌", "take_penalty": "吃下罚牌"}
+_POKER_CHOICE_NAMES = {"call": "跟注", "fold": "弃牌", "raise": "加注", "all_in": "全下", "check": "过牌"}
+_UNO_COLOR_LABELS = {"r": "红", "b": "蓝", "g": "绿", "y": "黄"}
+_UNO_SYMBOL_LABELS = {"skip": "禁止", "reverse": "反转", "draw2": "+2", "wild": "万能", "wild4": "+4"}
+_MAHJONG_PHASE_LABELS = {"action": "出牌", "claim": "响应", "discard": "打出"}
+_MAHJONG_MELD_LABELS = {"chi": "吃", "peng": "碰", "gang": "杠", "concealed_gang": "暗杠", "added_gang": "加杠"}
+
+
+def _legal_payload_text(family: str, payload: Any) -> str:
+    """把一个合法动作项译成「中文（机器参数附注）」一句话.
+
+    中文名让 LLM 读懂局面，括号里的 ``key=value`` 让模型能产出
+    ``make_move`` 可校验的参数（双轨：读得懂 + 用得对）。
+    未知形状直出 JSON（fail-soft）。
+    """
+    if not isinstance(payload, dict):
+        return str(payload)
+    ptype = str(payload.get("type", ""))
+    if family == "mahjong":
+        head = _LEGAL_TYPE_NAMES["mahjong"].get(ptype, ptype)
+        tile = payload.get("tile")
+        if tile not in (None, "", [], {}):
+            return f"{head} {mahjong_tile_name(str(tile))}(tile={tile})"
+        tiles = payload.get("tiles")
+        if tiles not in (None, "", [], {}):
+            names = "".join(mahjong_tile_name(str(t)) for t in tiles)
+            return f"{head} {names}(tiles={tiles})"
+        return head
+    if family == "poker":
+        choice = str(payload.get("choice", "") or "")
+        if not choice:
+            return json.dumps(payload, ensure_ascii=False)
+        label = _POKER_CHOICE_NAMES.get(choice, choice)
+        amount = payload.get("amount")
+        if amount not in (None, 0, ""):
+            return f"{label} {amount}(amount={amount})"
+        return label
+    if family == "uno":
+        fixed = _UNO_FIXED_NAMES.get(ptype)
+        if fixed:
+            return fixed
+        parts = [ptype]
+        card = payload.get("card")
+        if card not in (None, "", []):
+            parts.append(f"{uno_card_name(str(card))}(card={card})")
+        color = payload.get("color")
+        if color not in (None, "", []):
+            parts.append(f"{_UNO_COLOR_LABELS.get(str(color), str(color))}(color={color})")
+        target = payload.get("target")
+        if target not in (None, "", []):
+            parts.append(f"{seat_label(str(target))}(target={target})")
+        return " ".join(parts)
+    if family == "social":
+        label = _LEGAL_TYPE_NAMES["social"].get(ptype, ptype)
+        target = payload.get("target")
+        if target not in (None, "", []):
+            return f"{label} {seat_label(str(target))}(target={target})"
+        return label
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _mahjong_melds_text(rows: Any) -> str:
+    """副露数组 → ``碰三条；吃一二三`` 一段中文（未知项跳过）。"""
+    parts: list[str] = []
+    for m in rows if isinstance(rows, list) else []:
+        if not isinstance(m, dict):
+            continue
+        label = _MAHJONG_MELD_LABELS.get(str(m.get("type", "")), str(m.get("type", "") or ""))
+        if not label:
+            continue
+        tiles = m.get("tiles") or []
+        parts.append(label + "".join(mahjong_tile_name(str(t)) for t in tiles))
+    return "；".join(parts)
+
+
+def _humanize_snap(snap: dict, family: str) -> dict:
+    """把玩家投影快照的值人化（键名保留 —— 前端/测试契约不变）.
+
+    手牌/牌河/副露/公共牌/顶牌/身份等 id 一律换成中文名；数值型/枚举
+    噪音字段（``last_action`` / ``raise_amounts`` 等）保持原样 ——
+    它们不是“牌面”，原值对模型反而更精确。
+    """
+    out = dict(snap)
+    if out.get("last_ai_action"):
+        out["last_ai_action"] = canonical_family_text(family, str(out["last_ai_action"]))
+    if family == "mahjong":
+        for k in ("my_hand", "ai_hand"):
+            if isinstance(out.get(k), list):
+                out[k] = "、".join(piece_names("mahjong", out[k]))
+        for k in ("melds", "discards"):
+            container = out.get(k)
+            if isinstance(container, dict):
+                out[k] = {
+                    pid: _mahjong_melds_text(rows) if k == "melds" else "、".join(piece_names("mahjong", rows))
+                    for pid, rows in container.items()
+                }
+        for k in ("last_discard", "last_drawn"):
+            if out.get(k):
+                out[k] = mahjong_tile_name(str(out[k]))
+        if out.get("last_discarder"):
+            out["last_discarder"] = (
+                "你" if out["last_discarder"] == out.get("player_pid") else str(out["last_discarder"])
+            )
+        if out.get("phase"):
+            out["phase"] = _MAHJONG_PHASE_LABELS.get(str(out["phase"]), out["phase"])
+        if isinstance(out.get("legal"), list):
+            out["legal"] = [_legal_payload_text("mahjong", x) for x in out["legal"]]
+    elif family == "poker":
+        for k in ("community", "my_hole", "ai_hole"):
+            if isinstance(out.get(k), list):
+                out[k] = "、".join(piece_names("poker", out[k]))
+        if isinstance(out.get("legal"), list):
+            out["legal"] = [_legal_payload_text("poker", x) for x in out["legal"]]
+        if out.get("last_actor"):
+            out["last_actor"] = "你" if out["last_actor"] == out.get("player_pid") else str(out["last_actor"])
+    elif family == "uno":
+        for k in ("my_hand", "ai_hand"):
+            if isinstance(out.get(k), list):
+                out[k] = "、".join(piece_names("uno", out[k]))
+        if out.get("top_color"):
+            out["top_color"] = _UNO_COLOR_LABELS.get(str(out["top_color"]), out["top_color"])
+        if out.get("top_symbol"):
+            out["top_symbol"] = _UNO_SYMBOL_LABELS.get(str(out["top_symbol"]), out["top_symbol"])
+        if out.get("discard_top"):
+            out["discard_top"] = uno_card_name(str(out["discard_top"]))
+        if isinstance(out.get("discard_recent"), list):
+            out["discard_recent"] = "、".join(uno_card_name(str(c)) for c in out["discard_recent"])
+        if out.get("penalty_target"):
+            out["penalty_target"] = (
+                "你" if out["penalty_target"] == out.get("player_pid") else str(out["penalty_target"])
+            )
+        if isinstance(out.get("legal"), list):
+            out["legal"] = [_legal_payload_text("uno", x) for x in out["legal"]]
+    elif family == "social":
+        if out.get("my_role"):
+            out["my_role"] = social_role_name(str(out["my_role"]))
+        if isinstance(out.get("legal"), list):
+            out["legal"] = [_legal_payload_text("social", x) for x in out["legal"]]
+    return out
+
+
 def _legal_context(session: Any) -> str:
     """Condensed, *already-projected* legal context for the model (hidden info red line).
 
@@ -285,10 +467,12 @@ def _legal_context(session: Any) -> str:
     if snap.get("over"):
         parts.append(f"本局已结束，胜方: {snap.get('winner') or '未知'}")
         return "；".join(parts)
+    family = getattr(session, "family", None) or game_family(getattr(session, "game_id", ""))
     for key in ("legal", "legal_options", "legal_actions", "choices"):
         val = snap.get(key)
         if isinstance(val, list) and val:
-            parts.append("合法动作: " + json.dumps(val, ensure_ascii=False)[:600])
+            text = "；".join(_legal_payload_text(family, x) for x in val)
+            parts.append("合法动作: " + text[:600])
             break
     board = snap.get("board")
     if isinstance(board, list) and board:
@@ -335,6 +519,8 @@ def _match_state_text(session: Any) -> str:
     except Exception:
         return ""
     parts: list[str] = []
+    family = getattr(session, "family", None) or game_family(getattr(session, "game_id", ""))
+    snap = _humanize_snap(snap, family)
     player_pid = snap.get("player_pid")
     if snap.get("over"):
         parts.append(f"本局已结束，胜方: {snap.get('winner') or '未知'}")
@@ -990,6 +1176,59 @@ def _sanitize_history(history: Any) -> list[dict[str, str]]:
 # ── Main entry ────────────────────────────────────────────────────
 
 
+def _prepare(
+    manager: PlayManager,
+    text: str,
+    *,
+    game_id: str | None = None,
+    custom: CustomGameRegistry | None = None,
+    match_history: Any = None,
+) -> tuple[str, Any, list[dict], list[dict], dict | None]:
+    """聊天回合共享前置：清洗文本、定位 session、收集目录/活跃会话/最近对局.
+
+    Returns:
+        ``(text, session, games, active, latest)`` —— ``chat_turn`` 与
+        ``chat_turn_stream`` 共用，保证两个出口的上下文一致。
+    """
+    text = (text or "").strip()
+    session = None
+    if game_id:
+        try:
+            session = manager.get(str(game_id))
+        except Exception:
+            session = None
+    games = _collect_games(custom)
+    active = manager.active_sessions()[:16]
+    # 终局后 session 已移除 → 用最近一局补 system prompt 上下文。
+    latest = _latest_match(match_history) if session is None or session.over else None
+    return text, session, games, active, latest
+
+
+def _assemble_llm_prompt(
+    games: list[dict],
+    session: Any,
+    active: list[dict],
+    latest: dict | None,
+    history: list[dict[str, Any]] | None,
+    text: str,
+) -> tuple[list[dict], list[dict[str, Any]]]:
+    """拼 LLM 一回合的 ``(tools, messages)``（system 每轮现构，客户端 history 白名单清洗）。"""
+    tools = build_tools(games=games, session=session, active=active)
+    system = _system_prompt(games, session, active, latest=latest)
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+    messages.extend(_sanitize_history(history))
+    messages.append({"role": "user", "content": text})
+    return tools, messages
+
+
+def _stream_events(result: ChatTurnResult) -> list[dict[str, Any]]:
+    """把最终结果转成 SSE 事件序列（``intent`` + ``done``）。"""
+    return [
+        {"event": "intent", "data": asdict(result)},
+        {"event": "done", "data": {}},
+    ]
+
+
 def chat_turn(
     manager: PlayManager,
     text: str,
@@ -1012,26 +1251,14 @@ def chat_turn(
     (post-match context instead of a blank slate once the session is
     removed from the registry).
     """
-    text = (text or "").strip()
-    session = None
-    if game_id:
-        try:
-            session = manager.get(str(game_id))
-        except Exception:
-            session = None
-    games = _collect_games(custom)
-    active = manager.active_sessions()[:16]
+    text, session, games, active, latest = _prepare(
+        manager, text, game_id=game_id, custom=custom, match_history=match_history
+    )
     if not text:
         return ChatTurnResult(intent="chat", text=_HELP_TEXT, params={})
-    # 终局后 session 已移除 → 用最近一局补 system prompt 上下文。
-    latest = _latest_match(match_history) if session is None or session.over else None
 
     if llm is not None:
-        tools = build_tools(games=games, session=session, active=active)
-        system = _system_prompt(games, session, active, latest=latest)
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
-        messages.extend(_sanitize_history(history))
-        messages.append({"role": "user", "content": text})
+        tools, messages = _assemble_llm_prompt(games, session, active, latest, history, text)
         # Bounded tool loop: info tools are executed locally and their
         # result is fed back as a ``role: "tool"`` message so the model
         # can answer from authoritative data; action tools map to an
@@ -1125,3 +1352,153 @@ def chat_turn(
         elif carried is None:
             logger.warning("LLM 聊天回合未产出可用结果（空回复/工具循环耗尽）— 走正则兜底")
     return fallback_intent(text, games, session)
+
+
+def chat_turn_stream(
+    manager: PlayManager,
+    text: str,
+    *,
+    llm: LLMClient | None = None,
+    game_id: str | None = None,
+    custom: CustomGameRegistry | None = None,
+    history: list[dict[str, Any]] | None = None,
+    match_history: Any = None,
+) -> Iterator[dict[str, Any]]:
+    """SSE 事件生成器 — ``chat_turn`` 的流式出口（``/api/chat`` 流式模式）.
+
+    与 :func:`chat_turn` 共用 ``_prepare`` / ``_assemble_llm_prompt`` /
+    工具循环语义，区别只在：LLM 走 ``complete_stream``，正文与思维链以
+    增量事件上浮，最终意图以 ``intent`` 事件收口。
+
+    事件契约（前端 ``chatTurnStream`` 消费）::
+
+        event: reasoning   data: {"delta": str}   # 思维链增量（上限 _REASONING_MAX_CHARS）
+        event: text        data: {"delta": str}   # 回复正文增量
+        event: intent      data: ChatTurnResult   # 最终意图（text 为全量回复）
+        event: error       data: {"error": str}   # 流中失败（fail-soft；随后仍给 intent 兜底）
+        event: done        data: {}               # 结束
+
+    失败语义与 JSON 模式一致：流中途传输失败 → ``error`` 事件 + 正则兜底
+    的 ``intent`` 事件（已流出的增量由前端决定去留）；``llm=None`` /
+    无 LLM 直接产出兜底 ``intent``（不产生任何增量）。
+    """
+    text, session, games, active, latest = _prepare(
+        manager, text, game_id=game_id, custom=custom, match_history=match_history
+    )
+    if not text:
+        yield from _stream_events(ChatTurnResult(intent="chat", text=_HELP_TEXT, params={}))
+        return
+    if llm is None:
+        yield from _stream_events(fallback_intent(text, games, session))
+        return
+    tools, messages = _assemble_llm_prompt(games, session, active, latest, history, text)
+    last_tool_result = ""
+    carried: ChatTurnResult | None = None
+    call_seq = 0  # 端点未给 id 时的合成 tool_call_id 计数
+    total_reasoning = 0
+    for _ in range(_MAX_TOOL_ROUNDS):
+        round_text: list[str] = []
+        tool_calls: list[Any] = []
+        failed = False
+        fail_message = ""
+        try:
+            for chunk in llm.complete_stream(messages, tools=tools):
+                if chunk.error:
+                    failed = True
+                    fail_message = chunk.error
+                    break
+                if chunk.reasoning:
+                    total_reasoning += len(chunk.reasoning)
+                    if total_reasoning <= _REASONING_MAX_CHARS:
+                        yield {"event": "reasoning", "data": {"delta": chunk.reasoning}}
+                if chunk.text:
+                    round_text.append(chunk.text)
+                    yield {"event": "text", "data": {"delta": chunk.text}}
+                if chunk.done:
+                    tool_calls = chunk.tool_calls
+                    break
+        except Exception:
+            failed = True
+        if failed:
+            # 流中失败：真实原因在 client.last_error（或 fail_hard 抛出）；
+            # 无 last_error 时用错误块自带信息；再没有走通用文案。
+            last = getattr(llm, "last_error", None)
+            if last is not None:
+                message = str(last)
+            elif fail_message:
+                message = fail_message
+            else:
+                message = "LLM 流式调用中断"
+            logger.warning("LLM 流式聊天回合失败: %s — 走正则兜底", message)
+            yield {"event": "error", "data": {"error": message}}
+            yield from _stream_events(fallback_intent(text, games, session))
+            return
+        if not tool_calls:
+            # 纯文本终态：模型亲笔增量即最终回复；携带 intent（hint/review）
+            # 时落在该 intent 上，绝不退回纯 chat 丢掉参数。
+            full = "".join(round_text).strip()
+            if carried is not None:
+                carried.text = full if full else carried.text
+                yield from _stream_events(carried)
+                return
+            if full:
+                yield from _stream_events(ChatTurnResult(intent="chat", text=full, mood=_mood_for(text), params={}))
+                return
+            break  # 无文本无工具 → 走兜底（与 JSON 模式空回复语义一致）
+        action = next((c for c in tool_calls if str(c.name) not in _INFO_TOOLS), None)
+        if action is not None:
+            args = action.arguments if isinstance(action.arguments, dict) else {}
+            result = _intent_from_tool(str(action.name), args, games=games, session=session)
+            model_text = "".join(round_text).strip()
+            if model_text:
+                result.text = model_text  # 优先采用模型亲笔文案（增量已在 text 事件发出）
+            yield from _stream_events(result)
+            return
+        # 信息工具就地执行、逐个以 role:"tool" 回传（并行 tool_calls 语义与 chat_turn 一致）。
+        tool_calls_payload: list[dict[str, Any]] = []
+        results: list[str] = []
+        for call in tool_calls:
+            args = call.arguments if isinstance(call.arguments, dict) else {}
+            call_seq += 1
+            call_id = call.id or f"call_{call_seq}"
+            name = str(call.name)
+            executed = _execute_info_tool(
+                name,
+                args,
+                games=games,
+                session=session,
+                manager=manager,
+                match_history=match_history,
+            )
+            if executed.intent != "chat" or executed.params:
+                carried = executed  # 多个携带意图时最后一个生效（同回合并发 hint+review 无实际语义）
+            results.append(executed.text)
+            tool_calls_payload.append(
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)},
+                }
+            )
+        messages.append({"role": "assistant", "content": "".join(round_text), "tool_calls": tool_calls_payload})
+        for payload, result_text in zip(tool_calls_payload, results):
+            messages.append({"role": "tool", "tool_call_id": payload["id"], "content": result_text})
+        non_empty = [r for r in results if r]
+        if non_empty:
+            last_tool_result = "\n\n".join(non_empty)
+    # 工具循环预算耗尽 / 空回复：与 chat_turn 相同的 fail-soft 收口。
+    if carried is not None and (carried.text or last_tool_result):
+        carried.text = (carried.text or last_tool_result).strip()[:1000]
+        yield from _stream_events(carried)
+        return
+    if last_tool_result:
+        yield from _stream_events(
+            ChatTurnResult(
+                intent="chat",
+                text=last_tool_result.strip()[:800],
+                mood="thinking",
+                params={},
+            )
+        )
+        return
+    yield from _stream_events(fallback_intent(text, games, session))

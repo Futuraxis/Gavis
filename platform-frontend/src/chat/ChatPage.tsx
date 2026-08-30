@@ -183,7 +183,12 @@ export default function ChatPage() {
       return activeSession.winner ? '这一局输了' : '平局'
     }
     if (busy) return 'AI 思考中…'
-    return activeSession.turn === activeSession.player_pid ? '轮到你了' : 'AI 回合'
+    // claim 是响应别人打出的牌（碰/杠/过），不是出牌回合 —— 不显示「轮到你了」。
+    if (activeSession.turn === activeSession.player_pid) {
+      const phase = (activeSession as { phase?: string | null }).phase
+      return phase === 'claim' ? '响应对方打出的牌' : '轮到你了'
+    }
+    return 'AI 回合'
   }
 
   // 消息流 + 输入区：两种布局（纯对话 / 对局分栏）复用同一份 JSX。

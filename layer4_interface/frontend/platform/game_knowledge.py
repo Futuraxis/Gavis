@@ -43,6 +43,7 @@ DOCS_RULES_SECTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     "mahjong_sichuan": ("play_mahjong.md", ("六种变体",)),
     "mahjong_changsha": ("play_mahjong.md", ("六种变体",)),
     "mahjong_taiwan": ("play_mahjong.md", ("六种变体",)),
+    "undercover": ("play_undercover.md", ("规则",)),
 }
 
 _RULES_TEXT_MAX = 900
@@ -68,6 +69,7 @@ GAME_ALIASES: dict[str, tuple[str, ...]] = {
     "uno_stacking": ("UNO 叠加", "UNO叠加", "叠加"),
     "uno_draw_until": ("UNO 摸到能打", "UNO摸到能打", "摸到能打"),
     "uno_strict_wild4": ("UNO 严格+4", "UNO严格+4", "严格"),
+    "undercover": ("谁是卧底", "卧底"),
 }
 
 

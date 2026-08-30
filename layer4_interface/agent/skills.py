@@ -12,9 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ..frontend.engine_helpers import canonical_family_text, game_family
 from ..solver_provider import SolverHandle, SolverProvider
 from .evaluation import evaluate
-from .hidden_guard import assert_no_hidden
+from .hidden_guard import assert_no_hidden, infer_game_id
 
 #: 视作"好棋"的评估下限；低于其相反数视作"失误"。
 _GOOD_THRESHOLD = 1.0
@@ -122,7 +123,12 @@ class Skills:
         if action is not None:
             key = action.canonical_key if hasattr(action, "canonical_key") else str(action)
             result["action"] = key
-            result["hint"] = f"演示走法：{key}" if level == "demo" else f"具体建议：{key}"
+            # 机器键保留在 ``result["action"]`` 供校验/回放；给 LLM 的提示文案
+            # 用中文描述（``canonical_family_text``）：LLM 读“打出 一条”而不是
+            # “discard:s1”。
+            family = game_family(infer_game_id(ctx.observation))
+            human = canonical_family_text(family, key)
+            result["hint"] = f"演示走法：{human}" if level == "demo" else f"具体建议：{human}"
         else:
             result["hint"] = direction
         return result

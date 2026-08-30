@@ -59,6 +59,12 @@ export default function MessageBubble({ msg, games, busy, onStart, onCreated, on
   return (
     <div className={`chat-msg ${msg.role === 'player' ? 'chat-msg-player' : 'chat-msg-agent'}`}>
       <div className="chat-msg-bubble">
+        {msg.reasoning ? (
+          <details className="chat-msg-reasoning">
+            <summary>🧠 思维链</summary>
+            <div className="chat-msg-reasoning-body">{msg.reasoning}</div>
+          </details>
+        ) : null}
         <div className="chat-msg-bubble-text">{msg.text}</div>
         {inlineCard()}
         {chips.length > 0 && <Chips chips={chips} disabled={busy} onPick={onChip} />}

@@ -1,9 +1,25 @@
 # 麻将人机对弈使用说明
 
 平台前端（`layer4_interface/frontend/platform`）内置六种麻将变体，
-对局默认 **4 人**（麻将标准人数；引擎仍保留 2 人显式参数），AI 使用
-启发式策略（`MahjongHeuristicAI`，无搜索、每步 <1ms）。训练与评测
-（train-cli）同样按 4 人装配。
+对局默认 **4 人**（麻将标准人数；引擎仍保留 2 人显式参数）。
+
+默认 AI 为**已训练的 MAAC 模型**（`layer3_solvers/marl/maac.py`，
+multi-agent actor-critic + attention；训练产物 `models/train/<game_id>/maac.pt`）。
+运行时工厂按游戏自动装配：产物存在 → 直接加载该检查点（每步一次贪心
+前向，<1ms）；产物缺失 → 回退到启发式（`MahjongHeuristicAI`），平台不
+会因缺模型而崩溃。训练与评测（train-cli）同样按 4 人装配。
+
+模型分组（同一观测/动作空间，共享一份产物）：
+
+- **136 张**（34 种牌）：广东鸡胡 / 红中 / 台湾 16 张 —— 共享
+  `mahjong_guangdong/maac.pt`
+- **108 张**（27 种牌）：四川血战 / 血流成河 / 长沙 258 将 —— 共享
+  `mahjong_sichuan/maac.pt`（训练时登记为 sichuan 管线产物）
+
+麻将已登记 `mcts` 与 `maac` 为运行时求解器：平台 benchmark 的求解器
+选项、train-cli 的评估对手列（`random / mahjong / mcts`）与 `maac` 基线
+均可直接用；MCTS 在麻将的单步成本约 200ms/迭代，注册表把该游戏的
+MCTS 评估预算覆盖为 30、rollout 深度 8（全局 300 预算在此游戏上不现实）。
 
 ## 启动
 
@@ -82,6 +98,34 @@ cd platform-frontend && npm run dev                    # 开发模式 5173
   计分按倍率表近似真实"底+台"模型。
 - 评测（benchmark）按注册表人数对局（麻将现为 4 人）：A/B 求解器分派
   前两个座位，其余座位由 B 侧驱动。
+
+## 训练与重新训练（MAAC 默认模型）
+
+麻将六变体按牌池分为 136 张（广东/红中/台湾）与 108 张（四川/血流/长沙）
+两组，每组共享同一观测/动作空间与一份 MAAC 检查点。默认产物路径：
+
+- `models/train/mahjong_guangdong/maac.pt`（136 张组，训练用广东变体）
+- `models/train/mahjong_sichuan/maac.pt`（108 张组，训练用四川变体）
+
+重新训练（train-cli 注册表数据驱动，含 PFSP 对手池编排）：
+
+```bash
+python train-cli/train.py --game mahjong_guangdong --solver maac \
+    --episodes 800 --seed 42          # 136 张组（广东）
+python -m scripts.train_maac_resume --game mahjong_guangdong \
+    --episodes 400                    # 从已有 maac.pt 续训（不从头）
+python train-cli/train.py --game mahjong_sichuan --solver maac \
+    --episodes 800 --seed 42          # 108 张组（四川）
+```
+
+续训脚本 `scripts/train_maac_resume.py` 复用注册表装配并加载已有检查点，
+训练完成后把新权重写回同一产物文件（注意：对手池快照不持久化，续训会
+重新走 warmup 自博弈）。
+
+训练内评估（train-cli `train.py`）与独立对局评估（`scripts/eval_mahjong.py`）
+均支持 `mcts` 列：麻将的 MCTS 基线用预算 30 / rollout 深度 8（注册表
+`eval_budgets` 覆盖）；`--mode 1v3` 轮换评价（1 个 MAAC 座位 vs 3 个对手
+座位）与 `--mode 2v2` 配对互换均可选。
 
 ## 规则实现
 
