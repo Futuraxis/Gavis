@@ -98,7 +98,7 @@ GAMES: dict[str, GameSpec] = {
     `EVAL_MCTS_BUDGET=300` 规模）；**未登记则该列自动跳过并提示**——接入新
     基线只需在注册表登记，评估代码零改动
 
-## 已登记游戏（7）
+## 已登记游戏
 
 | 游戏 | rules | 变种/人数 | 训练管线 |
 |------|-------|-----------|----------|
@@ -108,6 +108,10 @@ GAMES: dict[str, GameSpec] = {
 | `mahjong_guangdong` | mahjong.json | guangdong × 4p | qmix / happo / maac |
 | `mahjong_hongzhong` | mahjong.json | hongzhong × 4p | qmix / happo / maac |
 | `mahjong_blood` | mahjong.json | blood × 4p | qmix / happo / maac |
+| `mahjong_sichuan` | mahjong.json | sichuan × 4p | qmix / happo / maac |
+| `mahjong_changsha` | mahjong.json | changsha × 4p | qmix / happo / maac |
+| `mahjong_taiwan` | mahjong.json | taiwan × 4p | qmix / happo / maac |
+| `mahjong_international` | mahjong.json | international × 4p | qmix / happo / maac |
 | `werewolf` | werewolf.json | 默认 9 人 | bayes(per_player，训练 no-op，仅评估) |
 
 ## 运行时装配（前端/基准共用）

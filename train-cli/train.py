@@ -23,7 +23,8 @@ Usage::
 
     python train-cli/train.py [--game all|moon_chess|stochastic_gomoku|texas_holdem|
                                       mahjong_guangdong|mahjong_hongzhong|mahjong_blood|
-                                      mahjong_sichuan|mahjong_changsha|mahjong_taiwan|werewolf]
+                                      mahjong_sichuan|mahjong_changsha|mahjong_taiwan|
+                                      mahjong_international|werewolf]
                               [--solver all|hybrid|cfr|ppo|psro|qmix|happo|maac|bayes]
                               [--episodes N] [--seed N] [--device auto|cpu|cuda]
                               [--out-dir models/train] [--eval-episodes N]

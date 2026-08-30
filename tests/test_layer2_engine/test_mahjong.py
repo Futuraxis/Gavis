@@ -384,6 +384,15 @@ class TestWinHand:
         hand = ["m1", "m9", "p1", "p9", "s1", "s9", "z1", "z2", "z3", "z4", "z5", "z6", "z7", "m1"]
         assert _eval_win(a, hand)
 
+    def test_international_mahjong_requires_eight_fan(self):
+        a = _engine(variant="international", player_count=4, seed=1)
+        low_fan = ["m1", "m2", "m3", "m4", "m5", "m6", "p1", "p2", "p3", "s1", "s2", "s3", "z1", "z1"]
+        qingyise = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m2", "m3", "m4", "m5", "m5"]
+        thirteen = ["m1", "m9", "p1", "p9", "s1", "s9", "z1", "z2", "z3", "z4", "z5", "z6", "z7", "m1"]
+        assert not _eval_win(a, low_fan)
+        assert _eval_win(a, qingyise)
+        assert _eval_win(a, thirteen)
+
     def test_hongzhong_wild_fills_gap(self):
         a = _engine(variant="hongzhong", player_count=2, seed=1)
         # Two red dragons stand in for the missing m3 and m6

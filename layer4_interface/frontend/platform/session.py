@@ -39,6 +39,7 @@ _BUILTIN_FAMILY: dict[str, str] = {
     "mahjong_sichuan": "mahjong",
     "mahjong_changsha": "mahjong",
     "mahjong_taiwan": "mahjong",
+    "mahjong_international": "mahjong",
     # UNO 六变体（P1-4/P1-6 接入）：前端 FAMILY_BOARDS["uno"] 分发。
     "uno": "uno",
     "uno_seven_zero": "uno",

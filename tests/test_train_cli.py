@@ -43,6 +43,7 @@ PLATFORM_GAME_IDS = (
     "mahjong_sichuan",
     "mahjong_changsha",
     "mahjong_taiwan",
+    "mahjong_international",
 )
 
 UNO_GAME_IDS = (
@@ -65,8 +66,8 @@ def test_registered_games_cover_platform_plus_deduction_games() -> None:
         assert game_id in GAMES
     for game_id in UNO_GAME_IDS:
         assert game_id in GAMES
-    #: 平台内置 3 + 麻将 6 变种 + 狼人杀 + 谁是卧底 + UNO 6 变种 = 17。
-    assert len(GAMES) == 17
+    #: 平台内置 3 + 麻将 7 变种 + 狼人杀 + 谁是卧底 + UNO 6 变种 = 18。
+    assert len(GAMES) == 18
 
 
 def test_every_game_rules_file_exists() -> None:
@@ -116,6 +117,7 @@ def test_mahjong_variants_select_variant_and_player_count() -> None:
         GAMES["mahjong_sichuan"],
         GAMES["mahjong_changsha"],
         GAMES["mahjong_taiwan"],
+        GAMES["mahjong_international"],
     ):
         assert spec.engine.rules == "mahjong.json"
         # 麻将标准 4 人：引擎装配、训练（MARL）与评估全部按 4 座位进行。

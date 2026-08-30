@@ -42,6 +42,7 @@ CHI_RUNS = [[f"{s}{r}", f"{s}{r + 1}", f"{s}{r + 2}"] for s in ("m", "p", "s") f
 THIRTEEN_ORPHANS = ["m1", "m9", "p1", "p9", "s1", "s9", "z1", "z2", "z3", "z4", "z5", "z6", "z7"]
 
 FAN_PAY = [10, 20, 40, 80, 160, 320, 640, 1280]  # pay_base × 2^(n-1)
+FAN_PAY_INTERNATIONAL = list(range(1, 89))
 
 # 长沙番制：小胡 1 番 → 10；大胡 6 番 → 60；番上番（两个及以上大胡）
 # 12 番 → 120（含海底捞月/杠上开花叠加）。索引 = fan_sum - 1（do_win
@@ -1244,18 +1245,22 @@ def _aliases():
             ),
         },
         "fan_menqing": {
-            "description": "门清 (taiwan: no open melds)",
+            "description": "门清 (taiwan/international: no open melds)",
             "params": ["pid"],
             "expr": IF(
-                EQ(V("$constants.variant"), C("taiwan")),
+                OR(EQ(V("$constants.variant"), C("taiwan")), EQ(V("$constants.variant"), C("international"))),
                 EQ(COUNT(CALL("melds_of", V("$pid"))), C(0)),
                 C(0),
             ),
         },
         "fan_zimo": {
-            "description": "自摸 (taiwan: self-drawn win)",
+            "description": "自摸 (taiwan/international: self-drawn win)",
             "params": ["self_win"],
-            "expr": IF(EQ(V("$constants.variant"), C("taiwan")), V("$self_win"), C(0)),
+            "expr": IF(
+                OR(EQ(V("$constants.variant"), C("taiwan")), EQ(V("$constants.variant"), C("international"))),
+                V("$self_win"),
+                C(0),
+            ),
         },
     }
     fan_order = [
@@ -1286,12 +1291,12 @@ def _aliases():
     # 大胡 6 番) and qidui/jiangjianghu overlap → 番上番 12 番.
     fan_values_variant = {
         "fan_jihu": {"sichuan": 0, "changsha": 0, "taiwan": 0, "default": 1},
-        "fan_pinghu": {"sichuan": 1, "changsha": 1, "taiwan": 2, "default": 2},
-        "fan_pengpenghu": {"sichuan": 2, "changsha": 6, "taiwan": 4, "default": 3},
-        "fan_qingyise": {"sichuan": 4, "changsha": 6, "taiwan": 8, "default": 5},
-        "fan_hunyise": {"sichuan": 0, "changsha": 0, "taiwan": 4, "default": 2},
-        "fan_qidui": {"sichuan": 4, "changsha": 6, "taiwan": 0, "default": 4},
-        "fan_shisanyao": {"sichuan": 0, "changsha": 0, "taiwan": 0, "default": 8},
+        "fan_pinghu": {"sichuan": 1, "changsha": 1, "taiwan": 2, "international": 2, "default": 2},
+        "fan_pengpenghu": {"sichuan": 2, "changsha": 6, "taiwan": 4, "international": 6, "default": 3},
+        "fan_qingyise": {"sichuan": 4, "changsha": 6, "taiwan": 8, "international": 24, "default": 5},
+        "fan_hunyise": {"sichuan": 0, "changsha": 0, "taiwan": 4, "international": 6, "default": 2},
+        "fan_qidui": {"sichuan": 4, "changsha": 6, "taiwan": 0, "international": 24, "default": 4},
+        "fan_shisanyao": {"sichuan": 0, "changsha": 0, "taiwan": 0, "international": 88, "default": 8},
         "fan_hongzhongke": {"default": 1},  # expr already hongzhong-gated
         "fan_jueshang": {"sichuan": 0, "changsha": 0, "taiwan": 0, "default": 1},
         "fan_longqidui": {"sichuan": 8, "default": 0},
@@ -1299,14 +1304,14 @@ def _aliases():
         "fan_jiangjianghu": {"changsha": 6, "default": 0},
         "fan_haidilaoyue": {"changsha": 6, "sichuan": 8, "blood": 8, "default": 0},
         "fan_gangshangkaihua": {"changsha": 6, "sichuan": 8, "default": 0},
-        "fan_menqing": {"taiwan": 1, "default": 0},
-        "fan_zimo": {"taiwan": 1, "default": 0},
+        "fan_menqing": {"taiwan": 1, "international": 2, "default": 0},
+        "fan_zimo": {"taiwan": 1, "international": 1, "default": 0},
     }
     fan_sum_expr = C(0)
     for name in fan_order:
         vmap = fan_values_variant[name]
         variant_val_expr = C(vmap["default"])
-        for vname in ("taiwan", "changsha", "sichuan", "blood"):
+        for vname in ("taiwan", "changsha", "sichuan", "blood", "international"):
             if vname in vmap:
                 variant_val_expr = IF(EQ(V("$constants.variant"), C(vname)), C(vmap[vname]), variant_val_expr)
         params_ = fan_params.get(name, ["hand"])
@@ -1400,16 +1405,33 @@ def _aliases():
                             # 缺一门 gate: fewer than 3 suits incl. meld tiles.
                             NOT(EQ(COUNT(DISTINCT(_suits_noz_expr(full))), C(3))),
                         ),
-                        OR(
-                            AND(EQ(COUNT(V("$melds")), C(0)), CALL("is_qidui", hand)),
+                        IF(
+                            EQ(V("$constants.variant"), C("international")),
                             AND(
-                                EQ(COUNT(V("$melds")), C(0)),
-                                EQ(COUNT(hand), C(14)),
-                                ALL(V("$constants.thirteen_orphans"), {"contains": [hand, V("$node")]}),
-                                # 双向：手牌也必须全是幺九（否则 13 幺九+1 普通牌骗和）。
-                                ALL(hand, {"contains": [V("$constants.thirteen_orphans"), V("$node")]}),
+                                OR(
+                                    AND(EQ(COUNT(V("$melds")), C(0)), CALL("is_qidui", hand)),
+                                    AND(
+                                        EQ(COUNT(V("$melds")), C(0)),
+                                        EQ(COUNT(hand), C(14)),
+                                        ALL(V("$constants.thirteen_orphans"), {"contains": [hand, V("$node")]}),
+                                        # 双向：手牌也必须全是幺九（否则 13 幺九+1 普通牌骗和）。
+                                        ALL(hand, {"contains": [V("$constants.thirteen_orphans"), V("$node")]}),
+                                    ),
+                                    _standard_win(full),
+                                ),
+                                GTE(CALL("fan_sum", hand, C("p0"), C(False)), C(8)),
                             ),
-                            _standard_win(full),
+                            OR(
+                                AND(EQ(COUNT(V("$melds")), C(0)), CALL("is_qidui", hand)),
+                                AND(
+                                    EQ(COUNT(V("$melds")), C(0)),
+                                    EQ(COUNT(hand), C(14)),
+                                    ALL(V("$constants.thirteen_orphans"), {"contains": [hand, V("$node")]}),
+                                    # 双向：手牌也必须全是幺九（否则 13 幺九+1 普通牌骗和）。
+                                    ALL(hand, {"contains": [V("$constants.thirteen_orphans"), V("$node")]}),
+                                ),
+                                _standard_win(full),
+                            ),
                         ),
                     ),
                 ),
@@ -1524,10 +1546,10 @@ def build() -> dict:
             "version": "5.2.0",
             "description": (
                 "Mahjong — guangdong / hongzhong (wild z5) / blood (血流成河) / "
-                "sichuan (血战到底) / changsha (258将) / taiwan (16张) × "
-                "2-4 players (default 4). The JSON's ``variants`` section "
-                "declares every option (v5.2); the engine selects a variant "
-                "and player count without any adapter injection. "
+                "sichuan (血战到底) / changsha (258将) / taiwan (16张) / "
+                "international (国标) × 2-4 players (default 4). The JSON's "
+                "``variants`` section declares every option (v5.2); the engine "
+                "selects a variant and player count without any adapter injection. "
                 "Pure-expression aliases (zero builtins)."
             ),
         },
@@ -1560,6 +1582,9 @@ def build() -> dict:
                 },
                 # Taiwan 16张 (no-flower simplification): 5 melds + pair = 17.
                 "taiwan": {"constants": {"win_tiles": 17, "meld_k": 5}},
+                # International / 国标（Botzone 复式国标接入）：136 张无花，
+                # 保留标准 4 副+将/七对/十三幺结构，按近似国标番表 8 番起胡。
+                "international": {"constants": {"fan_pay": FAN_PAY_INTERNATIONAL}},
             },
             "player_ids": {
                 "map": {
@@ -1584,7 +1609,7 @@ def build() -> dict:
             "chi_runs": CHI_RUNS,
             "thirteen_orphans": THIRTEEN_ORPHANS,
             # 癞子（万能牌）仅红中麻将变体声明（variants.options.hongzhong
-            # 补丁 "z5"）；默认空串 = 无癞子——广东/血战/四川/长沙/台湾的
+            # 补丁 "z5"）；默认空串 = 无癞子——广东/血战/四川/长沙/台湾/国标的
             # 红中都是普通字牌（wild 计数路径对空串恒为 0，无需分支）。
             "wild_tile": "",
             "fan_pay": FAN_PAY,

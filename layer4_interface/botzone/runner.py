@@ -229,6 +229,7 @@ def _canonical_game_id(game_id: str, request: dict[str, Any]) -> str:
             "guangdong": "mahjong_guangdong",
             "hongzhong": "mahjong_hongzhong",
             "blood": "mahjong_blood",
+            "international": "mahjong_international",
         }
         return aliases.get(str(variant), str(variant))
     return game_id

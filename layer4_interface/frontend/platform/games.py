@@ -979,6 +979,26 @@ GAMES: dict[str, GameSpec] = {
         build_snapshot=_mahjong_snapshot,
         describe_action=_mahjong_describe_action,
     ),
+    "mahjong_international": GameSpec(
+        game_id="mahjong_international",
+        display_name="国际麻将（国标）",
+        description="复式国标/国际麻将：136 张无花，四人吃碰杠胡，按国标近似番表 8 番起胡；Botzone 接入默认使用该变体。",
+        kind="mahjong",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(4,),
+        difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
+        create_engine=_make_mahjong_engine("international"),
+        create_solver=_make_mahjong_solver("mahjong_international"),
+        resolve_start=_mahjong_resolve_start,
+        ai_opens=lambda session: session.player_pid != "p0",
+        parse_human_action=_mahjong_parse_human_action,
+        apply_human=_mahjong_apply_human,
+        run_ai=_mahjong_run_ai,
+        build_snapshot=_mahjong_snapshot,
+        describe_action=_mahjong_describe_action,
+    ),
     # ── UNO：六变体（与 train-cli/games.py `_uno_spec` 对齐；同一 uno.json
     # 的 variants 声明选择，默认 4 人）。求解器与德州同为不完全信息 Hybrid。
     # 三个消费注册点同步：平台（本文件）/ 训练（train-cli）/ 文档

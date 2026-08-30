@@ -66,8 +66,8 @@ MAHJONG_SNAPSHOT_KEYS = frozenset(
     }
 )
 
-#: ``rules/mahjong.json`` 声明的六个变种（detect 与 build_spec 不得硬编码）。
-MAHJONG_VARIANTS = ("guangdong", "hongzhong", "blood", "sichuan", "changsha", "taiwan")
+#: ``rules/mahjong.json`` 声明的变种（detect 与 build_spec 不得硬编码）。
+MAHJONG_VARIANTS = ("guangdong", "hongzhong", "blood", "sichuan", "changsha", "taiwan", "international")
 
 #: 非麻将负例规则文件（grid / poker / social 族）。
 NON_MAHJONG_RULES = ("stochastic_gomoku", "texas_holdem", "moon_chess", "werewolf", "undercover")
@@ -127,7 +127,7 @@ class TestMahjongDetection:
         assert "mahjong" in FAMILY_IDS
         assert FAMILY_IDS == tuple(sorted(FAMILY_IDS))
 
-    def test_rules_file_declares_six_variants(self):
+    def test_rules_file_declares_registered_variants(self):
         options = load_rules("mahjong")["variants"]["options"]
         assert set(options) == set(MAHJONG_VARIANTS)
 

@@ -115,6 +115,7 @@ class TestGames:
             "mahjong_sichuan",
             "mahjong_changsha",
             "mahjong_taiwan",
+            "mahjong_international",
             "uno",
             "uno_seven_zero",
             "uno_jump_in",
@@ -224,7 +225,7 @@ class TestMatch:
         board.length 上崩掉对话页。快照现在自描述携带 family，即使游戏目录
         尚未加载也能正确分发。
         """
-        for game_id in ("mahjong_sichuan", "mahjong_changsha", "mahjong_taiwan"):
+        for game_id in ("mahjong_sichuan", "mahjong_changsha", "mahjong_taiwan", "mahjong_international"):
             start = _post(
                 base_url + "/api/match/start",
                 {

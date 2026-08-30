@@ -427,6 +427,7 @@ GAMES: dict[str, GameSpec] = {
     "mahjong_sichuan": _mahjong_spec("mahjong_sichuan", "四川麻将（血战到底）", "sichuan"),
     "mahjong_changsha": _mahjong_spec("mahjong_changsha", "长沙麻将（258将）", "changsha"),
     "mahjong_taiwan": _mahjong_spec("mahjong_taiwan", "台湾麻将（16张）", "taiwan"),
+    "mahjong_international": _mahjong_spec("mahjong_international", "国际麻将（国标）", "international"),
     "werewolf": GameSpec(
         game_id="werewolf",
         display_name="狼人杀",
