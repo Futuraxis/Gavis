@@ -39,6 +39,7 @@ _GAME_NAMES: dict[str, str] = {
     "mahjong_sichuan": "四川麻将（血战到底）",
     "mahjong_changsha": "长沙麻将（258将）",
     "mahjong_taiwan": "台湾麻将（16张）",
+    "mahjong_international": "国际麻将（国标）",
 }
 
 

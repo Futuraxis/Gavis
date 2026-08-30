@@ -39,6 +39,7 @@ _BUILTIN_FAMILY: dict[str, str] = {
     "mahjong_sichuan": "mahjong",
     "mahjong_changsha": "mahjong",
     "mahjong_taiwan": "mahjong",
+    "mahjong_international": "mahjong",
 }
 
 

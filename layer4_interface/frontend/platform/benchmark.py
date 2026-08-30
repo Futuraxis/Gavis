@@ -33,6 +33,7 @@ SOLVER_OPTIONS: dict[str, tuple[str, ...]] = {
     "mahjong_sichuan": ("mahjong", "random"),
     "mahjong_changsha": ("mahjong", "random"),
     "mahjong_taiwan": ("mahjong", "random"),
+    "mahjong_international": ("mahjong", "random"),
 }
 
 #: Search budget per game (harder than the play tiers, bounded).
@@ -46,6 +47,7 @@ BENCHMARK_BUDGETS: dict[str, int] = {
     "mahjong_sichuan": 1000,
     "mahjong_changsha": 1000,
     "mahjong_taiwan": 1000,
+    "mahjong_international": 1000,
 }
 
 SOLVER_LABELS: dict[str, str] = {

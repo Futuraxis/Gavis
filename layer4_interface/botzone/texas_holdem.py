@@ -10,11 +10,17 @@ needed to prove that the selected response is legal.
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from layer2_engine.core.engine import GameEngine
+from layer3_solvers.mcts.solver import MCTS, MCTSConfig
 
 SMALL_BLIND = 50
 BIG_BLIND = 100
+BOTZONE_TO_ENGINE = 50
 FOLD = -1
 ALL_IN = -2
 CALL_OR_CHECK = 0
@@ -69,13 +75,18 @@ def decide_texas_holdem(payload: dict[str, Any]) -> tuple[int, str]:
     """Choose one strictly legal Botzone Texas Hold'em integer action."""
     request = parse_texas_holdem_request(payload)
     betting = reconstruct_betting_state(request)
-    action = _heuristic_action(request, betting)
+    action = _layer3_action(request, betting)
+    source = "layer3"
+    if action is None:
+        action = _heuristic_action(request, betting)
+        source = "heuristic"
     legal = legal_responses(request, betting)
     if action not in legal:
         # This must always be a legal response.  Check/call is strategically
         # conservative; fold is the universal fallback if it is unavailable.
         action = CALL_OR_CHECK if CALL_OR_CHECK in legal else FOLD
-    return action, _debug(request, betting, action)
+        source = f"{source}->legal-fallback"
+    return action, _debug(request, betting, action, source)
 
 
 def parse_texas_holdem_request(payload: dict[str, Any]) -> TexasHoldemRequest:
@@ -187,6 +198,94 @@ def legal_responses(request: TexasHoldemRequest, betting: BettingState) -> froze
     return frozenset(legal)
 
 
+def _layer3_action(request: TexasHoldemRequest, betting: BettingState) -> int | None:
+    """Route Botzone heads-up Texas input through Gavis Layer 2 + Layer 3.
+
+    The bundled Gavis rule is a heads-up abstraction.  For 6-player Botzone
+    tables we keep the strict Layer-4 legal heuristic until a native 6-player
+    rules file exists.
+    """
+    if request.num_players != 2:
+        return None
+    try:
+        engine = _texas_engine()
+        state = _to_gavis_state(engine, request, betting)
+        solver = MCTS(engine, MCTSConfig(seed=request.hand + request.my_id, budget=35, rollout_depth=8, time_limit=0.25))
+        action = solver.select_action(state)
+        if action is None:
+            return None
+        return _to_botzone_response(action, request, betting)
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _texas_engine() -> GameEngine:
+    root = Path(__file__).resolve().parents[2]
+    with open(root / "rules" / "texas_holdem.json", encoding="utf-8") as f:
+        rules = json.load(f)
+    return GameEngine(rules, seed=0, allow_codegen=False)
+
+
+def _to_gavis_state(engine: GameEngine, request: TexasHoldemRequest, betting: BettingState) -> dict[str, Any]:
+    my_pid = _botzone_pid(request)
+    opp_pid = "p_bb" if my_pid == "p_sb" else "p_sb"
+    my_key = _pid_key(my_pid)
+    opp_key = _pid_key(opp_pid)
+    my_cards = [_to_gavis_card(card) for card in request.my_cards]
+    public_cards = [_to_gavis_card(card) for card in request.public_cards]
+    known = set(request.my_cards) | set(request.public_cards)
+    opp_cards = [_to_gavis_card(card) for card in range(52) if card not in known][:2]
+    my_committed = _engine_amount(max(0, betting.player_bets[request.my_id]))
+    opp_id = 1 - request.my_id
+    opp_bet = betting.player_bets[opp_id] if 0 <= opp_id < len(betting.player_bets) else 0
+    opp_committed = _engine_amount(max(0, opp_bet))
+    arrays = {
+        f"{my_key}_hole": my_cards,
+        f"{opp_key}_hole": opp_cards,
+        "community": public_cards,
+        "drawn": [*my_cards, *opp_cards, *public_cards],
+    }
+    env = {
+        "phase": "betting",
+        "turn": my_pid,
+        "street": _street_from_public(request.public_cards),
+        "winner": None,
+        "last_action": _last_action(request),
+        "last_actor": _last_actor_pid(request),
+        "last_call_to": _engine_amount(max(0, betting.round_bet)),
+        "last_raise_delta": _engine_amount(max(BIG_BLIND, betting.min_raise)),
+        f"{my_key}_stack": max(0, 100 - my_committed),
+        f"{opp_key}_stack": max(0, 100 - opp_committed),
+        f"{my_key}_committed": my_committed,
+        f"{opp_key}_committed": opp_committed,
+        f"{my_key}_folded": False,
+        f"{opp_key}_folded": opp_bet == FOLD,
+        f"{my_key}_acted": _has_acted(request, request.my_id, betting.round_id),
+        f"{opp_key}_acted": _has_acted(request, opp_id, betting.round_id),
+    }
+    return engine.load_state({"_arrays": arrays, "env": env})
+
+
+def _to_botzone_response(action: Any, request: TexasHoldemRequest, betting: BettingState) -> int | None:
+    choice = action.params.get("choice")
+    amount = int(action.params.get("amount", 0) or 0)
+    if choice == "fold":
+        return FOLD
+    if choice == "call":
+        return CALL_OR_CHECK
+    if choice != "raise":
+        return None
+    mine = max(0, betting.player_bets[request.my_id])
+    target = amount * BOTZONE_TO_ENGINE
+    delta = max(0, target - mine)
+    if amount >= 100 or delta >= request.my_chips:
+        return ALL_IN
+    if delta <= 0:
+        return CALL_OR_CHECK
+    return betting.min_raise
+
+
 def _heuristic_action(request: TexasHoldemRequest, betting: BettingState) -> int:
     """Fast baseline policy; legality remains solely the responsibility of the adapter."""
     legal = legal_responses(request, betting)
@@ -209,6 +308,58 @@ def _heuristic_action(request: TexasHoldemRequest, betting: BettingState) -> int
     if not strong and to_call > max(BIG_BLIND * 2, request.my_chips // 12):
         return FOLD
     return CALL_OR_CHECK if CALL_OR_CHECK in legal else FOLD
+
+
+def _to_gavis_card(card: int) -> str:
+    ranks = "23456789TJQKA"
+    suits = ("h", "d", "s", "c")
+    return f"{suits[card % 4]}{ranks[card // 4]}"
+
+
+def _botzone_pid(request: TexasHoldemRequest) -> str:
+    sb = _next_player(request.dealer_id, 1, request.num_players)
+    return "p_sb" if request.my_id == sb else "p_bb"
+
+
+def _pid_key(pid: str) -> str:
+    return pid[2:] if pid.startswith("p_") else pid
+
+
+def _engine_amount(chips: int) -> int:
+    return max(0, min(100, int(round(chips / BOTZONE_TO_ENGINE))))
+
+
+def _street_from_public(public_cards: tuple[int, ...]) -> int:
+    if len(public_cards) >= 5:
+        return 3
+    if len(public_cards) == 4:
+        return 2
+    if len(public_cards) >= 3:
+        return 1
+    return 0
+
+
+def _has_acted(request: TexasHoldemRequest, player_id: int, round_id: int) -> bool:
+    return any(
+        _as_int(item.get("player_id"), "history.player_id") == player_id
+        and _as_int(item.get("round", 0), "history.round") == round_id
+        for item in request.history
+    )
+
+
+def _last_action(request: TexasHoldemRequest) -> str | None:
+    if not request.history:
+        return None
+    value = request.history[-1].get("action_type")
+    return str(value) if value is not None else None
+
+
+def _last_actor_pid(request: TexasHoldemRequest) -> str | None:
+    if not request.history:
+        return None
+    player = _as_int(request.history[-1].get("player_id"), "history.player_id")
+    sb = _next_player(request.dealer_id, 1, request.num_players)
+    return "p_sb" if player == sb else "p_bb"
 
 
 def _current_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -251,7 +402,7 @@ def _next_player(player: int, offset: int, count: int) -> int:
     return (player + offset) % count
 
 
-def _debug(request: TexasHoldemRequest, betting: BettingState, action: int) -> str:
+def _debug(request: TexasHoldemRequest, betting: BettingState, action: int, source: str) -> str:
     mine = betting.player_bets[request.my_id]
     to_call = betting.round_bet - mine if mine >= 0 else -1
-    return f"texas-holdem: round={betting.round_id} to_call={to_call} action={action}"
+    return f"texas-holdem/{source}: players={request.num_players} round={betting.round_id} to_call={to_call} action={action}"

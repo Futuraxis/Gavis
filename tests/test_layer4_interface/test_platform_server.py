@@ -61,9 +61,8 @@ class TestGames:
         data = _get(base_url + "/api/games")
         assert data["ok"] is True
         by_id = {g["game_id"]: g for g in data["games"]}
-        # 平台注册表覆盖 rules/mahjong.json 声明的全部六种变体（guangdong /
-        # hongzhong / blood / sichuan / changsha / taiwan，v5.2 variants）+ 3 个
-        # 其余游戏 —— 与 test_platform_session.py::TestGameRegistrySpec 的 9 游戏
+        # 平台注册表覆盖 rules/mahjong.json 声明的全部麻将变体 + 3 个
+        # 其余游戏 —— 与 test_platform_session.py::TestGameRegistrySpec 的游戏
         # 契约一致；新增/移除变体必须同步两处断言与文档 docs/user/play_mahjong.md。
         assert set(by_id) == {
             "moon_chess",
@@ -75,6 +74,7 @@ class TestGames:
             "mahjong_sichuan",
             "mahjong_changsha",
             "mahjong_taiwan",
+            "mahjong_international",
         }
         assert by_id["moon_chess"]["board_size"] == 3
         assert by_id["stochastic_gomoku"]["board_size"] == 9
@@ -152,7 +152,7 @@ class TestMatch:
         board.length 上崩掉对话页。快照现在自描述携带 family，即使游戏目录
         尚未加载也能正确分发。
         """
-        for game_id in ("mahjong_sichuan", "mahjong_changsha", "mahjong_taiwan"):
+        for game_id in ("mahjong_sichuan", "mahjong_changsha", "mahjong_taiwan", "mahjong_international"):
             start = _post(
                 base_url + "/api/match/start",
                 {

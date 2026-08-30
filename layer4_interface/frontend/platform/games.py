@@ -520,10 +520,10 @@ def _poker_ai_opens(session: GameSession) -> bool:
     return True
 
 
-# 注意：平台注册表应覆盖 rules/mahjong.json 声明的**全部六种变体**
-# （guangdong / hongzhong / blood / sichuan / changsha / taiwan，v5.2 variants）。
+# 注意：平台注册表应覆盖 rules/mahjong.json 声明的全部麻将变体
+# （guangdong / hongzhong / blood / sichuan / changsha / taiwan / international）。
 # 三个消费注册点必须同步，否则各自漂移（曾漏挂四川/长沙/台湾，导致
-# 文档承诺六变种但大厅只有三个；两个测试断言已按 9 游戏锁定）：
+# 文档承诺多个变种但大厅只有三个；测试断言会锁定注册表全量覆盖）：
 #   - 平台：本文件（平台 /api/games → 大厅）
 #   - 训练：train-cli/games.py `_mahjong_spec`（六变体 × MARL 管线）
 #   - 文档：docs/user/play_mahjong.md（六变体 × 默认 4 人）
@@ -704,6 +704,26 @@ GAMES: dict[str, GameSpec] = {
         difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
         create_engine=_make_mahjong_engine("taiwan"),
         create_solver=_make_mahjong_solver("mahjong_taiwan"),
+        resolve_start=_mahjong_resolve_start,
+        ai_opens=lambda session: session.player_pid != "p0",
+        parse_human_action=_mahjong_parse_human_action,
+        apply_human=_mahjong_apply_human,
+        run_ai=_mahjong_run_ai,
+        build_snapshot=_mahjong_snapshot,
+        describe_action=_mahjong_describe_action,
+    ),
+    "mahjong_international": GameSpec(
+        game_id="mahjong_international",
+        display_name="国际麻将（国标）",
+        description="复式国标/国际麻将：136 张无花，四人吃碰杠胡，按国标近似番表 8 番起胡；Botzone 接入默认使用该变体。",
+        kind="mahjong",
+        board_size=None,
+        seat_options=("p0", "p1", "p2", "p3"),
+        seat_label="座位",
+        player_counts=(4,),
+        difficulty_budgets={"easy": 1, "normal": 1, "hard": 1},
+        create_engine=_make_mahjong_engine("international"),
+        create_solver=_make_mahjong_solver("mahjong_international"),
         resolve_start=_mahjong_resolve_start,
         ai_opens=lambda session: session.player_pid != "p0",
         parse_human_action=_mahjong_parse_human_action,

@@ -176,6 +176,7 @@ class TestGameSpecRegistry:
             "mahjong_sichuan",
             "mahjong_changsha",
             "mahjong_taiwan",
+            "mahjong_international",
         }
 
     def test_seat_options_consistent(self):
@@ -187,7 +188,7 @@ class TestGameSpecRegistry:
 
         防漂移守卫：注册清单由平台 games.py / train-cli/games.py / 文档各自
         手工维护时，最容易漏挂新变体 —— 曾漏挂 sichuan/changsha/taiwan
-        （文档承诺六变种、大厅只有三个）。此断言把「注册表 ⊇ rules variants」
+        （文档承诺多个变种、大厅只有三个）。此断言把「注册表 ⊇ rules variants」
         变成自动化约束：改 rules/mahjong.json 的 variants.options 而不同步
         平台注册表，这里会立即变红。
         """
@@ -202,8 +203,7 @@ class TestGameSpecRegistry:
         缺项会让 `GameInfo.family` 与快照 `family` 为 None：前端 InlineBoard
         的分发曾因 mahjong_sichuan / changsha / taiwan 缺映射而把麻将快照
         误路由到 grid 棋盘，在 `board.length` 上崩掉整个对话页。新增平台游戏
-        忘记登记家族时，此断言立即变红（与 ``test_all_games_present`` 的
-        9 游戏契约同步维护）。
+        忘记登记家族时，此断言立即变红。
         """
         assert set(_BUILTIN_FAMILY) == set(GAMES)
 
@@ -255,7 +255,7 @@ class TestMahjong:
         assert snap["ai_hand"] == []
 
     def test_snapshot_carries_family_for_every_variant(self, manager: PlayManager):
-        """六个麻将变体的会话快照都必须携带 ``family == \"mahjong\"``。
+        """所有麻将变体的会话快照都必须携带 ``family == \"mahjong\"``。
 
         防漂移守卫：快照 family 是前端渲染分发的第一优先来源（快照自描述，
         不依赖游戏目录是否已加载）。sichuan/changsha/taiwan 曾因 `_BUILTIN_FAMILY`
@@ -268,6 +268,7 @@ class TestMahjong:
             "mahjong_sichuan",
             "mahjong_changsha",
             "mahjong_taiwan",
+            "mahjong_international",
         ):
             session = manager.start(game_id, "p0", "easy", player_count=4)
             snap = session.snapshot()
