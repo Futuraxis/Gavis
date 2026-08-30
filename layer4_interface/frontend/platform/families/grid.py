@@ -23,6 +23,7 @@ from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import ActionInstance
 
 from ....solver_provider import SolverHandle, SolverProvider
+from ...engine_helpers import canonical_family_text
 from ..games import GameSpec, PlayError
 from .helpers import (
     action_cell_index,
@@ -168,8 +169,8 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
     def _describe_action(action: ActionInstance) -> str:
         idx = action_cell_index(action, board_size)
         if idx >= 0 and board_size:
-            return f"cell_{idx // board_size}_{idx % board_size}"
-        return action.canonical_key
+            return canonical_family_text("grid", f"cell_{idx // board_size}_{idx % board_size}")
+        return canonical_family_text("grid", action.canonical_key)
 
     return GameSpec(
         game_id=game_id,

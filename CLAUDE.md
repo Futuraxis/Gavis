@@ -59,7 +59,9 @@ custom-games 工作流: layer1_translator/variant_translator.py（变体翻译�
 - `rules/mahjong.json` 由 `_gen_mahjong.py` 生成（六变种由 variants 声明：
   guangdong/hongzhong/blood/sichuan/changsha/taiwan；**默认 4 人**——2/4 人
   都是声明过的合法取值，平台与训练注册表按 4 人装配），改规则改生成器
-  再重新生成
+  再重新生成；**平台默认 AI=已训练 MAAC**（`models/train/<game_id>/maac.pt`，
+  运行时工厂按游戏注入该路径，产物缺失回退启发式；136 张组共享 guangdong
+  产物、108 张组共享 sichuan 产物，同步见 `scripts/sync_maac_models.py`）
 - `rules/werewolf.json` 由 `_gen_werewolf.py` 生成（配比 9 人/3 狼在
   variants 声明，消费者只校验不注入）；结算阶段（夜晚/放逐）用
   `chance` 模板 + `effectMap` 表达（explicit 概率 1.0）；部分可观测由

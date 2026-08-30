@@ -17,6 +17,7 @@ import pytest
 
 from layer4_interface.frontend.platform.benchmark import BenchmarkRunner
 from layer4_interface.frontend.platform.history import MatchHistory
+from layer4_interface.frontend.platform.llm_settings import LLMSettingsStore
 from layer4_interface.frontend.platform.server import make_handler
 from layer4_interface.frontend.platform.session import PlayManager
 from train_cli import default_provider
@@ -51,9 +52,48 @@ def _post(url: str, payload: dict) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _put(url: str, payload: dict) -> dict:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="PUT",
+    )
+    with _NO_PROXY_OPENER.open(req) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def _get(url: str) -> dict:
     with _NO_PROXY_OPENER.open(url) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _post_stream(url: str, payload: dict, *, accept: bool = False) -> tuple[str, bytes]:
+    """POST and return ``(content-type, raw body)`` (SSE mode is opt-in)."""
+    headers = {"Content-Type": "application/json"}
+    if accept:
+        headers["Accept"] = "text/event-stream"
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+    with _NO_PROXY_OPENER.open(req) as resp:
+        return (resp.headers.get("Content-Type") or ""), resp.read()
+
+
+def _parse_sse(body: bytes) -> list[tuple[str, str]]:
+    """Split an SSE body into ``(event, data-json)`` frames (no runtime deps)."""
+    frames: list[tuple[str, str]] = []
+    for block in body.decode("utf-8").split("\n\n"):
+        if not block.strip():
+            continue
+        event = ""
+        data_lines: list[str] = []
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                event = line[len("event: ") :]
+            elif line.startswith("data: "):
+                data_lines.append(line[len("data: ") :])
+        if event or data_lines:
+            frames.append((event, "\n".join(data_lines)))
+    return frames
 
 
 class TestGames:
@@ -61,9 +101,10 @@ class TestGames:
         data = _get(base_url + "/api/games")
         assert data["ok"] is True
         by_id = {g["game_id"]: g for g in data["games"]}
-        # 16 款 = 月亮棋/随机五子棋/德州 + 麻将七变种（v5.2 variants）+
-        # UNO 六变体 —— 与 test_platform_session.py::TestGameSpecRegistry 的
-        # 16 游戏契约一致；新增/移除必须同步两处断言与用户文档。
+        # 16 款 = 月亮棋/随机五子棋/德州 + 麻将六变种（v5.2 variants）+ UNO
+        # 六变体 + 谁是卧底（undercover, social 族）—— 与
+        # test_platform_session.py::TestGameSpecRegistry 的 16 游戏契约一致；
+        # 新增/移除必须同步两处断言与用户文档。
         assert set(by_id) == {
             "moon_chess",
             "stochastic_gomoku",
@@ -81,11 +122,14 @@ class TestGames:
             "uno_stacking",
             "uno_draw_until",
             "uno_strict_wild4",
+            "undercover",
         }
         assert by_id["moon_chess"]["board_size"] == 3
         assert by_id["stochastic_gomoku"]["board_size"] == 9
         assert by_id["texas_holdem"]["kind"] == "poker"
         assert by_id["uno"]["kind"] == "uno"
+        assert by_id["undercover"]["family"] == "social"
+        assert by_id["undercover"]["player_counts"] == [8, 4, 5, 6, 7, 9, 10, 11, 12]
         assert "cfr" not in by_id["texas_holdem"]["solver_options"]
         assert by_id["moon_chess"]["solver_options"] == ["mcts", "cfr", "hybrid", "random"]
 
@@ -524,3 +568,116 @@ class TestChatEndpoint:
         data = _post(base_url + "/api/chat", {"text": "你好"})
         assert data["ok"] is True
         assert data["intent"] == "chat"
+
+    def test_chat_sse_accept_event_stream(self, base_url: str):
+        """Accept: text/event-stream → SSE 帧序列（intent 收口 + done 结尾）。"""
+        content_type, body = _post_stream(base_url + "/api/chat", {"text": "我想玩月亮棋"}, accept=True)
+        assert "text/event-stream" in content_type
+        frames = _parse_sse(body)
+        assert frames[-1] == ("done", "{}")
+        intent = next((data for event, data in frames if event == "intent"), None)
+        assert intent is not None
+        parsed = json.loads(intent)
+        assert parsed["intent"] == "play"
+        assert parsed["params"]["game_id"] == "moon_chess"
+        assert parsed["text"]
+
+    def test_chat_sse_stream_query_flag(self, base_url: str):
+        """?stream=1（无 Accept 头）同样协商为 SSE。"""
+        content_type, body = _post_stream(base_url + "/api/chat?stream=1", {"text": "你好"})
+        assert "text/event-stream" in content_type
+        frames = _parse_sse(body)
+        assert any(event == "intent" for event, _ in frames)
+        assert frames[-1] == ("done", "{}")
+
+    def test_chat_json_envelope_without_stream(self, base_url: str):
+        """无流式协商 → 原有 JSON 信封（向后兼容红线）。"""
+        content_type, body = _post_stream(base_url + "/api/chat", {"text": "你好"})
+        assert "application/json" in content_type
+        parsed = json.loads(body.decode("utf-8"))
+        assert parsed["ok"] is True
+        assert parsed["intent"] == "chat"
+
+
+@pytest.fixture
+def llm_config_url(tmp_path: pytest.TempPathFactory) -> Generator[str, None, None]:
+    """带平台 LLM 配置存储的服务器（独立实例，与 base_url fixture 互不影响）。"""
+    history = MatchHistory(tmp_path / "matches")
+    manager = PlayManager(provider=default_provider, history=history, seed=42)
+    benchmark = BenchmarkRunner(provider=default_provider, seed=42)
+    settings = LLMSettingsStore(tmp_path / "llm_config.json")
+    httpd = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        make_handler(
+            manager,
+            history,
+            benchmark,
+            dist_dir=tmp_path / "no-dist",
+            llm_settings=settings,
+        ),
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{httpd.server_address[1]}"
+    httpd.shutdown()
+    httpd.server_close()
+
+
+class TestLlmConfigApi:
+    """GET/PUT /api/llm/config 与 POST /api/llm/test 契约。"""
+
+    @pytest.fixture(autouse=True)
+    def _own_env(self, monkeypatch: pytest.MonkeyPatch):
+        """PUT 会经 sync_env 写进程环境变量；先由 monkeypatch 接管这三个键
+        （清空 → 生效值回落到内置默认；测试结束还原原值，避免 env 泄漏）。"""
+        for key in ("LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY"):
+            monkeypatch.delenv(key, raising=False)
+
+    def test_get_defaults(self, llm_config_url: str):
+        data = _get(llm_config_url + "/api/llm/config")
+        assert data["ok"] is True
+        cfg = data["config"]
+        assert cfg["base_url"] == ""
+        assert cfg["model"] == ""
+        assert cfg["has_api_key"] is False
+        assert cfg["effective_base_url"] == "http://127.0.0.1:11434"
+        assert cfg["effective_model"] == "qwen3:8b"
+        assert cfg["source"] == "default"
+
+    def test_put_saves_and_get_reflects(self, llm_config_url: str):
+        data = _put(
+            llm_config_url + "/api/llm/config",
+            {"base_url": "http://127.0.0.1:59901", "model": "m-test"},
+        )
+        assert data["ok"] is True
+        cfg = data["config"]
+        assert cfg["base_url"] == "http://127.0.0.1:59901"
+        assert cfg["model"] == "m-test"
+        assert cfg["source"] == "platform"
+        got = _get(llm_config_url + "/api/llm/config")
+        assert got["config"]["effective_base_url"] == "http://127.0.0.1:59901"
+        assert got["config"]["effective_model"] == "m-test"
+
+    def test_put_rejects_bad_scheme(self, llm_config_url: str):
+        with pytest.raises(urllib.error.HTTPError) as err:
+            _put(llm_config_url + "/api/llm/config", {"base_url": "not-a-url"})
+        assert err.value.code == 400
+
+    def test_api_key_omit_keeps_empty_clears(self, llm_config_url: str):
+        _put(llm_config_url + "/api/llm/config", {"api_key": "sk-test"})
+        assert _get(llm_config_url + "/api/llm/config")["config"]["has_api_key"] is True
+        # 省略字段 → 保持不变
+        _put(llm_config_url + "/api/llm/config", {"model": "m2"})
+        assert _get(llm_config_url + "/api/llm/config")["config"]["has_api_key"] is True
+        # 空串 → 清除
+        _put(llm_config_url + "/api/llm/config", {"api_key": ""})
+        assert _get(llm_config_url + "/api/llm/config")["config"]["has_api_key"] is False
+
+    def test_llm_test_unreachable_and_bad_scheme(self, llm_config_url: str):
+        data = _post(llm_config_url + "/api/llm/test", {"base_url": "http://127.0.0.1:59990"})
+        assert data["ok"] is True
+        assert data["reachable"] is False
+        assert data["error"]
+        with pytest.raises(urllib.error.HTTPError) as err:
+            _post(llm_config_url + "/api/llm/test", {"base_url": "localhost:1"})
+        assert err.value.code == 400

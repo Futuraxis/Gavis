@@ -82,7 +82,10 @@ export default function InlineBoard({ snapshot, game, busy, onMove, onRestart }:
             : busy
               ? 'AI 思考中…'
               : myTurn
-                ? '轮到你了'
+                ? (snapshot as MahjongSnapshot).phase === 'claim'
+                  ? // claim 是响应别人打出的牌，不是你的出牌回合。
+                    `响应 ${SEATS[(snapshot as MahjongSnapshot).last_discarder ?? ''] ?? '对方'} 的牌`
+                  : '轮到你了'
                 : 'AI 回合'}
         </span>
         <span className="chat-board-close" role="button" onClick={onRestart} title="重新开始">

@@ -18,6 +18,7 @@ from dataclasses import asdict
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 from layer1_translator import translate_rules_json
 from layer2_engine.core.llm import LLMClient
@@ -27,14 +28,22 @@ from ...difficulty.adaptive import AdaptiveController
 from ...online_learning import LearningManager, LearningStore, OnlineModelStore
 from ...profile.store import ProfileStore
 from ...review import analyze as review_analyze
-from ..common.http_utils import BodyTooLargeError, read_json_body, send_error_json, send_json
+from ..common.http_utils import (
+    BodyTooLargeError,
+    read_json_body,
+    send_error_json,
+    send_json,
+    send_sse_event,
+    start_sse,
+)
 from .benchmark import SOLVER_OPTIONS, BenchmarkRunner
-from .chat import chat_turn
+from .chat import chat_turn, chat_turn_stream
 from .conversations import ConversationError, ConversationStore
 from .custom_games import CustomGameError, CustomGameRegistry, CustomGameStore
 from .game_knowledge import GAME_ALIASES
 from .games import GAMES, PlayError
 from .history import HistoryError, MatchHistory
+from .llm_settings import LLMSettingsStore, probe_llm, sync_env
 from .session import _BUILTIN_FAMILY, PlayManager
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -42,8 +51,11 @@ DIST_DIR = ROOT / "platform-frontend" / "dist"
 DEFAULT_DATA_DIR = ROOT / "data" / "matches"
 PORT = 8770
 
+#: 平台 LLM 配置存储（make_handler 注入；None = 无平台配置，走 env/默认）。
+_LLM_SETTINGS: LLMSettingsStore | None = None
 #: 聊天编排共享的统一 LLM 客户端（懒加载单例；不可用时自动走正则兜底）。
 _CHAT_LLM: LLMClient | None = None
+_CHAT_LLM_SIG: tuple = ()
 #: 未探测到端点时重探测的最小间隔（秒）——避免每个请求都打 /v1/models，
 #: 同时让"平台启动后 ollama 才拉起"的场景能自动接上 LLM。
 _CHAT_LLM_PROBE_INTERVAL_S = 5.0
@@ -80,20 +92,40 @@ _DIST_MISSING_HTML = """<!DOCTYPE html>
 
 
 def _get_chat_llm() -> LLMClient | None:
-    """共享聊天 LLM 客户端；未探测到时周期性重探测（见 _CHAT_LLM_PROBE_INTERVAL_S）。
+    """共享聊天 LLM 客户端；平台配置变更自动重建，未探测到时周期性重探测。
 
     Fail-soft 客户端：中途 API 错误由 ``chat_turn`` 落到正则兜底并在
     ``LLMClient`` 内记录 + 告警日志（可观测，不静默）。
     """
-    global _CHAT_LLM, _last_chat_probe
+    global _CHAT_LLM, _last_chat_probe, _CHAT_LLM_SIG
+    sig = _LLM_SETTINGS.signature() if _LLM_SETTINGS is not None else ()
+    if sig != _CHAT_LLM_SIG:
+        _CHAT_LLM = None  # 平台配置变更 → 用新端点/模型重建
+        _last_chat_probe = 0.0  # 并立即重探测，不等冷却间隔
     if _CHAT_LLM is None:
         now = time.monotonic()
         if now - _last_chat_probe < _CHAT_LLM_PROBE_INTERVAL_S:
             return None
         _last_chat_probe = now
-        if LLMClient.available():
-            _CHAT_LLM = LLMClient()
+        base_url = _LLM_SETTINGS.effective_base_url() if _LLM_SETTINGS is not None else None
+        api_key = _LLM_SETTINGS.effective_api_key() if _LLM_SETTINGS is not None else ""
+        if LLMClient.available(base_url, api_key):
+            _CHAT_LLM = _LLM_SETTINGS.build_client() if _LLM_SETTINGS is not None else LLMClient()
+            _CHAT_LLM_SIG = sig
     return _CHAT_LLM
+
+
+def _wants_stream(handler: SimpleHTTPRequestHandler) -> bool:
+    """SSE 协商：客户端 ``Accept: text/event-stream`` 或 ``?stream=1`` 才走流式。
+
+    否则保持原 JSON 信封（旧前端/既有测试不变）——流式是显式 opt-in。
+    """
+    accept = (handler.headers.get("Accept") or "").lower()
+    if "text/event-stream" in accept:
+        return True
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(handler.path).query)
+    raw = (query.get("stream") or [""])[-1].strip().lower()
+    return raw in ("1", "true", "yes")
 
 
 def make_handler(
@@ -105,12 +137,17 @@ def make_handler(
     profile_store: ProfileStore | None = None,
     custom: CustomGameRegistry | None = None,
     conversations: ConversationStore | None = None,
+    llm_settings: LLMSettingsStore | None = None,
 ) -> type:
     """Build a handler class bound to the given platform services.
 
     The handler is produced by a factory (rather than holding module-level
     state like the play apps) so tests can mount their own services.
+    ``llm_settings`` mounts the platform LLM config store (``/api/llm/*``);
+    when None those endpoints answer 503 and chat falls back to env/default.
     """
+    global _LLM_SETTINGS
+    _LLM_SETTINGS = llm_settings
 
     class PlatformHandler(SimpleHTTPRequestHandler):
         server_version = "GavisPlatform/0.1"
@@ -175,6 +212,8 @@ def make_handler(
                     self._handle_learning_apply()
                 elif path == "/api/learning/config":
                     self._handle_learning_config()
+                elif path == "/api/llm/config":
+                    self._handle_llm_config_get()
                 elif path.startswith("/api/"):
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
                 else:
@@ -213,6 +252,8 @@ def make_handler(
                     self._handle_learning_apply()
                 elif path == "/api/learning/config":
                     self._handle_learning_config()
+                elif path == "/api/llm/test":
+                    self._handle_llm_test()
                 elif path == "/api/match/hint":
                     self._handle_match_hint()
                 elif path == "/api/agent/say":
@@ -263,6 +304,8 @@ def make_handler(
             try:
                 if path == "/api/profile":
                     self._handle_profile_save()
+                elif path == "/api/llm/config":
+                    self._handle_llm_config_put()
                 else:
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
             except BodyTooLargeError as exc:
@@ -425,6 +468,13 @@ def make_handler(
             platform ``MatchHistory`` (closure ``history``) is passed
             through so the ``get_match_review`` info tool and the
             “最近一局” prompt line have a data source.
+
+            Two response modes (协商见 ``_wants_stream``)：
+            - 客户端请求 ``Accept: text/event-stream``（或 ``?stream=1``）→
+              SSE 事件流（``chat_turn_stream``：reasoning/text 增量 +
+              intent/error/done 收口）；
+            - 其余 → 原有 JSON 信封（``ok/intent/text/mood/params``），
+              向后兼容旧前端与既有测试。
             """
             payload = read_json_body(self)
             text = str(payload.get("text", ""))
@@ -432,6 +482,9 @@ def make_handler(
             if game_id is not None:
                 game_id = str(game_id)
             chat_history = payload.get("history")
+            if _wants_stream(self):
+                self._handle_chat_stream(text, game_id, chat_history)
+                return
             result = chat_turn(
                 manager,
                 text,
@@ -452,6 +505,24 @@ def make_handler(
                     "params": result.params,
                 },
             )
+
+        def _handle_chat_stream(self, text: str, game_id: str | None, chat_history: Any) -> None:
+            """SSE 出口：逐事件写 ``chat_turn_stream`` 的产出（编排异常兜 error+done）。"""
+            start_sse(self)
+            try:
+                for event in chat_turn_stream(
+                    manager,
+                    text,
+                    llm=_get_chat_llm(),
+                    game_id=game_id,
+                    custom=custom,
+                    history=chat_history if isinstance(chat_history, list) else None,
+                    match_history=history,
+                ):
+                    send_sse_event(self, str(event["event"]), event["data"])
+            except Exception as exc:  # noqa: BLE001 — 编排异常绝不能让连接悬挂
+                send_sse_event(self, "error", {"error": str(exc)})
+                send_sse_event(self, "done", {})
 
         def _handle_match_hint(self) -> None:
             payload = read_json_body(self)
@@ -648,6 +719,53 @@ def make_handler(
             learning.set_enabled(game_id, bool(payload.get("enabled", True)))
             send_json(self, HTTPStatus.OK, {"ok": True, "learning": learning.status(game_id)})
 
+        # ── LLM 配置（页面 / API）──────────────────────────────
+        # 平台持久化配置（data/llm_config.json）> 环境变量 > 内置默认；
+        # 保存时同步进进程环境，让翻译默认客户端与 Ollama 求解器生效。
+
+        def _handle_llm_config_get(self) -> None:
+            if llm_settings is None:
+                send_error_json(self, HTTPStatus.SERVICE_UNAVAILABLE, "LLM 配置存储未启用")
+                return
+            info = llm_settings.info()
+            info["available"] = LLMClient.available(llm_settings.effective_base_url(), llm_settings.effective_api_key())
+            send_json(self, HTTPStatus.OK, {"ok": True, "config": info})
+
+        def _handle_llm_config_put(self) -> None:
+            if llm_settings is None:
+                send_error_json(self, HTTPStatus.SERVICE_UNAVAILABLE, "LLM 配置存储未启用")
+                return
+            payload = read_json_body(self)
+            try:
+                settings = llm_settings.save(
+                    base_url=payload.get("base_url"),
+                    model=payload.get("model"),
+                    api_key=payload.get("api_key"),
+                )
+            except ValueError as exc:
+                send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            # 同步进进程环境：翻译默认客户端 / Ollama 求解器（不以显式
+            # 参数构造 LLMClient 的消费方）立即使用新配置。
+            sync_env(settings)
+            send_json(self, HTTPStatus.OK, {"ok": True, "config": llm_settings.info()})
+
+        def _handle_llm_test(self) -> None:
+            """保存前的连接测试：探测 ``{base_url}/v1/models``（可带预览密钥）。"""
+            if llm_settings is None:
+                send_error_json(self, HTTPStatus.SERVICE_UNAVAILABLE, "LLM 配置存储未启用")
+                return
+            payload = read_json_body(self)
+            base_url = str(payload.get("base_url") or "").strip() or llm_settings.effective_base_url() or ""
+            raw_key = payload.get("api_key")
+            # None → 用当前生效密钥探测；空串 → 无密钥探测；非空 → 探测该密钥。
+            api_key = llm_settings.effective_api_key() if raw_key is None else str(raw_key).strip()
+            if not base_url.startswith(("http://", "https://")):
+                send_error_json(self, HTTPStatus.BAD_REQUEST, f"非法端点: {base_url!r}（需要 http(s):// 前缀）")
+                return
+            reachable, error = probe_llm(base_url, api_key)
+            send_json(self, HTTPStatus.OK, {"ok": True, "reachable": reachable, "error": error, "base_url": base_url})
+
     return PlatformHandler
 
 
@@ -685,6 +803,10 @@ def main() -> None:
     )
     profiles = ProfileStore(args.data_dir.parent)
     adaptive = AdaptiveController()
+    # 平台 LLM 配置（data/llm_config.json）：端点/模型/密钥可在页面改；
+    # 启动时同步进进程环境，翻译默认客户端与 Ollama 求解器立即生效。
+    llm_settings = LLMSettingsStore(Path(args.data_dir).parent / "llm_config.json")
+    sync_env(llm_settings.load())
     # 自定义游戏注册表（data/custom_games/，与 matches/online_learning 并列）。
     custom_registry = CustomGameRegistry(CustomGameStore(args.data_dir.parent / "custom_games"))
     # 对话存档（data/conversations/，与 matches/online_learning/custom_games 并列）。
@@ -694,7 +816,11 @@ def main() -> None:
         persona = PERSONAS.get(persona_key)
         if persona is None:
             return None
-        llm = LLMClient() if LLMClient.available() else None
+        llm = (
+            llm_settings.build_client()
+            if LLMClient.available(llm_settings.effective_base_url(), llm_settings.effective_api_key())
+            else None
+        )
         return DialogueEngine(persona, llm=llm)
 
     manager = PlayManager(
@@ -719,6 +845,7 @@ def main() -> None:
         profile_store=profiles,
         custom=custom_registry,
         conversations=conversation_store,
+        llm_settings=llm_settings,
     )
     httpd = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Gavis 平台服务: http://{args.host}:{args.port}  (API 前缀 /api, 静态目录 {DIST_DIR})")

@@ -8,6 +8,9 @@ interface Props {
 }
 
 const SUIT_NAMES: Record<string, string> = { m: '万', p: '筒', s: '条', z: '字' }
+// 1-9 中文点数：一条/二条… 而不是 1条/2条…（界面读法与后端 engine_helpers
+// 的统一中文名称层一致 —— 「传给 LLM/用户的信息不过分技术化」）。
+const CN_RANK = ['一', '二', '三', '四', '五', '六', '七', '八', '九']
 const HONOR_NAMES: Record<string, string> = {
   z1: '东', z2: '南', z3: '西', z4: '北', z5: '中', z6: '发', z7: '白',
 }
@@ -20,9 +23,18 @@ const MELD_NAMES: Record<string, string> = {
 
 function tileLabel(tile: string): string {
   if (!tile || tile.length < 2) return tile
-  const [suit, rank] = [tile[0], tile.slice(1)]
+  const [suit, _] = [tile[0], tile.slice(1)]
   if (suit === 'z') return HONOR_NAMES[tile] ?? tile
-  return `${rank}${SUIT_NAMES[suit] ?? suit}`
+  const cn = tileRank(tile)
+  return `${cn}${SUIT_NAMES[suit] ?? suit}`
+}
+
+function tileRank(tile: string): string {
+  if (!tile || tile.length < 2) return tile
+  const [suit, rank] = [tile[0], tile.slice(1)]
+  if (suit === 'z') return HONOR_NAMES[tile] ?? rank
+  const n = Number(rank)
+  return Number.isInteger(n) && n >= 1 && n <= 9 ? CN_RANK[n - 1] : rank
 }
 
 /** 麻将牌 — 万红 / 筒蓝 / 条绿 / 字黑；``drawn`` 高亮刚摸进的牌。 */
@@ -31,7 +43,7 @@ function TileView({ tile, selected, onClick, drawn }: { tile: string; selected?:
   const cls = `mahjong-tile ${suit === 'm' ? 'suit-m' : suit === 'p' ? 'suit-p' : suit === 's' ? 'suit-s' : 'suit-z'}${selected ? ' selected' : ''}${drawn ? ' drawn' : ''}`
   return (
     <div className={cls} onClick={onClick} role="button">
-      <span className="tile-rank">{tile.slice(1)}</span>
+      <span className="tile-rank">{tileRank(tile)}</span>
       <span className="tile-suit">{SUIT_NAMES[suit] ?? suit}</span>
       {drawn && <span className="drawn-tag">新</span>}
     </div>

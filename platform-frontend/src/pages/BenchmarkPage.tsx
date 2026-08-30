@@ -96,6 +96,9 @@ export default function BenchmarkPage() {
 
   const game = games.find((g) => g.game_id === gameId)
   const options = game?.solver_options ?? []
+  // 无求解器选项的游戏（social 族：谁是被卧底等走 ollama/random 运行时，不参与 AI-vs-AI 评测）
+  // 不出现在评测游戏选择里——避免选中后求解器下拉为空、后端拒绝请求。
+  const benchmarkable = games.filter((g) => (g.solver_options ?? []).length > 0)
 
   useEffect(() => {
     apiGet<{ games: GameInfo[] }>('/games')
@@ -151,7 +154,7 @@ export default function BenchmarkPage() {
         <div className="form-row">
           <label>游戏:</label>
           <select value={gameId} onChange={(e) => selectGame(e.target.value)}>
-            {games.map((g) => (
+            {benchmarkable.map((g) => (
               <option key={g.game_id} value={g.game_id}>
                 {g.display_name}
               </option>

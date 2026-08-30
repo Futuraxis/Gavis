@@ -18,7 +18,7 @@ import {
   apiGet,
   apiPost,
   appendConversationMessages,
-  chatTurn,
+  chatTurnStream,
   createConversation,
   deleteConversation,
   getConversation,
@@ -104,9 +104,10 @@ function welcomeMessage(): ChatMessage {
   return { id: 'welcome', role: 'agent', text: WELCOME_TEXT, mood: 'happy', ts: Date.now() }
 }
 
-/** 可入档消息：除常驻开场白外的全部（开场白每次新会话都会重建，入档无意义）。 */
+/** 可入档消息：除常驻开场白外的全部（开场白每次新会话都会重建，入档无意义）；
+ * 流式进行中的 pending 草稿不入档（定稿后才同步）。 */
 function persistable(m: ChatMessage): boolean {
-  return m.id !== 'welcome'
+  return m.id !== 'welcome' && !m.pending
 }
 
 /** 增量同步节流（ms）：一次回合的 player+agent+教练消息合并成一批入档。 */
@@ -122,6 +123,9 @@ export function useChatRuntime(): ChatRuntime {
   const [conversationId, setConversationId] = useState<string | null>(() => loadChatStore().conversationId)
   const [conversations, setConversations] = useState<ConversationMeta[]>([])
   const busyRef = useRef(false)
+  // 流式草稿目标：send 期间 pushAgent 应原地定稿该消息（而非追加新消息）。
+  // dispatch 的各个分支无需改动 —— 定稿规则收敛在 pushAgent 一处。
+  const draftTargetRef = useRef<string | null>(null)
   const gamesRef = useRef<GameInfo[]>([])
   // 镜像 messages 的 ref（useEffect 同步），send 里取「已渲染完的消息」当对话历史；
   // 刚 push 的当前句不在其中，它本来就是 /api/chat 的 text 参数，不会重复。
@@ -263,6 +267,18 @@ export function useChatRuntime(): ChatRuntime {
 
   const pushAgent = useCallback(
     (text: string, mood?: ChatMessage['mood'], intent?: ChatMessage['intent'], params?: Record<string, unknown>) => {
+      const draftId = draftTargetRef.current
+      if (draftId) {
+        // 流式定稿：正文优先保留已流出的增量；否则采用调用方文案（兜底/错误提示）。
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== draftId) return m
+            const finalText = m.text && m.text.trim() ? m.text : text
+            return { ...m, text: finalText, mood, intent, params, pending: false }
+          }),
+        )
+        return
+      }
       setMessages((prev) => [...prev, { id: uid(), role: 'agent', text, mood, ts: Date.now(), intent, params }])
     },
     [],
@@ -540,6 +556,15 @@ export function useChatRuntime(): ChatRuntime {
       pushPlayer(trimmed)
       setBusyState(true)
       setError(null)
+      // 流式草稿：先落一条 pending agent 消息，增量原地更新（正文 + 思维链），
+      // 最终由 dispatch 内的 pushAgent 命中 draftTargetRef 原地定稿 ——
+      // 不产生第二条消息，也不丢已流出的亲笔文本。
+      const draftId = uid()
+      draftTargetRef.current = draftId
+      setMessages((prev) => [
+        ...prev,
+        { id: draftId, role: 'agent', text: '', pending: true, mood: 'neutral', ts: Date.now() },
+      ])
       try {
         // 对话历史：最近 24 条 user/assistant 消息（player→user, agent→assistant），
         // 只带文本；当前输入作为 text 单独传。让 LLM 能接住“那德州扑克呢”这类回指。
@@ -550,27 +575,44 @@ export function useChatRuntime(): ChatRuntime {
             role: m.role === 'player' ? ('user' as const) : ('assistant' as const),
             content: m.text,
           }))
-        const result = await chatTurn(trimmed, activeSession?.game_id, history)
-        await dispatch(result)
-      } catch {
-        // 后端 /api/chat 不可用（旧服务端/断连）→ 本地正则兜底。
-        // description / aliases 供 WHAT_IS 知识回答与短名匹配（与后端对齐）。
-        const local = classifyLocal(trimmed, {
-          games: gamesRef.current.map((g) => ({
-            game_id: g.game_id,
-            display_name: g.display_name,
-            description: g.description,
-            aliases: g.aliases,
-          })),
-          activeGameId: activeSession?.game_id ?? null,
-          activeDisplay: activeSession ? '' : null,
+        const result = await chatTurnStream(trimmed, activeSession?.game_id, history, {
+          onText: (delta) =>
+            setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, text: m.text + delta } : m))),
+          onReasoning: (delta) =>
+            setMessages((prev) =>
+              prev.map((m) => (m.id === draftId ? { ...m, reasoning: (m.reasoning ?? '') + delta } : m)),
+            ),
         })
-        await dispatch(local)
+        await dispatch(result)
+      } catch (err) {
+        // 流中断/后端不可用：草稿已流出内容则保留定稿为 chat 消息；
+        // 完全没收到任何内容则移除草稿、走本地正则兜底（旧行为不变）。
+        const draft = messagesRef.current.find((m) => m.id === draftId)
+        const hasStreamed = !!draft && (draft.text.trim().length > 0 || (draft.reasoning ?? '').trim().length > 0)
+        if (hasStreamed) {
+          pushAgent(`（回复中断：${(err as Error).message}）`, 'sorry')
+        } else {
+          draftTargetRef.current = null
+          setMessages((prev) => prev.filter((m) => m.id !== draftId))
+          // description / aliases 供 WHAT_IS 知识回答与短名匹配（与后端对齐）。
+          const local = classifyLocal(trimmed, {
+            games: gamesRef.current.map((g) => ({
+              game_id: g.game_id,
+              display_name: g.display_name,
+              description: g.description,
+              aliases: g.aliases,
+            })),
+            activeGameId: activeSession?.game_id ?? null,
+            activeDisplay: activeSession ? '' : null,
+          })
+          await dispatch(local)
+        }
       } finally {
+        draftTargetRef.current = null
         setBusyState(false)
       }
     },
-    [activeSession, dispatch, pushPlayer, setBusyState],
+    [activeSession, dispatch, pushPlayer, pushAgent, setBusyState],
   )
 
   const clearSession = useCallback(() => {

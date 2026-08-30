@@ -189,6 +189,20 @@ def run_episode(
         if not legal:
             _abort()
             break
+        # Forced decision (exactly one legal action — e.g. no-choice
+        # ``claim_pass`` states): apply it directly without recording a
+        # transition.  Mahjong 4-player games are ~75% forced steps, so
+        # recording them only pollutes the replay buffer with zero-signal
+        # transitions and slows training ~4x; skipping is semantically
+        # identical (the outcome is deterministic).  The next loop
+        # iteration handles any chance nodes naturally.
+        if len(legal) == 1:
+            state = engine.apply_action(state, legal[0])
+            steps += 1
+            if max_steps and steps >= max_steps:
+                _abort()
+                break
+            continue
         mask = action_space.legal_mask(state, legal)
         action_idx, info = selectors[pid](pid, state, mask)
         action = action_space.action_from_index(action_idx, legal)

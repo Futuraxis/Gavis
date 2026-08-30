@@ -27,13 +27,13 @@ SOLVER_OPTIONS: dict[str, tuple[str, ...]] = {
     "moon_chess": ("mcts", "cfr", "hybrid", "random"),
     "stochastic_gomoku": ("mcts", "cfr", "hybrid", "random"),
     "texas_holdem": ("mcts", "hybrid", "random"),
-    "mahjong_guangdong": ("mahjong", "random"),
-    "mahjong_hongzhong": ("mahjong", "random"),
-    "mahjong_blood": ("mahjong", "random"),
-    "mahjong_sichuan": ("mahjong", "random"),
-    "mahjong_changsha": ("mahjong", "random"),
-    "mahjong_taiwan": ("mahjong", "random"),
-    "mahjong_international": ("mahjong", "random"),
+    "mahjong_guangdong": ("mahjong", "random", "mcts", "maac"),
+    "mahjong_hongzhong": ("mahjong", "random", "mcts", "maac"),
+    "mahjong_blood": ("mahjong", "random", "mcts", "maac"),
+    "mahjong_sichuan": ("mahjong", "random", "mcts", "maac"),
+    "mahjong_changsha": ("mahjong", "random", "mcts", "maac"),
+    "mahjong_taiwan": ("mahjong", "random", "mcts", "maac"),
+    "mahjong_international": ("mahjong", "random", "mcts", "maac"),
 }
 
 #: Search budget per game (harder than the play tiers, bounded).
@@ -47,7 +47,6 @@ BENCHMARK_BUDGETS: dict[str, int] = {
     "mahjong_sichuan": 1000,
     "mahjong_changsha": 1000,
     "mahjong_taiwan": 1000,
-    "mahjong_international": 1000,
 }
 
 SOLVER_LABELS: dict[str, str] = {
@@ -56,6 +55,7 @@ SOLVER_LABELS: dict[str, str] = {
     "hybrid": "Hybrid",
     "random": "随机",
     "mahjong": "启发式",
+    "maac": "MAAC(训练)",
 }
 
 #: 保留在内存中的 job 数上限（审计 3.6 资源泄漏：_jobs 此前无界增长）。
@@ -254,7 +254,10 @@ class BenchmarkRunner:
         state = engine.create_initial_state()
         moves = 0
         t0 = time.time()
-        while not engine.is_terminal(state) and moves < 200:
+        # 步数护栏：月亮棋/五子棋几十步即终局；麻将自然局 ~1000 步（墙尽或
+        # 胡牌），旧 200 上限会把麻将 benchmark 截断在发牌/早期弃牌阶段，
+        # 每局都误判为无胜负——抬到 2000（仍远低于任何病理死循环）。
+        while not engine.is_terminal(state) and moves < 2000:
             node_type = engine.get_node_type(state)
             if node_type == "chance":
                 _, state = engine.sample_chance(state)
@@ -264,10 +267,15 @@ class BenchmarkRunner:
             current = engine.get_current_player(state)
             solver = solver_a if current == seat_a else solver_b
             engine = engine_a if current == seat_a else engine_b
-            action = solver.select_action(state)
-            if action is None:  # search found nothing — random fallback
-                legal = engine.get_legal_actions(state)
-                action = rng.choice(legal) if legal else None
+            legal = engine.get_legal_actions(state)
+            if not legal:
+                break
+            if len(legal) == 1:
+                action = legal[0]  # forced step (e.g. no-choice claim_pass)
+            else:
+                action = solver.select_action(state)
+                if action is None:  # search found nothing — random fallback
+                    action = rng.choice(legal)
             if action is None:
                 break
             state = engine.apply_action(state, action)

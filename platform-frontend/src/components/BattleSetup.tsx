@@ -67,6 +67,7 @@ const RULES_SUMMARY: Record<string, string> = {
   mahjong_sichuan: '四人四川麻将（血战到底）：108 张无字牌，缺一门才能胡，禁吃，胡牌后胡家退场，直到三家胡牌或牌墙摸空。',
   mahjong_changsha: '四人长沙麻将：258将为将的小胡 + 大胡（碰碰胡/清一色等）乱将豁免。',
   mahjong_taiwan: '四人台湾麻将（16 张）：5 副露 + 将成胡，呖咕呖咕（八对半）可胡。',
+  undercover: '谁是卧底：平民同词、卧底近义词、白板无词，轮流一句话描述后投票，票最多者出局（平票无人出局）；默认 8 人（1 卧底 + 1 白板 + 6 平民），可 4-12 人。',
 }
 
 export default function BattleSetup({ game, busy, error, onStart }: Props) {

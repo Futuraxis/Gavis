@@ -23,12 +23,16 @@ from typing import Any
 
 from layer2_engine.core.llm import LLMClient, sanitize_text
 
+from ..frontend.engine_helpers import canonical_family_text, game_family, piece_names
 from ..frontend.platform.game_knowledge import game_knowledge_text
 from .hidden_guard import infer_game_id, scan
 from .persona import Persona
 from .skills import SkillContext
 
 logger = logging.getLogger(__name__)
+
+#: 思维链（reasoning）清洗上限（字符）——与 conversations 存档预算一致。
+_REASONING_MAX = 4000
 
 #: 允许的情绪标签集合（前端头像 / 表情据此渲染）。
 _MOODS = ("happy", "thinking", "sorry", "neutral")
@@ -64,6 +68,8 @@ class AgentMessage:
 
     text: str
     mood: str  # happy / thinking / sorry / neutral
+    #: 思维链（模型思考过程；统一客户端 reasoning 透传，前端以折叠块展示）。
+    reasoning: str = ""
 
 
 class DialogueEngine:
@@ -108,8 +114,9 @@ class DialogueEngine:
             return AgentMessage("", "neutral")
 
         teaching = bool(getattr(ctx, "teaching", False))
-        text = self._generate(ctx, scenario, game_id)
+        text, reasoning = self._generate(ctx, scenario, game_id)
         text = self._clean(text)
+        reasoning = self._clean_reasoning(reasoning)
         # 泄露扫描按观测形态自行推断游戏（不变更红线语义）；
         # game_id 参数只服务于知识注入。
         scan_game = infer_game_id(ctx.observation)
@@ -124,20 +131,21 @@ class DialogueEngine:
             text = scan(text, scan_game, teaching=teaching)
 
         self._sent[key] = (now, text)
-        return AgentMessage(text, _SCENARIO_MOODS.get(scenario, "neutral"))
+        return AgentMessage(text, _SCENARIO_MOODS.get(scenario, "neutral"), reasoning=reasoning)
 
-    def _generate(self, ctx: SkillContext, scenario: str, game_id: str = "") -> str:
-        """LLM 成文，失败或无 LLM 时回退兜底台词."""
+    def _generate(self, ctx: SkillContext, scenario: str, game_id: str = "") -> tuple[str, str]:
+        """LLM 成文，失败或无 LLM 时回退兜底台词；返回 ``(text, reasoning)``."""
         if self.llm is not None:
             system = self._system_prompt(bool(getattr(ctx, "teaching", False)))
             user = self._user_prompt(ctx, scenario, game_id)
             try:
-                text = self.llm.complete_chat(system, user, self.max_len)
+                reply = self.llm.complete_chat_reply(system, user, self.max_len)
+                text, reasoning = reply.text, reply.reasoning
             except Exception as exc:  # noqa: BLE001 — fail-soft 客户端一般不抛；兜测试注入
                 logger.warning("对话 LLM 调用异常，回退兜底台词: %s", exc)
-                text = ""
+                text, reasoning = "", ""
             if text:
-                return text
+                return text, reasoning
             # 传输故障定性（统一客户端 fail-soft 时异常不抛出，真实原因在
             # last_error）；兜底台词是刻意设计，但失败必须可观测。
             last = getattr(self.llm, "last_error", None)
@@ -145,7 +153,7 @@ class DialogueEngine:
                 logger.warning("对话 LLM 未产出内容（%s），回退兜底台词", last)
             else:
                 logger.warning("对话 LLM 未产出内容（空回复），回退兜底台词")
-        return self._pick_fallback(scenario, avoid=None)
+        return self._pick_fallback(scenario, avoid=None), ""
 
     def _system_prompt(self, teaching: bool = False) -> str:
         if teaching:
@@ -165,7 +173,7 @@ class DialogueEngine:
         )
 
     def _user_prompt(self, ctx: SkillContext, scenario: str, game_id: str = "") -> str:
-        payload = _scenario_payload(ctx, scenario)
+        payload = _scenario_payload(ctx, scenario, game_id=game_id)
         parts = [f"场景：{scenario}", f"机械事实：{json.dumps(payload, ensure_ascii=False, default=str)}"]
         # 权威资料（与 chat 信息工具同源）：内置游戏注入简介 + 规则段；
         # custom / 未知 id 返回空串 → 不注入（fail-soft）。
@@ -191,6 +199,10 @@ class DialogueEngine:
         """剔除控制字符并截断到 ``max_len`` 字符（统一清洗，layer2_engine.core.llm）。"""
         return sanitize_text(text, self.max_len).strip()
 
+    def _clean_reasoning(self, reasoning: str) -> str:
+        """思维链清洗：剔控制字符 + 上限（与前端展示/存档预算对齐）。"""
+        return sanitize_text(reasoning, _REASONING_MAX).strip()
+
 
 def _state_hash(ctx: SkillContext) -> str:
     """由投影观测生成稳定状态哈希（去重键的第三元）."""
@@ -201,8 +213,26 @@ def _state_hash(ctx: SkillContext) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def _scenario_payload(ctx: SkillContext, scenario: str) -> dict[str, Any]:
-    """把场景与评估打包成机械事实（供 LLM 成文参考）."""
+def _payload_family(ctx: SkillContext, game_id: str) -> str:
+    """教学载荷的牌名读法族：优先显式 ``game_id``，其次按观测推断.
+
+    custom / 未知 id 时用 :func:`hidden_guard.infer_game_id` 的观测形态
+    推断；推断不出返回 ``"unknown"``（上层 fail-soft 直出原 id）。
+    """
+    family = game_family(game_id)
+    if family != "unknown":
+        return family
+    return game_family(infer_game_id(ctx.observation))
+
+
+def _scenario_payload(ctx: SkillContext, scenario: str, *, game_id: str = "") -> dict[str, Any]:
+    """把场景与评估打包成机械事实（供 LLM 成文参考）.
+
+    Args:
+        game_id: 会话游戏 id（custom / 空值时可从观测推断）；用于把
+            手牌 id / 参考动作 canonical key 译成中文名 —— 这就是
+            “传给 LLM 的信息不过分技术化”的对话侧出口。
+    """
     score = float(ctx.evaluation.get("score", 0.0))
     payload: dict[str, Any] = {
         "scenario": scenario,
@@ -226,13 +256,16 @@ def _scenario_payload(ctx: SkillContext, scenario: str) -> dict[str, Any]:
         # 教学事实（TeachContext；仅玩家自己的牌 + 参考动作对比——
         # 观测是玩家自己的投影，AI/对手的隐藏信息从来进不来）。
         payload["kind"] = _TEACH_KINDS.get(scenario, payload["kind"])
+        family = _payload_family(ctx, game_id)
         hand = list(getattr(ctx, "hand", None) or [])
         if hand:
-            payload["player_hand"] = hand
+            # 手牌 id（s1…）→ 中文牌名（一条…）：LLM 读“一条”而不是“s1”。
+            payload["player_hand"] = piece_names(family, hand)
         payload["legal_count"] = int(getattr(ctx, "legal_count", 0) or 0)
         reference = getattr(ctx, "reference", None)
         if reference is not None:
-            payload["coach_reference"] = reference
+            payload["coach_reference"] = canonical_family_text(family, reference)
+            payload["coach_reference_key"] = reference  # 机器键保留给校验/回放
         player_action = getattr(ctx, "player_action", None)
         if player_action is not None:
             payload["player_action"] = player_action

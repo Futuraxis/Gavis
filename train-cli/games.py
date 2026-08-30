@@ -29,8 +29,10 @@
 
 from __future__ import annotations
 
+import os
 import random
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from layer2_engine.core.engine import GameEngine
@@ -95,11 +97,37 @@ def _make_mahjong(engine: GameEngine, cfg: dict[str, Any]) -> SolverBase:
 
 
 def _make_ollama(engine: GameEngine, cfg: dict[str, Any]) -> SolverBase:
-    return OllamaSolver(engine, OllamaConfig(model=cfg.get("model", "qwen3:8b")), player_id=cfg.get("player_id"))
+    # 显式配置 > LLM_MODEL/LLM_BASE_URL 环境变量 > 内置默认（与统一客户端
+    # 同优先级）——平台 LLM 配置页保存后经 env 桥让社交族求解器即时生效。
+    model = cfg.get("model") or os.environ.get("LLM_MODEL", "").strip() or "qwen3:8b"
+    base_url = cfg.get("base_url") or os.environ.get("LLM_BASE_URL", "").strip() or "http://localhost:11434"
+    return OllamaSolver(engine, OllamaConfig(model=model, base_url=base_url), player_id=cfg.get("player_id"))
 
 
 def _make_mcts(engine: GameEngine, cfg: dict[str, Any]) -> SolverBase:
     return MCTS(engine, MCTSConfig(**cfg))
+
+
+def _make_maac(engine: GameEngine, cfg: dict[str, Any]) -> SolverBase:
+    """Runtime MAAC solver: loads the trained checkpoint when available.
+
+    ``cfg["model_path"]`` points at the saved ``maac.pt`` artifact (the
+    train-cli ``create_solver`` injects ``models/train/<game_id>/maac.pt``
+    by default).  When the checkpoint is missing the factory falls back to
+    the game's heuristic solver so the platform never breaks — the
+    fallback is the point of the pre-training default behavior.
+    """
+    model_path = cfg.get("model_path")
+    try:
+        solver = MAACSolver(engine, MAACConfig(seed=cfg.get("seed"), device=cfg.get("device", "cpu")))
+    except Exception as exc:  # torch 缺失或引擎/动作空间异常 — 平台不能因此崩溃
+        print(f"  [提示] MAAC 实例化失败（{exc}）— 回退到麻将启发式")
+        return MahjongHeuristicAI(engine, SolverConfig(seed=cfg.get("seed")))
+    if model_path and Path(model_path).exists():
+        solver.load(str(model_path))
+        return solver
+    print(f"  [提示] MAAC 模型不存在: {model_path} — 回退到麻将启发式")
+    return MahjongHeuristicAI(engine, SolverConfig(seed=cfg.get("seed")))
 
 
 def _make_cfr(engine: GameEngine, cfg: dict[str, Any]) -> SolverBase:
@@ -116,6 +144,7 @@ RUNTIME_FACTORY: dict[str, Callable[[GameEngine, dict[str, Any]], SolverBase]] =
     "hybrid": _make_hybrid,
     "random": _make_random,
     "mahjong": _make_mahjong,
+    "maac": _make_maac,
     "ollama": _make_ollama,
 }
 
@@ -126,11 +155,19 @@ RUNTIME_DEFAULTS: dict[str, Mapping[str, Any]] = {
     "hybrid": {"mode": "search", "cfr_iterations": 1000, "cfr_depth_limit": 8, "mcts_budget": 3000},
     "random": {},
     "mahjong": {},
-    "ollama": {"model": "qwen3:8b"},
+    "maac": {"device": "cpu"},  # 运行时 MAAC：加载 <game>/maac.pt（缺文件回退启发式）
+    # ollama 无默认值：_make_ollama 按 显式 > LLM_MODEL/LLM_BASE_URL env > 默认 解析，
+    # 这样平台 LLM 配置页改的端点/模型也能覆盖社交族求解器。
+    "ollama": {},
 }
 
 #: 调用期 budget 参数注入的配置字段名（按求解器）。
 _BUDGET_FIELD: Mapping[str, str] = {"mcts": "budget", "hybrid": "mcts_budget"}
+
+#: 训练产物根目录（train.py 把每游戏产物写到 ``<root>/models/train/<game_id>/``）。
+#: ``create_solver`` 为 ``maac`` 注入默认 ``model_path`` 指向该目录下的
+#: ``maac.pt`` —— 平台/基准装配时无需手工传路径；产物缺失时运行时工厂回退启发式。
+_MODELS_TRAIN_DIR: Path = Path(__file__).resolve().parent.parent / "models" / "train"
 
 #: ``allow_unknown=True`` 时允许为未登记游戏实例化的运行时求解器名
 #: （平台自定义游戏族经 SolverProvider 装配使用；其余名字维持 ValueError）。
@@ -174,6 +211,14 @@ class GameSpec:
     #   （mcts 未在 runtime_solvers 登记时该列自动跳过）。
     runtime_solvers: tuple[str, ...] = ()  # 运行时可用求解器（数据驱动装配）
     runtime_configs: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)  # 运行时配置覆盖
+    #: 每评估对手的搜索预算覆盖（如 {"mcts": 30}）；缺省用 train.py 全局预算。
+    #: 麻将的 MCTS 每决策 ~200ms/迭代，全局 300 预算在此游戏上不现实——登记
+    #: 覆盖让内置评估的实际 MCTS 基线预算可执行同时保持对比语义一致。
+    eval_budgets: Mapping[str, int] = field(default_factory=dict)
+    # 每评估对手的搜索预算覆盖（缺省用 train.py 的全局 EVAL_MCTS_BUDGET）。
+    # 麻将 MCTS 每决策成本 ~200ms/迭代，全局 300 预算在该游戏上会跑数小时——
+    # 麻将登记一条 {"mcts": 30} 使内置评估在相同语义下可实际执行。
+    eval_budgets: Mapping[str, int] = field(default_factory=dict)
 
 
 # ── 注册表 ─────────────────────────────────────────────────────────
@@ -223,9 +268,13 @@ def _mahjong_spec(game_id: str, display_name: str, variant: str) -> GameSpec:
         engine=EngineSpec(rules="mahjong.json", variant=variant, player_count=4),
         players=("p0", "p1", "p2", "p3"),
         eval_episodes=8,
-        eval_opponents=("random", "mahjong"),  # 麻将启发式基线（已登记 runtime_solvers）
+        eval_opponents=("random", "mahjong", "mcts"),  # 启发式 + MCTS 基线（均登记 runtime_solvers）
         solvers=_MAHJONG_SOLVERS,
-        runtime_solvers=("mahjong", "random"),
+        runtime_solvers=("mahjong", "random", "mcts", "maac"),
+        # MCTS 在麻将上每决策 ~200ms/迭代：浅 rollout 压低评估成本；训练好的
+        # MAAC 模型（maac.pt）经 create_solver("maac") 自动注入默认路径加载。
+        runtime_configs={"mcts": {"rollout_depth": 8}},
+        eval_budgets={"mcts": 30},
     )
 
 
@@ -478,6 +527,11 @@ def create_solver(
     if name in _BUDGET_FIELD:
         cfg[_BUDGET_FIELD[name]] = budget
     cfg.update(kwargs)
+    if name == "maac":
+        # 训练产物默认路径：<root>/models/train/<game_id>/maac.pt。显式传入的
+        # ``model_path`` kwarg 优先；产物缺失时运行时工厂回退到该游戏启发式，
+        # 平台默认 AI 因此是"已训练 MAAC，否则不崩的启发式"。
+        cfg.setdefault("model_path", str(_MODELS_TRAIN_DIR / game_id / "maac.pt"))
     cfg.setdefault("seed", seed)
     return factory(engine, cfg)
 

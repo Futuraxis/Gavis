@@ -5,8 +5,10 @@ import type { GameInfo } from '../types'
 
 const FAMILY_LABELS: Record<string, string> = { grid: '网格', poker: '扑克', mahjong: '麻将', social: '社交', uno: 'UNO' }
 
-/** 大厅卡片徽标：按 kind 分发——非棋盘类没有 board_size，旧逻辑会渲染「🎯 null×null」。 */
+/** 大厅卡片徽标：家族优先（社交类统一 🎭），再按 kind 分发——非棋盘类没有 board_size，
+ * 旧逻辑会渲染「🎯 null×null」。 */
 function kindBadge(game: GameInfo): string {
+  if (game.family === 'social') return '🎭 社交'
   switch (game.kind) {
     case 'poker':
       return '🃏 扑克'

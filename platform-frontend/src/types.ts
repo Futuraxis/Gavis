@@ -186,6 +186,8 @@ export interface SnapshotChatEntry {
   text: string
   mood: Mood
   step: number
+  /** 陪伴/教练消息的思维链（统一客户端 reasoning 透传；可选）。 */
+  reasoning?: string
 }
 
 // ── UNO 族 ────────────────────────────────────────────────────────
@@ -389,6 +391,11 @@ export interface ChatMessage {
   role: 'agent' | 'player'
   text: string
   mood?: Mood
+  /**
+   * 思维链（模型思考过程）。流式时随 reasoning 事件增量累积；
+   * 存档/镜像原样保留；MessageBubble 以可折叠块展示。
+   */
+  reasoning?: string
   ts: number
   /** 后端意图（agent 消息携带；用于消息内联卡片渲染与 chips）。 */
   intent?: ChatIntent

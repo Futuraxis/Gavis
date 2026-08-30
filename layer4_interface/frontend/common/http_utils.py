@@ -34,6 +34,30 @@ def send_error_json(handler: BaseHTTPRequestHandler, status: HTTPStatus, message
     send_json(handler, status, {"ok": False, "error": message})
 
 
+def start_sse(handler: BaseHTTPRequestHandler, status: HTTPStatus = HTTPStatus.OK) -> None:
+    """Start a Server-Sent-Events response (chunked framing, flush per event).
+
+    stdlib 默认协议版本 HTTP/1.0 —— 连发即断，前端按流解析即可，无需
+    keep-alive 协商；禁止 buffering 头让中间层不缓存增量。
+    """
+    handler.send_response(status)
+    handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+    handler.send_header("Cache-Control", "no-cache")
+    handler.send_header("Connection", "close")
+    handler.end_headers()
+
+
+def send_sse_event(handler: BaseHTTPRequestHandler, event: str, data: dict) -> None:
+    """Write one SSE frame: ``event: <name>\\ndata: <json>\\n\\n``, then flush.
+
+    ``data`` 必须可 JSON 序列化（``ensure_ascii=False`` 保持中文可读）。
+    """
+    body = json.dumps(data, ensure_ascii=False)
+    frame = f"event: {event}\ndata: {body}\n\n".encode("utf-8")
+    handler.wfile.write(frame)
+    handler.wfile.flush()
+
+
 class BodyTooLargeError(ValueError):
     """Request body exceeds ``MAX_BODY_BYTES``."""
 

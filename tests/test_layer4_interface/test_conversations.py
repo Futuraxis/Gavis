@@ -94,7 +94,9 @@ class TestConversationStore:
 
     def test_params_size_budget_failsoft(self, tmp_path: Path) -> None:
         store = ConversationStore(tmp_path)
-        record = store.create(messages=[{"id": "p1", "role": "player", "text": "大参数", "params": {"blob": "x" * 9000}}])
+        record = store.create(
+            messages=[{"id": "p1", "role": "player", "text": "大参数", "params": {"blob": "x" * 9000}}]
+        )
         assert record["messages"][0]["text"] == "大参数"
         assert "params" not in record["messages"][0]  # 超预算丢 params 保消息
 
@@ -114,9 +116,7 @@ class TestConversationStore:
         # （须在 update 之后回填——update 会刷新 updated_at）
         record_a = store.get(a["conv_id"])
         record_a["updated_at"] = "2020-01-01T00:00:00Z"
-        (tmp_path / f"{a['conv_id']}.json").write_text(
-            json.dumps(record_a, ensure_ascii=False), encoding="utf-8"
-        )
+        (tmp_path / f"{a['conv_id']}.json").write_text(json.dumps(record_a, ensure_ascii=False), encoding="utf-8")
         metas = store.list_conversations()
         assert [m["conv_id"] for m in metas] == [b["conv_id"], a["conv_id"]]
         assert metas[0]["message_count"] == 1
@@ -221,8 +221,15 @@ class TestConversationRoutes:
             {
                 "messages": [
                     {"id": "u1", "role": "player", "text": "玩月亮棋", "ts": 1},
-                    {"id": "a1", "role": "agent", "text": "好，来一局！", "mood": "happy", "intent": "play",
-                     "params": {"game_id": "moon_chess"}, "ts": 2},
+                    {
+                        "id": "a1",
+                        "role": "agent",
+                        "text": "好，来一局！",
+                        "mood": "happy",
+                        "intent": "play",
+                        "params": {"game_id": "moon_chess"},
+                        "ts": 2,
+                    },
                 ]
             },
         )
@@ -244,7 +251,9 @@ class TestConversationRoutes:
         fetched = _get(conv_base_url + f"/api/conversations/{conv['conv_id']}")
         assert len(fetched["conversation"]["messages"]) == 3
 
-        updated = _post(conv_base_url + f"/api/conversations/{conv['conv_id']}", {"title": "月亮棋练习", "archived": True})
+        updated = _post(
+            conv_base_url + f"/api/conversations/{conv['conv_id']}", {"title": "月亮棋练习", "archived": True}
+        )
         assert updated["conversation"]["title"] == "月亮棋练习"
         assert updated["conversation"]["archived"] is True
 
@@ -282,3 +291,41 @@ class TestConversationRoutes:
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class TestReasoningArchive:
+    """思维链（reasoning）随消息归档：持久化往返 + fail-soft 清洗规则."""
+
+    def test_reasoning_persisted_in_messages(self, tmp_path: Path) -> None:
+        store = ConversationStore(tmp_path / "conversations")
+        record = store.create(
+            messages=[
+                _msg(),
+                _msg(
+                    "agent",
+                    "建议占中心。",
+                    mood="thinking",
+                    intent="chat",
+                    reasoning="先看中心再判断危险",
+                ),
+            ]
+        )
+        loaded = store.get(record["conv_id"])
+        assert loaded["messages"][1]["reasoning"] == "先看中心再判断危险"
+
+    def test_reasoning_sanitize_drops_invalid_and_truncates(self, tmp_path: Path) -> None:
+        store = ConversationStore(tmp_path / "conversations")
+        record = store.create(
+            messages=[
+                _msg(),
+                _msg("agent", "好", reasoning=123),  # 非字符串 → 丢弃
+                _msg("agent", "好", reasoning="   "),  # 纯空白 → 丢弃
+                _msg("agent", "好", reasoning="先想" * 3000),  # 超上限 → 截断
+            ]
+        )
+        loaded = store.get(record["conv_id"])
+        messages = loaded["messages"]
+        assert "reasoning" not in messages[1]
+        assert "reasoning" not in messages[2]
+        assert len(messages[3]["reasoning"]) <= 4000
+        assert messages[3]["reasoning"].startswith("先想")

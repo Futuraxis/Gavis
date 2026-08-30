@@ -14,15 +14,20 @@ game playable.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from typing import Protocol
 
-from layer2_engine.core.llm import LLMClient as _UnifiedLLMClient, sanitize_text
+from layer2_engine.core.llm import LLMClient as _UnifiedLLMClient
+from layer2_engine.core.llm import sanitize_text
 
 from .base import LanguageObservation
 
 #: 发言清洗（审计 3.6 prompt 注入）：长度上限与控制字符剔除（统一清洗）。
 MAX_SPEECH_LEN = 200
+
+#: 角色 id → 中文名（传给 LLM 的 prompt 里读“卧底/平民”而不是裸 id）。
+#: 与 Layer-3 边界一致：不依赖 Layer 4，本地维护这份极小映射（与
+#: rules/undercover.json / werewolf.json 的 role 常量对齐）。
+_ROLE_NAMES = {"civilian": "平民", "undercover": "卧底", "blank": "白板"}
 
 
 class LLMClient(Protocol):
@@ -70,7 +75,7 @@ class LLMPolicy:
         )
         context = {
             "phase": obs.phase,
-            "role": obs.role,
+            "role": _ROLE_NAMES.get(obs.role, obs.role),
             "private_info": obs.private_info,
             "public_context": obs.public_context,
             "transcript": transcript,

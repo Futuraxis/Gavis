@@ -59,6 +59,18 @@ ROLE_GUIDE = {
     "villager": ("你是普通村民。白天听发言找狼：观察谁在说谎、谁在带节奏；投票给发言最可疑的玩家。"),
 }
 
+#: 角色 id → 中文名（prompt 里给模型读“狼人”而不是裸 id ``wolf``）。
+#: 模型输出仍是机器键（intent/target），这里只是输入侧读法 —— 属于
+#: 「传给 LLM 的信息不过分技术化」的 Layer-3 出口（Layer 3 不依赖 Layer 4，
+#: 本地维护这份最小映射，与 rules/werewolf.json 的 role 常量对齐）。
+_ROLE_NAMES = {
+    "wolf": "狼人",
+    "seer": "预言家",
+    "witch": "女巫",
+    "hunter": "猎人",
+    "villager": "村民",
+}
+
 SPEECH_PHASES = ("day_speech",)
 # 意图枚举兜底（规则常量缺失时）：正常路径在 _build_prompt 里从
 # 合法 speak 动作动态提取，避免与 rules intents 漂移（审查 P3-6）。
@@ -170,10 +182,12 @@ class OllamaSolver(SolverBase):
         def _yes_no(v) -> str:
             return "已用" if bool(v) else "未用"
 
-        guide = ROLE_GUIDE.get(str(obs.get("my_role")), "你是普通玩家。")
+        role_id = str(obs.get("my_role"))
+        role_name = _ROLE_NAMES.get(role_id, role_id)
+        guide = ROLE_GUIDE.get(role_id, "你是普通玩家。")
         deaths = obs.get("deaths_arr") or obs.get("deaths") or []
         lines = [
-            f"你是《狼人杀》玩家 {self.player_id}，身份是{obs.get('my_role')}。{guide}",
+            f"你是《狼人杀》玩家 {self.player_id}，身份是{role_name}（{role_id}）。{guide}",
             "",
             f"当前：第 {obs.get('round')} 轮，阶段 {phase}",
             f"存活玩家：{alive}",

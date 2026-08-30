@@ -42,6 +42,7 @@ from layer2_engine.core.llm import LLMClient
 from layer2_engine.core.state_graph import ActionInstance
 
 from ....solver_provider import SolverHandle, SolverProvider
+from ...engine_helpers import canonical_family_text, seat_label
 from ..games import GameSpec, PlayError
 from .helpers import (
     declared_player_counts,
@@ -449,12 +450,12 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
     def _describe_action(action: ActionInstance) -> str:
         label = _ACTION_LABELS.get(action.template_id)
         if label is None:
-            return action.canonical_key
+            return canonical_family_text("social", action.canonical_key)
         target = _target_id_of(action.params)
         if target == "pass":
             return "过"
         if target:
-            return f"{label} {target}"
+            return f"{label} {seat_label(target)}"
         return label
 
     return GameSpec(

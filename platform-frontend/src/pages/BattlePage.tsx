@@ -313,7 +313,15 @@ export default function BattlePage() {
                   <span className="spinner" /> AI 思考中…
                 </span>
               ) : (
-                <span>{session.turn === session.player_pid ? '轮到你了' : 'AI 回合'}</span>
+                <span>
+                  {session.turn === session.player_pid
+                    ? (session as MahjongSnapshot).phase === 'claim'
+                      ? // claim 是响应别人打出的牌，不是你的出牌回合（四人轮转里
+                        // 三家 AI 先被问碰/杠/胡，轮到你就是响应这张牌）。
+                        `响应 ${SEAT_SHORT[(session as MahjongSnapshot).last_discarder ?? ''] ?? '对方'} 的牌`
+                      : '轮到你了'
+                    : 'AI 回合'}
+                </span>
               )}
               {'round' in session && session.round != null && <span>第 {session.round} 轮</span>}
               {session.evaluation && (

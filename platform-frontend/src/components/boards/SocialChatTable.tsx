@@ -148,7 +148,7 @@ export default function SocialChatTable({ snapshot, interactive, onMove }: Props
         </span>
         {snapshot.over ? (
           <span className="social-winner">
-            胜方：{snapshot.winner ?? '未知'}
+            胜方：{ROLE_LABELS[snapshot.winner ?? ''] ?? snapshot.winner ?? '未知'}
             {snapshot.winners.length > 0 && <>（{snapshot.winners.join('、')}）</>}
           </span>
         ) : (

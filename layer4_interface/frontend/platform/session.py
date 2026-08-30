@@ -47,6 +47,8 @@ _BUILTIN_FAMILY: dict[str, str] = {
     "uno_stacking": "uno",
     "uno_draw_until": "uno",
     "uno_strict_wild4": "uno",
+    # 谁是卧底（social 族）：前端 FAMILY_BOARDS["social"] → SocialChatTable。
+    "undercover": "social",
 }
 
 
@@ -424,7 +426,7 @@ class PlayManager:
         else:
             ctx = Skills.build(session.state, session.player_pid, session.engine)
         msg = session.agent.reply(ctx, scenario, game_id=session.game_id)
-        return {"scenario": scenario, "text": msg.text, "mood": msg.mood}
+        return {"scenario": scenario, "text": msg.text, "mood": msg.mood, "reasoning": msg.reasoning}
 
     def hint(self, game_id: str, level: str) -> dict:
         """Mechanical hint for an active session (direction/specific/demo).
@@ -466,7 +468,13 @@ class PlayManager:
         ctx = Skills.build(session.state, session.player_pid, session.engine)
         msg = session.agent.reply(ctx, scenario, game_id=session.game_id)
         session.pending_chat.append(
-            {"scenario": scenario, "text": msg.text, "mood": msg.mood, "step": len(session.log)}
+            {
+                "scenario": scenario,
+                "text": msg.text,
+                "mood": msg.mood,
+                "step": len(session.log),
+                "reasoning": msg.reasoning,
+            }
         )
 
     def _chat_after_move(self, session: GameSession) -> None:
@@ -519,7 +527,13 @@ class PlayManager:
         """Queue a message from a prebuilt context (avoid a second build)."""
         msg = session.agent.reply(ctx, scenario, game_id=session.game_id)  # type: ignore[arg-type] — ctx is SkillContext
         session.pending_chat.append(
-            {"scenario": scenario, "text": msg.text, "mood": msg.mood, "step": len(session.log)}
+            {
+                "scenario": scenario,
+                "text": msg.text,
+                "mood": msg.mood,
+                "step": len(session.log),
+                "reasoning": msg.reasoning,
+            }
         )
 
     def _pick_budget(self, spec: GameSpec, difficulty: str, pacing: str, adaptive_enabled: bool) -> int:

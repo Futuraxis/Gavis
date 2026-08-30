@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from layer2_engine.core.llm import ChatReply
 from layer4_interface.agent import (
     PERSONAS,
     SCENARIOS,
@@ -40,6 +41,9 @@ class FakeLLM:
     def complete_chat(self, system: str, user: str, max_tokens: int) -> str:
         return self.reply
 
+    def complete_chat_reply(self, system: str, user: str, max_tokens: int) -> ChatReply:
+        return ChatReply(text=self.complete_chat(system, user, max_tokens))
+
 
 class PromptCaptureLLM:
     """Fake LLM recording the exact (system, user) prompts handed over."""
@@ -51,6 +55,10 @@ class PromptCaptureLLM:
     def complete_chat(self, system: str, user: str, max_tokens: int) -> str:
         self.calls.append((system, user))
         return self.reply
+
+    def complete_chat_reply(self, system: str, user: str, max_tokens: int) -> ChatReply:
+        self.calls.append((system, user))
+        return ChatReply(text=self.reply)
 
 
 @pytest.fixture
