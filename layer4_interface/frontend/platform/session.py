@@ -17,7 +17,7 @@ from typing import Callable
 from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import ActionInstance
 
-from ...agent import PERSONAS, DialogueEngine, Skills
+from ...agent import PERSONAS, Coach, DialogueEngine, Skills, TeachContext
 from ...difficulty.adaptive import AdaptiveController, pacing_scale
 from ...online_learning.recorder import LearningHooks, TrajectoryRecorder
 from ...profile.store import ProfileStore
@@ -80,12 +80,25 @@ class GameSession:
     pending_chat: list[dict] = field(default_factory=list)  # 待投递的聊天增量
     custom: bool = field(default=False)  # 自定义游戏（platform/custom_games.py 注册表条目）
     family: str | None = field(default=None)  # 规则族（grid/poker/mahjong/social）
+    #: 教学对局开关：教练 Agent 能看到玩家自己的牌并推理（见 agent/coach.py
+    #: 的三条设计红线：教练看玩家投影、双脑分离、raw_solver 防录制污染）。
+    teaching: bool = field(default=False)
+    #: 教练通道用的**原始**（未被 RecordingHandle 包装的）求解器句柄。
+    #: 在线学习开启时 ``solver`` 会被包成录制句柄——AI 自己的落子照常
+    #: 采集；教练替玩家算的参考动作必须走本句柄，否则会以 "ai" actor
+    #: 混进训练轨迹（那是给玩家座位的建议，不是 AI 决策）。
+    raw_solver: SolverHandle | None = field(default=None, init=False)
+    #: 教学讲评载荷：玩家行动前算好的教学上下文（含参考动作），由
+    #: ``PlayManager._chat_after_move`` 消费成 ``teach_move`` 消息。
+    pending_teach: TeachContext | None = field(default=None, init=False)
     #: 本局实际使用的随机种子（PlayManager 按 base+开局序号派生——首局等于
     #: base seed 保持既有测试确定性，第二局起牌墙不同，「再来一局」不再同牌）。
     seed: int = 42
 
     def __post_init__(self) -> None:
         self.state = self.engine.create_initial_state()
+        if self.raw_solver is None:
+            self.raw_solver = self.solver
 
     @property
     def ai_pid(self) -> str:
@@ -112,7 +125,12 @@ class GameSession:
     # ── Play ─────────────────────────────────────────────────────
 
     def step(self, payload: dict) -> None:
-        """Validate and apply the human's action, then run the AI reply."""
+        """Validate and apply the human's action, then run the AI reply.
+
+        教学对局：应用动作**之前**（状态还是玩家决策时刻的快照）由教练
+        从玩家座位算一手参考动作——求解器按状态当前行动者推理，此刻它
+        读的正是玩家的手牌；``Coach.review`` 把玩家实际动作并入对照。
+        """
         if self.over:
             raise PlayError("本局已结束")
         action = self.spec.parse_human_action(self, payload)
@@ -120,9 +138,14 @@ class GameSession:
             # ``self.state`` is still the pre-move snapshot here — engine
             # applies return new states, so the reference is safe.
             self.recorder.record_human(self, action)
+        reference: TeachContext | None = None
+        if self.teaching:
+            reference = Coach.build(self.state, self.player_pid, self.engine, self.raw_solver)
         self.spec.apply_human(self, action)
         self.log.append(self._log_entry("human", action))
         self.spec.run_ai(self, self._record_ai_action)
+        if reference is not None:
+            self.pending_teach = Coach.review(reference, action, self.spec.describe_action)
 
     def _record_ai_action(self, action: ActionInstance) -> None:
         self.log.append(self._log_entry("ai", action))
@@ -147,6 +170,7 @@ class GameSession:
         """
         snap = self.spec.build_snapshot(self)
         snap["family"] = self.family
+        snap["teaching"] = self.teaching
         snap["chat"] = self.drain_chat()
         snap["evaluation"] = self._evaluate_position()
         return snap
@@ -218,6 +242,7 @@ class PlayManager:
         hint_level: str = "off",
         pacing: str = "standard",
         adaptive_enabled: bool = False,
+        teaching: bool = False,
     ) -> GameSession:
         """Create a new session; resolves start chance nodes and lets the AI open.
 
@@ -227,6 +252,10 @@ class PlayManager:
         adaptively from the player's recent win rate, then scaled by the
         pacing preset.  A ``greet`` chat increment is queued on the
         session for the start response.
+
+        教学对局（``teaching=True``）：未显式指定性格且档案无默认时，
+        人格兜底从 ``gentle`` 换成 ``teacher``；开局队列 ``teach_greet``
+        （教练开场）+ ``teach_turn``（轮到玩家时的读牌导读）。
         """
         spec = GAMES.get(game_id)
         is_custom = False
@@ -257,7 +286,8 @@ class PlayManager:
         if persona_key is None and self._profiles is not None:
             persona_key = str(self._profiles.load().get("default_persona", "") or "")
         if not persona_key:
-            persona_key = "gentle"
+            # 教学对局的兜底人格是「认真教学」（显式选择 / 档案默认不受影响）。
+            persona_key = "teacher" if teaching else "gentle"
         if persona_key not in PERSONAS:
             raise PlayError(f"未知性格: {persona_key}")
 
@@ -286,6 +316,7 @@ class PlayManager:
             agent=self._agent_factory(persona_key) if self._agent_factory is not None else None,
             custom=is_custom,
             family=family,
+            teaching=teaching,
             seed=seed,
         )
         if self._learning is not None and self._learning.enabled(spec.game_id):
@@ -294,11 +325,18 @@ class PlayManager:
             # loops) is captured with zero GameSpec changes.
             # 门控（隐私红线）：enabled=False 的新会话**不再采集**——开关
             # 同时控制捕获与 apply，而不是只停发布。
+            # 注意：``session.raw_solver`` 仍指未包装的原始句柄——教练
+            # 通道的参考动作不被采集（防训练数据污染）。
             session.solver = self._learning.wrap_handle(session, session.solver)
         spec.resolve_start(session)
         if spec.ai_opens(session):
             spec.run_ai(session, session._record_ai_action)
-        self._say(session, "greet")
+        if teaching:
+            self._say(session, "teach_greet")
+            if not session.over and session.current_player == session.player_pid:
+                self._say_teach_turn(session)
+        else:
+            self._say(session, "greet")
         with self._lock:
             self._evict_locked()
             self._sessions[session_id] = session
@@ -362,6 +400,7 @@ class PlayManager:
                 "difficulty": s.difficulty,
                 "persona": s.persona,
                 "hint_level": s.hint_level,
+                "teaching": s.teaching,
                 "step": len(s.log),
                 "started_at": s.started_at,
             }
@@ -371,20 +410,51 @@ class PlayManager:
     # ── Companion agent ──────────────────────────────────────────
 
     def say(self, game_id: str, scenario: str) -> dict | None:
-        """One agent message for an active session (``None`` when agent off)."""
+        """One agent message for an active session (``None`` when agent off).
+
+        教学对局：上下文换成 :class:`TeachContext`（玩家自己的投影），
+        教练在自由对话里也能围绕玩家的牌回答（"我听什么？"）。
+        """
         session = self.get(game_id)
         if session.agent is None:
             return None
-        ctx = Skills.build(session.state, session.player_pid, session.engine)
-        msg = session.agent.reply(ctx, scenario)
+        if session.teaching:
+            ctx = Coach.build(session.state, session.player_pid, session.engine, None)
+        else:
+            ctx = Skills.build(session.state, session.player_pid, session.engine)
+        msg = session.agent.reply(ctx, scenario, game_id=session.game_id)
         return {"scenario": scenario, "text": msg.text, "mood": msg.mood}
 
     def hint(self, game_id: str, level: str) -> dict:
-        """Mechanical hint for an active session (direction/specific/demo)."""
+        """Mechanical hint for an active session (direction/specific/demo).
+
+        教学对局：``specific`` / ``demo`` 级别的"具体建议/演示"升级为
+        教练参考动作（raw_solver 在玩家座位算的真实走法）——这本来就是
+        教学局的承诺（AI 看着玩家的牌推理），无需再走占位的确定性中位
+        选动作。
+        """
         session = self.get(game_id)
         ctx = Skills.build(session.state, session.player_pid, session.engine)
         session.hinted = True
+        if session.teaching and level != "direction":
+            return self._teach_hint(session, level, ctx)
         return Skills.suggest_hint(ctx, level, self._provider, session.engine)
+
+    def _teach_hint(self, session: GameSession, level: str, ctx: object) -> dict:
+        """Teaching-mode hint: the coach's reference action for the player."""
+        result: dict = {
+            "level": level,
+            "direction": Skills.evaluate_position(ctx, session.engine).get("summary", ""),
+            "mechanical_text": Skills.evaluate_position(ctx, session.engine).get("mechanical_text", ""),
+        }
+        reference = Coach.reference_action(session.state, session.player_pid, session.engine, session.raw_solver)
+        if reference is not None:
+            result["action"] = reference.canonical_key
+            label = "教练演示" if level == "demo" else "教练建议"
+            result["hint"] = f"{label}：{session.spec.describe_action(reference)}"
+        else:
+            result["hint"] = Skills.suggest_hint(ctx, "direction", None, session.engine)["direction"]
+        return result
 
     # ── Internals ────────────────────────────────────────────────
 
@@ -393,15 +463,25 @@ class PlayManager:
         if session.agent is None:
             return
         ctx = Skills.build(session.state, session.player_pid, session.engine)
-        msg = session.agent.reply(ctx, scenario)
+        msg = session.agent.reply(ctx, scenario, game_id=session.game_id)
         session.pending_chat.append(
             {"scenario": scenario, "text": msg.text, "mood": msg.mood, "step": len(session.log)}
         )
 
     def _chat_after_move(self, session: GameSession) -> None:
-        """Nine-scenario detection after a completed move (D 节接线)."""
+        """Nine-scenario detection after a completed move (D 节接线).
+
+        教学对局：玩家的 blunder/good_move 泛化点评升级为 ``teach_move``
+        讲评（对照教练在玩家座位算的参考动作），讲评后若又轮到玩家则
+        追加 ``teach_turn`` 读牌导读。
+        """
         if session.agent is None:
             return
+        # 教学讲评优先于胜负播报：最后一手的对照点评也值得讲（之后照常
+        # 播报 ai_win/ai_lose/game_over）。
+        if session.teaching and session.pending_teach is not None:
+            self._say_ctx(session, session.pending_teach, "teach_move")
+            session.pending_teach = None
         if session.over:
             winner = session.winner
             if winner == session.player_pid:
@@ -409,6 +489,10 @@ class PlayManager:
             elif winner == session.ai_pid:
                 self._say(session, "ai_win")
             self._say(session, "game_over")
+            return
+        if session.teaching:
+            if session.current_player == session.player_pid:
+                self._say_teach_turn(session)
             return
         last = session.log[-1] if session.log else None
         if last is None or last.get("actor") != "human":
@@ -419,9 +503,20 @@ class PlayManager:
         elif Skills.detect_good_move(ctx, session.engine) is not None:
             self._say_ctx(session, ctx, "good_move")
 
+    def _say_teach_turn(self, session: GameSession) -> None:
+        """Queue the ``teach_turn`` reading (player's own hand, no spoilers).
+
+        导读不带参考动作（不剧透答案——玩家还没走）；参考动作只在
+        ``teach_move`` 讲评时给出。教练关闭（agent=None）时跳过。
+        """
+        if session.agent is None:
+            return
+        ctx = Coach.build(session.state, session.player_pid, session.engine, None)
+        self._say_ctx(session, ctx, "teach_turn")
+
     def _say_ctx(self, session: GameSession, ctx: object, scenario: str) -> None:
         """Queue a message from a prebuilt context (avoid a second build)."""
-        msg = session.agent.reply(ctx, scenario)  # type: ignore[arg-type] — ctx is SkillContext
+        msg = session.agent.reply(ctx, scenario, game_id=session.game_id)  # type: ignore[arg-type] — ctx is SkillContext
         session.pending_chat.append(
             {"scenario": scenario, "text": msg.text, "mood": msg.mood, "step": len(session.log)}
         )
@@ -492,6 +587,7 @@ class PlayManager:
             "ai_strength": session.ai_strength,
             "family": session.family,
             "custom": session.custom,
+            "teaching": session.teaching,
             "moves": session.log,
         }
 

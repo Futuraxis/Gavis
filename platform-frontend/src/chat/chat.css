@@ -1,9 +1,12 @@
-/* Chat-first 主题 — 全新极简浅色中性风（作用域 .chat-app；平台界面保持原状）。 */
+/* Chat-first 主题 — 全新极简浅色中性风（作用域 .chat-app；平台界面保持原状）。
+   类名与 global.css（平台对局侧栏 ChatPanel）刻意错开：气泡/顶栏/输入框用
+   chat-msg-bubble / chat-topbar / chat-inputbox，避免同名类相互污染。 */
 
 .chat-app {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* 移动端动态视口，避免地址栏遮挡输入区 */
   background: var(--bg);
   color: var(--text);
   font-size: 15px;
@@ -11,7 +14,7 @@
 
 /* ── 顶栏 ─────────────────────────────────────────────────────── */
 
-.chat-header {
+.chat-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -87,10 +90,65 @@
   border-color: var(--accent);
 }
 
+/* ── 收起界面：后台对局提示条 ────────────────────────────────── */
+/* 棋盘收起后钉在消息流顶上：对局没结束、还在走，点一下就回到棋盘。 */
+
+.chat-bgmatch {
+  flex-shrink: 0;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 7px 16px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.chat-bgmatch:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.chat-bgmatch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: chat-pulse 1s ease-in-out infinite;
+}
+
+/* 对局已结束：点静止、颜色转灰，去掉「进行中」的心跳感 */
+.chat-bgmatch.done .chat-bgmatch-dot {
+  animation: none;
+  background: var(--muted);
+}
+
+.chat-bgmatch-game {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.chat-bgmatch-sep {
+  color: var(--border);
+}
+
+.chat-bgmatch-action {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* ── 消息流 ───────────────────────────────────────────────────── */
 
 .chat-scroll {
   flex: 1;
+  min-height: 0; /* 作为 flex 子项时可正常收缩（容器高度见 dock/应用布局） */
   overflow-y: auto;
   padding: 22px 22px 8px;
   display: flex;
@@ -111,37 +169,43 @@
   justify-content: flex-start;
 }
 
-.chat-bubble {
-  max-width: 640px;
-  padding: 12px 16px;
+.chat-msg-bubble {
+  max-width: min(640px, 88%);
+  padding: 10px 16px;
   border-radius: 16px;
-  line-height: 1.6;
+  line-height: 1.65;
 }
 
-.chat-msg-agent .chat-bubble {
+.chat-msg-agent .chat-msg-bubble {
   background: var(--panel);
   border: 1px solid var(--border);
   border-top-left-radius: 4px;
 }
 
-.chat-msg-player .chat-bubble {
+.chat-msg-player .chat-msg-bubble {
   background: var(--accent);
   color: #ffffff;
   border-top-right-radius: 4px;
 }
 
-.chat-bubble-text {
+.chat-msg-bubble-text {
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+/* clarify 选项 chips 内嵌在气泡里：去掉输入区那套居中与下外边距 */
+.chat-msg-bubble .chat-chips {
+  margin: 10px 0 0;
+  max-width: none;
 }
 
 /* ── 内联卡片 ─────────────────────────────────────────────────── */
 
 .chat-card {
-  margin-top: 12px;
+  margin-top: 10px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: var(--panel);
+  background: var(--bg);
   padding: 14px 16px;
   color: var(--text);
 }
@@ -276,17 +340,45 @@
   flex-shrink: 0;
 }
 
-/* ── 对局面板 ─────────────────────────────────────────────────── */
-
-.chat-board-region {
-  border-top: 1px solid var(--border);
-  padding: 14px 22px;
+.chat-review-what {
+  color: var(--text);
+  font-weight: 600;
   flex-shrink: 0;
 }
 
+/* ── 对局布局：棋盘主区（左）+ 对话侧栏（右） ─────────────────── */
+/* 不再上下挤占：棋盘占据剩余宽度，对话在侧栏常驻；窄屏回落上下（见媒体查询）。 */
+
+.chat-match {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.chat-match-board {
+  flex: 1;
+  min-width: 0;
+  min-height: 0; /* 窄屏纵排时可收缩，溢出走内部滚动 */
+  overflow: auto;
+  display: flex;
+  padding: 18px 22px;
+}
+
+.chat-match-dock {
+  flex-shrink: 0;
+  width: clamp(320px, 30vw, 420px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+
 .chat-board {
-  max-width: 640px;
-  margin: 0 auto;
+  max-width: min(880px, 100%);
+  /* margin:auto 在 flex 容器里双向居中；棋盘高出可视区时仍可滚到顶/底，不裁切 */
+  margin: auto;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -361,8 +453,9 @@
   margin: 0 auto;
 }
 
-.chat-input {
+.chat-inputbox {
   flex: 1;
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 11px 18px;
@@ -371,7 +464,7 @@
   font-size: 15px;
 }
 
-.chat-input:focus {
+.chat-inputbox:focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -405,4 +498,242 @@
 
 .nav-item.chat-back-btn {
   margin-top: auto;
+}
+
+/* ── 对话存档抽屉 ─────────────────────────────────────────────── */
+/* 顶栏「对话」召唤：右缘抽屉列出历史会话（切换/重命名/归档/删除/导出）。 */
+
+.chat-conv-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.chat-conv-drawer {
+  width: min(380px, 94vw);
+  height: 100%;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  animation: chat-conv-slide 0.18s ease-out;
+}
+
+@keyframes chat-conv-slide {
+  from { transform: translateX(24px); opacity: 0.4; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.chat-conv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.chat-conv-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.chat-conv-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-conv-new {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.chat-conv-close {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chat-conv-close:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.chat-conv-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0 16px;
+}
+
+.chat-conv-empty {
+  padding: 28px 18px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  line-height: 1.8;
+}
+
+.chat-conv-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+.chat-conv-item:hover {
+  background: var(--bg);
+}
+
+.chat-conv-item.active {
+  border-left-color: var(--accent);
+  background: var(--bg);
+}
+
+.chat-conv-item.archived .chat-conv-item-title {
+  color: var(--muted);
+}
+
+.chat-conv-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-conv-item-title {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-conv-item-meta {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 3px;
+}
+
+.chat-conv-item-actions {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.chat-conv-item:hover .chat-conv-item-actions,
+.chat-conv-item.active .chat-conv-item-actions {
+  display: inline-flex;
+}
+
+.chat-conv-item-actions button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chat-conv-item-actions button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.chat-conv-item-actions button.danger:hover {
+  color: var(--lose);
+  border-color: var(--lose);
+}
+
+.chat-conv-archived-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 10px 16px;
+  margin-top: 8px;
+  cursor: pointer;
+}
+
+.chat-conv-archived-toggle:hover {
+  color: var(--text);
+}
+
+/* 触屏没有 hover：操作按钮常显（窄屏），不依赖悬停。 */
+@media (hover: none) {
+  .chat-conv-item-actions {
+    display: inline-flex;
+  }
+}
+
+/* ── 窄屏适配 ─────────────────────────────────────────────────── */
+
+/* 窄屏回落上下排布：棋盘在上（占剩余空间、内部滚动），对话+输入在下（封顶 48vh）。 */
+@media (max-width: 900px) {
+  .chat-match {
+    flex-direction: column;
+  }
+
+  .chat-match-board {
+    padding: 12px 12px 8px;
+  }
+
+  .chat-match-dock {
+    width: auto;
+    max-height: 48vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 720px) {
+  .chat-topbar {
+    padding: 10px 14px;
+  }
+
+  .chat-scroll {
+    padding: 14px 12px 6px;
+  }
+
+  .chat-msg-bubble {
+    max-width: 92%;
+  }
+
+  .chat-match-board {
+    padding: 10px 10px 8px;
+  }
+
+  .chat-input-region {
+    padding: 10px 12px 12px;
+  }
+
+  .chat-chips,
+  .chat-input-row,
+  .chat-board {
+    max-width: none;
+  }
 }

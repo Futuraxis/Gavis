@@ -41,6 +41,18 @@ class FakeLLM:
         return self.reply
 
 
+class PromptCaptureLLM:
+    """Fake LLM recording the exact (system, user) prompts handed over."""
+
+    def __init__(self, reply: str = "好的") -> None:
+        self.reply = reply
+        self.calls: list[tuple[str, str]] = []
+
+    def complete_chat(self, system: str, user: str, max_tokens: int) -> str:
+        self.calls.append((system, user))
+        return self.reply
+
+
 @pytest.fixture
 def moon_engine():
     return engine_from_rules("moon_chess", seed=42)
@@ -95,6 +107,41 @@ class TestDialogueEngine:
         engine = DialogueEngine(PERSONAS["gentle"])
         engine.set_muted(True)
         assert engine.reply(_make_ctx(), "greet") == AgentMessage("", "neutral")
+
+
+class TestDialogueKnowledgeInjection:
+    """陪伴聊天的游戏知识注入（audit §5-4）：persona 提到玩法时依据
+    权威资料作答，不再靠模型参数记忆。"""
+
+    def test_game_knowledge_injected_into_prompt(self):
+        llm = PromptCaptureLLM()
+        engine = DialogueEngine(PERSONAS["gentle"], llm=llm)
+        engine.reply(_make_ctx(), "good_move", game_id="moon_chess")
+        assert len(llm.calls) == 1
+        system, user = llm.calls[0]
+        # user prompt 带权威资料（注册表简介 + docs 规则段，与 chat 信息工具同源）
+        assert "游戏资料" in user
+        assert "3×3" in user
+        assert "规则要点" in user
+        # system prompt 立知识红线（提到玩法只依据资料）
+        assert "资料" in system
+
+    def test_unknown_game_injects_nothing(self):
+        """custom / 未知 id → 不注入（fail-soft），旧 prompt 结构不变。"""
+        llm = PromptCaptureLLM()
+        engine = DialogueEngine(PERSONAS["gentle"], llm=llm)
+        engine.reply(_make_ctx(), "good_move", game_id="custom_thing")
+        system, user = llm.calls[0]
+        assert "游戏资料" not in user
+
+    def test_no_game_id_backward_compatible(self):
+        """旧调用面（不传 game_id）行为不变：无资料注入，正常成文。"""
+        llm = PromptCaptureLLM()
+        engine = DialogueEngine(PERSONAS["gentle"], llm=llm)
+        message = engine.reply(_make_ctx(), "greet")
+        assert message.mood in _MOODS
+        system, user = llm.calls[0]
+        assert "游戏资料" not in user
 
 
 class TestHiddenGuard:

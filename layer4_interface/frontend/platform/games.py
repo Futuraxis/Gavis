@@ -416,10 +416,47 @@ def _mahjong_apply_human(session: GameSession, action: ActionInstance) -> None:
         _, session.state = session.engine.sample_chance(session.state)
 
 
+def mahjong_auto_pass_claim(session: GameSession) -> bool:
+    """自动替人类「过」掉无选择的 claim 回合（快照只呈现真实决策点）。
+
+    麻将 claim 阶段按 胡 → 碰/杠 → 吃 三档轮询每个响应者：当轮到人类
+    且合法动作**只剩** ``claim_pass``（碰/杠/胡/吃全都不可用）时，这次
+    「过」不承载任何决策——直接替玩家执行，对局继续推进。任一碰/杠/
+    胡/吃可选时照常停下来交给玩家（claim 操作条）。
+
+    曾由此产生的体验问题：AI 每打一张牌玩家都要连点三次「过」，且
+    出牌按钮在 claim 阶段仍然可点 →「非法动作: discard …」。
+
+    Returns:
+        是否执行了一次无选择 pass（``False`` 时状态原样不动）。
+    """
+    if session.over or session.current_player != session.player_pid:
+        return False
+    if session.state["env"].get("phase") != "claim":
+        return False
+    legal = session.engine.get_legal_actions(session.state)
+    if not legal or any(action.template_id != "claim_pass" for action in legal):
+        return False
+    pass_action = next(action for action in legal if action.template_id == "claim_pass")
+    session.state = session.engine.apply_action(session.state, pass_action)
+    while session.engine.get_node_type(session.state) == "chance":
+        _, session.state = session.engine.sample_chance(session.state)
+    return True
+
+
 def _mahjong_run_ai(session: GameSession, on_ai_action: Callable[[ActionInstance], None] | None = None) -> None:
     """Drive every non-human seat (4-player: the three AI seats; 2-player
-    (explicit): the single AI) through their draw/claim/discard turns."""
-    while not session.over and session.current_player is not None and session.current_player != session.player_pid:
+    (explicit): the single AI) through their draw/claim/discard turns.
+
+    人类的无选择 claim 回合由 :func:`mahjong_auto_pass_claim` 自动跳过：
+    循环只在「轮到人类做真实决策」（出牌阶段，或碰/杠/胡可选的 claim）
+    时才交还控制权。
+    """
+    while not session.over and session.current_player is not None:
+        if session.current_player == session.player_pid:
+            if mahjong_auto_pass_claim(session):
+                continue
+            break  # 真实决策点：交还控制权
         action = session.solver.select_action(session.state)
         if action is None:  # heuristic found nothing — random fallback
             legal = session.engine.get_legal_actions(session.state)
@@ -474,6 +511,8 @@ def _mahjong_snapshot(session: GameSession) -> dict:
         "discards": {pid: _discards(pid) for pid in seats},
         "wall_remaining": int(env.get("wall_count", 0)),
         "last_discard": env.get("last_discard"),
+        #: 谁打的这张牌（claim 操作条用它提示「对家打出了 X，请响应」）。
+        "last_discarder": env.get("last_discarder"),
         #: 刚摸进的牌（do_draw 写 env.last_drawn）：轮到你且 phase=action 时
         #: 就是你这手刚摸的那张，前端用于高亮「新摸的牌」。
         "last_drawn": env.get("last_drawn"),
@@ -538,7 +577,7 @@ def _make_uno_engine(variant: str) -> Callable[..., GameEngine]:
     UNO 的编译快路径在 ``draw_result`` 等阶段即与解释器分叉（compiled=1
     vs interp=2 合法动作），并会在牌堆耗尽后返回 0 合法动作导致对局卡死
     ——正是审查报告 P2-6~10 编译/解释器静默分叉组的现实表现。引擎测试
-    （tests/test_layer2_engine/test_uno.py，37 例）全部走解释器路径，
+    （tests/test_layer2_engine/test_uno.py，39 例）全部走解释器路径，
     故平台同样固定解释器（正确性优先；见该测试文件头部说明）。
     """
 
@@ -804,8 +843,11 @@ GAMES: dict[str, GameSpec] = {
     ),
     "mahjong_blood": GameSpec(
         game_id="mahjong_blood",
-        display_name="血战到底",
-        description="血战到底：胡牌后不退出，剩余玩家继续，直到两家胡或牌墙摸空。",
+        # 规则引擎里 blood 变体的语义是血流成河（胡家不退场继续摸打、
+        # 可多点累计胡牌），与四川麻将的血战到底（胡家退场）相区分——
+        # 旧名「血战到底」与 mahjong_sichuan 撞名，大厅出现两个血战到底。
+        display_name="血流成河",
+        description="血流成河：胡牌后不退场继续摸打（不能重复胡），可多次胡牌累计番分，直到三家胡牌或牌墙摸空；108 张无字牌、缺一门、禁吃，与四川麻将同源。",
         kind="mahjong",
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),
@@ -826,7 +868,7 @@ GAMES: dict[str, GameSpec] = {
     "mahjong_sichuan": GameSpec(
         game_id="mahjong_sichuan",
         display_name="四川麻将（血战到底）",
-        description="四人四川麻将（血战到底）：108 张无字牌，缺一门才能胡（硬门槛），禁吃，胡牌后继续至两家胡或牌墙摸空；番种：平胡 1/对对胡 2/清一色 4/七对 4/龙七对 8/将对 8。",
+        description="四人四川麻将（血战到底）：108 张无字牌，缺一门才能胡（硬门槛），禁吃，胡牌后胡家退场、剩余玩家继续，直到三家胡牌或牌墙摸空；番种：平胡 1/对对胡 2/清一色 4/七对 4/龙七对 8/将对 8。",
         kind="mahjong",
         board_size=None,
         seat_options=("p0", "p1", "p2", "p3"),

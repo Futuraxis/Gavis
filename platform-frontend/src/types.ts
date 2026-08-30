@@ -14,6 +14,7 @@ export interface GameInfo {
   family: string // 族: grid / poker / mahjong / social（渲染以 family 为准）
   custom: boolean // 是否来自自定义游戏注册表
   created_at?: string // 自定义游戏创建时间（自定义条目携带）
+  aliases?: string[] // 短名/别名（内置游戏携带；断连兜底 classifyLocal 的短名匹配用）
 }
 
 // ── 自定义游戏 (A2 后端契约 / A3 前端) ──────────────────────────
@@ -127,6 +128,7 @@ export interface MahjongSnapshot {
   discards: Record<string, string[]>
   wall_remaining: number
   last_discard: string | null
+  last_discarder?: string | null // 谁打的（claim 提示用；旧后端快照可能缺省）
   last_drawn: string | null
   last_action: string | null
   done: string[]
@@ -166,7 +168,25 @@ export interface SocialSnapshot {
   ai_mode: 'ollama' | 'random'
 }
 
-export type Snapshot = BoardSnapshot | PokerSnapshot | MahjongSnapshot | SocialSnapshot | UnoSnapshot
+export type Snapshot = (BoardSnapshot | PokerSnapshot | MahjongSnapshot | SocialSnapshot | UnoSnapshot) & SnapshotExtras
+
+/**
+ * 会话级注入键（每条快照统一带上，不属于某族快照本体契约）：
+ *   - ``chat`` — 后端 pending_chat 增量（陪伴 Agent / 教练待投递消息）。
+ *   - ``teaching`` — 教学对局标记（教练能看到玩家自己的牌并推理）。
+ */
+export interface SnapshotExtras {
+  chat?: SnapshotChatEntry[]
+  teaching?: boolean
+}
+
+/** 后端 session.snapshot() 的 chat 增量条目（agent 消息，按 step 排序）。 */
+export interface SnapshotChatEntry {
+  scenario: string
+  text: string
+  mood: Mood
+  step: number
+}
 
 // ── UNO 族 ────────────────────────────────────────────────────────
 
@@ -222,6 +242,7 @@ export interface MatchMeta {
   persona?: PersonaKey | null
   hinted?: boolean
   ai_strength?: string | null
+  teaching?: boolean | null
 }
 
 export interface MoveEntry {
@@ -377,6 +398,24 @@ export interface ChatMessage {
   pending?: boolean
 }
 
+// ── 对话管理与存档 (conversations, 与后端 conversations.py 契约对齐) ──
+
+/** 会话列表条目（/api/conversations 与 append/update 响应携带）。 */
+export interface ConversationMeta {
+  conv_id: string
+  title: string
+  archived: boolean
+  created_at: string
+  updated_at: string
+  message_count: number
+  preview: string
+}
+
+/** 完整会话记录（/api/conversations/<id> 携带，含消息流）。 */
+export interface Conversation extends ConversationMeta {
+  messages: ChatMessage[]
+}
+
 export interface ChatState {
   messages: ChatMessage[]
   muted: boolean
@@ -392,6 +431,7 @@ export interface ActiveSession {
   difficulty: string
   persona: PersonaKey | null
   hint_level: HintLevel
+  teaching?: boolean
   step: number
   started_at: string
 }
@@ -420,6 +460,8 @@ export interface KeyNode {
   step: number
   kind: KeyNodeKind
   why: string
+  /** 该手的动作内容（后端 moves[].action，如 cell_1_2 / raise 40） */
+  what?: string
 }
 
 export interface ReviewReport {

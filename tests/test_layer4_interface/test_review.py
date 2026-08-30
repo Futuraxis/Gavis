@@ -140,11 +140,17 @@ class TestAnalyzeTexasNoLeak:
         for secret in ("sA", "sK", "ai_hole", "_bb_hole"):
             assert secret not in text
 
-    def test_blunder_detected_when_losing(self) -> None:
+    def test_blunder_not_fabricated_without_midgame_signal(self) -> None:
+        """非 grid 族没有中盘评分信号：不再把玩家的终局手机械标成昏招。
+
+        旧版给中盘快照伪造 0.0 分，唯一的「评分落差」永远出现在终局
+        结算，于是无论最后一手是 fold 还是 call，报告都把「玩家最后
+        一手」指为昏招——空有形式、毫无对局内容。现在无信号 → 无昏招
+        节点；对具体失误的讲评交给 get_match_review 的 LLM 叙事（时间
+        线里有完整动作与牌面）。
+        """
         report = analyze(_texas_match())
-        blunders = [node for node in report.key_nodes if node.kind == "blunder"]
-        assert blunders
-        assert blunders[0].step == 2  # the losing call
+        assert not any(node.kind == "blunder" for node in report.key_nodes)
 
 
 class TestFallbackPath:
@@ -176,3 +182,12 @@ class TestKeyNode:
         assert node.step == 3
         assert node.kind == "blunder"
         assert node.why == "x"
+        assert node.what == ""  # 默认空（旧记录 / 无动作文本时不炸）
+
+    def test_nodes_carry_recorded_action(self) -> None:
+        """关键手要带动作内容（what）——复盘卡与 LLM 讲解都能说出「哪一手」。"""
+        report = analyze(_moon_match())
+        assert report.key_nodes
+        assert all(node.what for node in report.key_nodes)  # 每个节点都有 moves[].action
+        winning = next(node for node in report.key_nodes if node.kind == "winning_move")
+        assert winning.what == "cell_5"

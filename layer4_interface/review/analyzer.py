@@ -14,6 +14,15 @@ the report text.  Terminal snapshots score from the recorded ``winner`` /
 developed in parallel and its module may not exist yet); it is only
 invoked when a snapshot embeds a live engine ``state`` and ``engine``,
 otherwise the local proxy takes over.
+
+Honesty contract (复盘反「形同虚设」修复): a snapshot without a mid-game
+scoring signal (poker / mahjong / uno … have no ``board``) scores
+``None`` — *unknown*, not a fabricated ``0.0``.  Turning-point / blunder
+nodes require two consecutive **known** scores; when no such pair exists
+the analyzer emits no node instead of mechanically flagging the player's
+final move.  Every node also carries ``what`` — the recorded action text
+(``moves[].action``, i.e. ``GameSpec.describe_action`` output) — so a
+review can say *which* move it means, not just its index.
 """
 
 from __future__ import annotations
@@ -35,10 +44,16 @@ _GAME_NAMES: dict[str, str] = {
     "texas_holdem": "德州扑克",
     "mahjong_guangdong": "广东麻将",
     "mahjong_hongzhong": "红中麻将",
-    "mahjong_blood": "血战到底",
+    "mahjong_blood": "血流成河",
     "mahjong_sichuan": "四川麻将（血战到底）",
     "mahjong_changsha": "长沙麻将（258将）",
     "mahjong_taiwan": "台湾麻将（16张）",
+    "uno": "UNO（经典）",
+    "uno_seven_zero": "UNO 7-0（换手/移交）",
+    "uno_jump_in": "UNO 抢牌",
+    "uno_stacking": "UNO +2 叠加",
+    "uno_draw_until": "UNO 摸到能打",
+    "uno_strict_wild4": "UNO 严格+4",
 }
 
 
@@ -54,11 +69,16 @@ class KeyNode:
         ``turning_point`` / ``winning_move`` / ``blunder``.
     why : str
         Mechanical reason (never references hidden information).
+    what : str
+        The recorded action text of that step (``moves[].action``，即
+        ``GameSpec.describe_action`` 的产出)——复盘要能说出「哪一手」，
+        而不是只给一个序号。
     """
 
     step: int
     kind: str
     why: str
+    what: str = ""
 
 
 @dataclass
@@ -108,7 +128,7 @@ def analyze(match: dict) -> ReviewReport:
     c2_evaluate = _try_import_c2_evaluate()
     scores = [_score_step(move, player_pid, ai_pid, c2_evaluate) for move in moves]
 
-    turning_point = _find_turning_point(scores)
+    turning_point = _find_turning_point(moves, scores)
     winning_move = _find_winning_move(moves, winner, player_pid, ai_pid)
     blunder = _find_blunder(moves, scores, winner, player_pid, ai_pid)
 
@@ -139,8 +159,13 @@ def _try_import_c2_evaluate() -> Callable[..., Any] | None:
     return evaluate
 
 
-def _score_step(move: dict, player_pid: str, ai_pid: str | None, c2: Callable[..., Any] | None) -> float:
-    """Score one move's snapshot from the player's perspective."""
+def _score_step(
+    move: dict,
+    player_pid: str,
+    ai_pid: str | None,
+    c2: Callable[..., Any] | None,
+) -> float | None:
+    """Score one move's snapshot from the player's perspective (``None`` = unknown)."""
     snapshot = move.get("snapshot") if isinstance(move, dict) else None
     if not isinstance(snapshot, dict):
         snapshot = {}
@@ -178,12 +203,15 @@ def _try_c2_score(snapshot: dict, viewer: str, c2: Callable[..., Any]) -> float 
     return None
 
 
-def _local_score(snapshot: dict, player_pid: str, ai_pid: str | None) -> float:
+def _local_score(snapshot: dict, player_pid: str, ai_pid: str | None) -> float | None:
     """Score a snapshot via the generic terminal / board proxy.
 
     Terminal snapshots use the recorded ``payoff`` (player perspective)
     when present, else the ``winner`` vs ``player_pid`` sign (±1 / 0).
-    Non-terminal snapshots fall back to the board neighborhood heuristic.
+    Non-terminal snapshots use the board neighborhood heuristic; families
+    without a ``board`` (poker / mahjong / uno …) have **no** mid-game
+    signal and return ``None`` — unknown beats a fabricated 0.0 (which
+    used to make every terminal settlement look like the one big swing).
     """
     winner = snapshot.get("winner")
     over = snapshot.get("over")
@@ -199,7 +227,7 @@ def _local_score(snapshot: dict, player_pid: str, ai_pid: str | None) -> float:
     board = snapshot.get("board")
     if isinstance(board, list) and board:
         return _board_score(board, player_pid, ai_pid)
-    return 0.0
+    return None
 
 
 def _board_score(board: list, player_pid: str, ai_pid: str | None) -> float:
@@ -249,23 +277,40 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
-def _find_turning_point(scores: list[float]) -> KeyNode | None:
-    """Return the step with the largest absolute score jump."""
+def _action_at(moves: list[dict], step: int) -> str:
+    """The recorded action text of one step (``''`` when absent)."""
+    if 0 <= step < len(moves) and isinstance(moves[step], dict):
+        return str(moves[step].get("action") or "")[:80]
+    return ""
+
+
+def _find_turning_point(moves: list[dict], scores: list[float | None]) -> KeyNode | None:
+    """Return the step with the largest absolute score jump.
+
+    A jump needs two consecutive *known* scores.  Families without a
+    mid-game signal (all ``None``) produce **no** turning point rather
+    than a fabricated one.
+    """
     n = len(scores)
     if n == 0:
         return None
     if n == 1:
-        return KeyNode(step=0, kind="turning_point", why="唯一一手")
-    best_step = 1
-    best_delta = abs(scores[1] - scores[0])
-    for i in range(2, n):
-        delta = abs(scores[i] - scores[i - 1])
-        if delta > best_delta:
-            best_delta = delta
+        return KeyNode(step=0, kind="turning_point", why="唯一一手", what=_action_at(moves, 0))
+    best_step: int | None = None
+    best_delta = 0.0
+    for i in range(1, n):
+        prev, cur = scores[i - 1], scores[i]
+        if prev is None or cur is None:
+            continue
+        delta = abs(cur - prev)
+        if best_step is None or delta > best_delta:
             best_step = i
+            best_delta = delta
+    if best_step is None:
+        return None
     if best_delta <= 0.0:
-        return KeyNode(step=0, kind="turning_point", why="评估值无跳变，取首步")
-    return KeyNode(step=best_step, kind="turning_point", why="评估值跳变最大的一手")
+        return KeyNode(step=0, kind="turning_point", why="评估值无跳变，取首手", what=_action_at(moves, 0))
+    return KeyNode(step=best_step, kind="turning_point", why="评估值跳变最大的一手", what=_action_at(moves, best_step))
 
 
 def _actor_pid(actor: str, player_pid: str, ai_pid: str | None) -> str | None:
@@ -294,12 +339,12 @@ def _find_winning_move(
             step = i
     if step is None:
         return None
-    return KeyNode(step=step, kind="winning_move", why="胜方奠定胜局的最后一手")
+    return KeyNode(step=step, kind="winning_move", why="胜方奠定胜局的最后一手", what=_action_at(moves, step))
 
 
 def _find_blunder(
     moves: list[dict],
-    scores: list[float],
+    scores: list[float | None],
     winner: str | None,
     player_pid: str,
     ai_pid: str | None,
@@ -307,7 +352,10 @@ def _find_blunder(
     """Return the player's own step with the largest evaluation drop.
 
     Only reported when the player ultimately lost and the single-step drop
-    exceeds ``_BLUNDER_DROP``.
+    exceeds ``_BLUNDER_DROP``.  The drop needs two consecutive *known*
+    scores — without a mid-game signal there is no blunder node (the old
+    version fabricated 0.0 mid-hand scores, which mechanically pinned the
+    blunder on whatever the player did last).
     """
     if winner is None or winner == player_pid:
         return None
@@ -318,13 +366,18 @@ def _find_blunder(
             continue
         if _actor_pid(str(moves[i].get("actor", "")), player_pid, ai_pid) != player_pid:
             continue
-        drop = scores[i] - scores[i - 1]
+        prev, cur = scores[i - 1], scores[i]
+        if prev is None or cur is None:
+            continue
+        drop = cur - prev
         if drop < -_BLUNDER_DROP and drop < best_drop:
             best_drop = drop
             best_step = i
     if best_step is None:
         return None
-    return KeyNode(step=best_step, kind="blunder", why="己方评估值显著下降且最终落败的一手")
+    return KeyNode(
+        step=best_step, kind="blunder", why="己方评估值显著下降且最终落败的一手", what=_action_at(moves, best_step)
+    )
 
 
 def _improvement_text(blunder: KeyNode | None, turning_point: KeyNode | None) -> str:

@@ -7,19 +7,38 @@
 //
 // 快速落子红线：棋盘/牌面点击直接走 /match/move，**不经 LLM**——LLM 只处理
 // 文本表达的动作（碰/跟注/打五条等），点击永远是即时快路径。
+//
+// 对话管理与存档：消息流按「可存档消息」（除开场白外全部）增量同步到后端
+// ConversationStore（data/conversations/，懒建档、每回合一批）；刷新/重开时
+// 先取后端存档恢复，后端不可用再回落 localStorage 镜像——聊天记录不再只
+// 活在组件内存里。
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiGet, apiPost, chatTurn, matchHint } from '../api/client'
+import {
+  apiGet,
+  apiPost,
+  appendConversationMessages,
+  chatTurn,
+  createConversation,
+  deleteConversation,
+  getConversation,
+  listConversations,
+  matchHint,
+  updateConversation,
+} from '../api/client'
 import type {
   ChatMessage,
   ChatTurnResult,
+  ConversationMeta,
   GameInfo,
   MatchMeta,
   ReviewReport,
   Snapshot,
 } from '../types'
 import type { BattleConfig } from '../components/BattleSetup'
+import { snapshotChatToMessages } from './snapshotChat'
 import { classifyLocal } from './intents'
+import { readConversationMirror, writeConversationMirror } from './conversationMirror'
 import { loadChatStore, openPlatform, saveChatStore } from './sessionStore'
 
 export interface StatsData {
@@ -59,24 +78,65 @@ export interface ChatRuntime {
   startSession: (gameId: string, config: BattleConfig) => Promise<void>
   notifyCreated: (game: GameInfo) => void
   clearSession: () => void
+  /** 对话存档：当前会话 id（null = 新对话，首条消息懒建档）。 */
+  conversationId: string | null
+  /** 对话存档列表（供面板展示；后端不可用时为空）。 */
+  conversations: ConversationMeta[]
+  startNewConversation: () => void
+  switchConversation: (convId: string) => Promise<void>
+  renameConversation: (convId: string, title: string) => Promise<boolean>
+  setConversationArchived: (convId: string, archived: boolean) => Promise<boolean>
+  removeConversation: (convId: string) => Promise<boolean>
 }
 
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
 }
 
+/** 开场白 — 作为第一条消息常驻对话流，不随首次输入消失。 */
+const WELCOME_TEXT =
+  '你好，我是 Gavis。对局、战绩、创建游戏、评测——一句话就行。\n\n' +
+  '试试：\n' +
+  '· “玩月亮棋” · “来一局德州扑克” · “继续上一局”\n' +
+  '· “看战绩” · “创建游戏” · “打开平台界面”'
+
+function welcomeMessage(): ChatMessage {
+  return { id: 'welcome', role: 'agent', text: WELCOME_TEXT, mood: 'happy', ts: Date.now() }
+}
+
+/** 可入档消息：除常驻开场白外的全部（开场白每次新会话都会重建，入档无意义）。 */
+function persistable(m: ChatMessage): boolean {
+  return m.id !== 'welcome'
+}
+
+/** 增量同步节流（ms）：一次回合的 player+agent+教练消息合并成一批入档。 */
+const SYNC_DEBOUNCE_MS = 400
+
 export function useChatRuntime(): ChatRuntime {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>(() => [welcomeMessage()])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [games, setGames] = useState<GameInfo[]>([])
   const [activeSession, setActiveSession] = useState<Snapshot | null>(null)
   const [, setActiveGameId] = useState<string | null>(() => loadChatStore().activeGameId)
+  const [conversationId, setConversationId] = useState<string | null>(() => loadChatStore().conversationId)
+  const [conversations, setConversations] = useState<ConversationMeta[]>([])
   const busyRef = useRef(false)
   const gamesRef = useRef<GameInfo[]>([])
   // 镜像 messages 的 ref（useEffect 同步），send 里取「已渲染完的消息」当对话历史；
   // 刚 push 的当前句不在其中，它本来就是 /api/chat 的 text 参数，不会重复。
   const messagesRef = useRef<ChatMessage[]>([])
+  // 对话存档增量同步状态：
+  //   token — 会话切换纪元（在途请求完成后据此丢弃过期回写）
+  //   convId / synced — 当前会话 id 与已入档消息数（按 persistable 过滤后的计数）
+  //   inflight / dirty — 单飞闸门：同一时刻至多一个同步请求，期间的新消息置脏重排
+  const syncRef = useRef({
+    token: 0,
+    convId: loadChatStore().conversationId,
+    synced: 0,
+    inflight: false,
+    dirty: false,
+  })
 
   useEffect(() => {
     gamesRef.current = games
@@ -86,7 +146,7 @@ export function useChatRuntime(): ChatRuntime {
     messagesRef.current = messages
   }, [messages])
 
-  // 初始数据：游戏目录 + 恢复上次对局。
+  // 初始数据：游戏目录 + 恢复上次对局 + 恢复对话存档。
   useEffect(() => {
     apiGet<{ games: GameInfo[] }>('/games')
       .then((d) => {
@@ -99,11 +159,103 @@ export function useChatRuntime(): ChatRuntime {
       apiPost<{ session: Snapshot }>('/match/state', { game_id: stored })
         .then((d) => {
           setActiveSession(d.session)
+          _drainSnapshot(d.session)
           if (d.session.over) setActiveGameId(null)
         })
         .catch(() => setActiveGameId(null))
     }
+    // 对话存档：后端为唯一事实来源；失败（旧服务端/断连）回落 localStorage 镜像。
+    void refreshConversations()
+    const storedConvId = loadChatStore().conversationId
+    if (storedConvId) {
+      getConversation(storedConvId)
+        .then((conv) => {
+          adoptConversation(conv.conv_id, conv.messages)
+        })
+        .catch(() => {
+          const mirrored = readConversationMirror(storedConvId)
+          if (mirrored) adoptConversation(storedConvId, mirrored)
+        })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // ── 对话存档：恢复 / 增量同步 / 镜像 ─────────────────────────
+
+  /** 采用一段消息流作为当前会话（恢复/切换/新开共用）：重置同步纪元与计数。 */
+  const adoptConversation = useCallback((convId: string | null, msgs: ChatMessage[]) => {
+    const st = syncRef.current
+    st.token += 1 // 使在途同步请求的回写失效（其结果属于旧会话）
+    st.convId = convId
+    st.synced = msgs.filter(persistable).length
+    st.inflight = false
+    st.dirty = false
+    setConversationId(convId)
+    saveChatStore({ conversationId: convId })
+    setMessages(msgs.length > 0 ? msgs : [welcomeMessage()])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const refreshConversations = useCallback(async (): Promise<void> => {
+    try {
+      const d = await listConversations()
+      setConversations(d.conversations ?? [])
+    } catch {
+      // 旧服务端/断连：面板列表拿不到就不展示，聊天与镜像兜底不受影响。
+    }
+  }, [])
+
+  /** 把「未入档尾部」同步到后端（懒建档 → 增量 append），失败静默保持本地态。 */
+  const flushPending = useCallback(async (): Promise<void> => {
+    const st = syncRef.current
+    if (st.inflight) {
+      st.dirty = true
+      return
+    }
+    const persistableMsgs = messagesRef.current.filter(persistable)
+    if (st.synced >= persistableMsgs.length) return
+    const tail = persistableMsgs.slice(st.synced)
+    const token = st.token
+    st.inflight = true
+    try {
+      if (st.convId) {
+        const meta = await appendConversationMessages(st.convId, tail)
+        if (st.token !== token) return // 会话已切换：本批已落在旧会话名下，计数不动
+        st.synced += tail.length
+        setConversations((prev) => [meta, ...prev.filter((c) => c.conv_id !== meta.conv_id)])
+      } else {
+        const conv = await createConversation({ messages: tail })
+        if (st.token !== token) return
+        st.convId = conv.conv_id
+        st.synced += tail.length
+        setConversationId(conv.conv_id)
+        saveChatStore({ conversationId: conv.conv_id })
+        const { messages: _strip, ...meta } = conv
+        setConversations((prev) => [meta, ...prev.filter((c) => c.conv_id !== meta.conv_id)])
+      }
+    } catch {
+      // 后端不可用：synced 未推进，下一次消息变化自动重试；镜像仍每回合在写。
+    } finally {
+      st.inflight = false
+      if (st.dirty) {
+        st.dirty = false
+        void flushPending()
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 消息变化 →（防抖）批量入档；同帧多条（player+agent+教练讲评）合成一批。
+  useEffect(() => {
+    const timer = setTimeout(() => void flushPending(), SYNC_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages])
+
+  // 消息变化 → localStorage 镜像（即时，不防抖：断电/关页的最坏情况也有底）。
+  useEffect(() => {
+    writeConversationMirror(syncRef.current.convId, messages)
+  }, [messages])
 
   const pushPlayer = useCallback((text: string) => {
     setMessages((prev) => [...prev, { id: uid(), role: 'player', text, ts: Date.now() }])
@@ -121,9 +273,21 @@ export function useChatRuntime(): ChatRuntime {
     setBusy(v)
   }, [])
 
+  /** 把后端快照里待投递的陪伴/教练消息（chat 增量）落进对话流。 */
+  const _drainSnapshot = useCallback(
+    (snap: Snapshot) => {
+      const msgs = snapshotChatToMessages(snap)
+      if (msgs.length > 0) {
+        setMessages((prev) => [...prev, ...msgs])
+      }
+    },
+    [],
+  )
+
   const refreshSession = useCallback(async (gameId: string): Promise<void> => {
     const d = await apiPost<{ session: Snapshot }>('/match/state', { game_id: gameId })
     setActiveSession(d.session)
+    _drainSnapshot(d.session)
     if (d.session.over) {
       setActiveGameId(null)
       saveChatStore({ activeGameId: null })
@@ -131,6 +295,7 @@ export function useChatRuntime(): ChatRuntime {
       setActiveGameId(gameId)
       saveChatStore({ activeGameId: gameId })
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const startSession = useCallback(
@@ -147,12 +312,15 @@ export function useChatRuntime(): ChatRuntime {
           hint_level: config.hintLevel,
           pacing: config.pacing,
           adaptive: config.adaptive,
+          teaching: config.teaching,
         })
         setActiveSession(data.session)
+        _drainSnapshot(data.session)
         setActiveGameId(gameId)
         saveChatStore({ activeGameId: gameId })
         const name = gamesRef.current.find((g) => g.game_id === gameId)?.display_name ?? gameId
-        pushAgent(`对局已开始：${name} 🎮 轮到你了就下，也可以随时问我“这步怎么走”。`, 'happy')
+        const teach = data.session.teaching ? '教学局：教练看得到你的牌，边打边讲。' : ''
+        pushAgent(`对局已开始：${name} 🎮 ${teach}轮到你了就下，也可以随时问我“这步怎么走”。`, 'happy')
       } catch (err) {
         setError((err as Error).message)
         pushAgent(`开局失败：${(err as Error).message}`, 'sorry')
@@ -160,6 +328,7 @@ export function useChatRuntime(): ChatRuntime {
         setBusyState(false)
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [pushAgent, setBusyState],
   )
 
@@ -174,6 +343,7 @@ export function useChatRuntime(): ChatRuntime {
           action,
         })
         setActiveSession(data.session)
+        _drainSnapshot(data.session) // 教练讲评（teach_move）与导读（teach_turn）
         if (!data.session.over) setActiveGameId(data.session.game_id)
       } catch (err) {
         setError((err as Error).message)
@@ -182,6 +352,7 @@ export function useChatRuntime(): ChatRuntime {
         setBusyState(false)
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeSession, pushAgent, setBusyState],
   )
 
@@ -227,6 +398,7 @@ export function useChatRuntime(): ChatRuntime {
                 action: params.action,
               })
               setActiveSession(data.session)
+              _drainSnapshot(data.session)
               if (!data.session.over) setActiveGameId(data.session.game_id)
             } catch (err) {
               pushAgent(`这一步没走成：${(err as Error).message}`, 'sorry')
@@ -234,12 +406,20 @@ export function useChatRuntime(): ChatRuntime {
           }
           break
         case 'hint': {
+          // 后端已算好机械提示（ask_hint 信息工具，params.hint 携带）时直接展示，
+          // 不再二次请求 /match/hint；仅正则兜底路径（无 params.hint）才回源取数。
+          const backendHint = params.hint as { hint?: string } | undefined
+          if (backendHint) {
+            pushAgent(text || backendHint.hint || '这一步的思路是…', mood, 'hint', {})
+            break
+          }
           if (!activeSession) {
             pushAgent('现在没有对局，先来一局吧。', 'neutral')
             break
           }
           try {
-            const hint = await matchHint(activeSession.game_id, 'direction')
+            const level = String(params.level ?? 'direction') as Parameters<typeof matchHint>[1]
+            const hint = await matchHint(activeSession.game_id, level)
             pushAgent(hint.text, hint.mood, 'hint', {})
           } catch {
             pushAgent('提示暂时不可用。', 'neutral')
@@ -260,6 +440,7 @@ export function useChatRuntime(): ChatRuntime {
             hintLevel: 'off',
             pacing: 'standard',
             adaptive: true,
+            teaching: activeSession?.teaching ?? false,
           })
           break
         }
@@ -273,6 +454,14 @@ export function useChatRuntime(): ChatRuntime {
           break
         }
         case 'review': {
+          // 后端已带 report（get_match_review 信息工具，含 LLM 讲解文本）时直接用；
+          // 正则兜底路径才自己取最近一局 + /review/<id>。
+          const backendReport = params.report as ReviewReport | undefined
+          const backendMatchId = params.match_id ? String(params.match_id) : ''
+          if (backendReport && backendMatchId) {
+            pushAgent(text, mood, 'review', { report: backendReport, match_id: backendMatchId })
+            break
+          }
           try {
             const matches = (await fetchStats()).matches
             const latest = matches[0]
@@ -319,7 +508,13 @@ export function useChatRuntime(): ChatRuntime {
           pushAgent(text, mood)
           break
         case 'chat':
-          pushAgent(text, mood, 'chat', {})
+          // 知识回答（“X 是什么”）：后端/本地兜底都在 params 里带
+          // game_id + chips（如“玩月亮棋”）—— 透传给消息渲染快捷动作
+          // （复用 clarify 的 Chips 组件），不再丢弃。
+          pushAgent(text, mood, 'chat', {
+            game_id: params.game_id,
+            chips: Array.isArray(params.chips) ? params.chips : [],
+          })
           break
         case 'clarify':
           pushAgent(text, mood, 'clarify', { chips: params.chips ?? [] })
@@ -359,8 +554,14 @@ export function useChatRuntime(): ChatRuntime {
         await dispatch(result)
       } catch {
         // 后端 /api/chat 不可用（旧服务端/断连）→ 本地正则兜底。
+        // description / aliases 供 WHAT_IS 知识回答与短名匹配（与后端对齐）。
         const local = classifyLocal(trimmed, {
-          games: gamesRef.current.map((g) => ({ game_id: g.game_id, display_name: g.display_name })),
+          games: gamesRef.current.map((g) => ({
+            game_id: g.game_id,
+            display_name: g.display_name,
+            description: g.description,
+            aliases: g.aliases,
+          })),
           activeGameId: activeSession?.game_id ?? null,
           activeDisplay: activeSession ? '' : null,
         })
@@ -378,9 +579,97 @@ export function useChatRuntime(): ChatRuntime {
     saveChatStore({ activeGameId: null })
   }, [])
 
+  // ── 对话存档管理操作（面板调用） ─────────────────────────────
+
+  const startNewConversation = useCallback((): void => {
+    // 新开对话不影响进行中的对局（activeGameId 保留——对局与对话独立）。
+    adoptConversation(null, [welcomeMessage()])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const switchConversation = useCallback(
+    async (convId: string): Promise<void> => {
+      if (convId === syncRef.current.convId) return
+      try {
+        const conv = await getConversation(convId)
+        adoptConversation(conv.conv_id, conv.messages)
+      } catch (err) {
+        setError(`读取对话失败：${(err as Error).message}`)
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [],
+  )
+
+  const renameConversation = useCallback(
+    async (convId: string, title: string): Promise<boolean> => {
+      try {
+        const meta = await updateConversation(convId, { title })
+        setConversations((prev) => prev.map((c) => (c.conv_id === convId ? meta : c)))
+        return true
+      } catch (err) {
+        setError(`重命名失败：${(err as Error).message}`)
+        return false
+      }
+    },
+    [],
+  )
+
+  const setConversationArchived = useCallback(
+    async (convId: string, archived: boolean): Promise<boolean> => {
+      try {
+        const meta = await updateConversation(convId, { archived })
+        setConversations((prev) => prev.map((c) => (c.conv_id === convId ? meta : c)))
+        return true
+      } catch (err) {
+        setError(archived ? `归档失败：${(err as Error).message}` : `取消归档失败：${(err as Error).message}`)
+        return false
+      }
+    },
+    [],
+  )
+
+  const removeConversation = useCallback(
+    async (convId: string): Promise<boolean> => {
+      try {
+        await deleteConversation(convId)
+        setConversations((prev) => prev.filter((c) => c.conv_id !== convId))
+        if (syncRef.current.convId === convId) {
+          // 删的是当前会话 → 回到全新对话（开场白重置，不再引用已删档案）。
+          adoptConversation(null, [welcomeMessage()])
+        }
+        return true
+      } catch (err) {
+        setError(`删除失败：${(err as Error).message}`)
+        return false
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [],
+  )
+
   const activeGameInfo = activeSession
     ? (games.find((g) => g.game_id === activeSession.game_id) ?? null)
     : null
 
-  return { messages, busy, error, games, activeSession, activeGameInfo, send, moveAction, startSession, notifyCreated, clearSession }
+  return {
+    messages,
+    busy,
+    error,
+    games,
+    activeSession,
+    activeGameInfo,
+    send,
+    moveAction,
+    startSession,
+    notifyCreated,
+    clearSession,
+    conversationId,
+    conversations,
+    startNewConversation,
+    switchConversation,
+    renameConversation,
+    setConversationArchived,
+    removeConversation,
+  }
 }

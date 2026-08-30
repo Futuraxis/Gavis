@@ -200,6 +200,7 @@ class CustomGameRegistry:
         game_name: str | None = None,
         source_lang: str = "zh",
         use_llm: bool = False,
+        strict_llm: bool | None = None,
         llm_client: Any | None = None,
         llm_model: str | None = None,
         llm_model_path: str | None = None,
@@ -216,6 +217,9 @@ class CustomGameRegistry:
             game_name: 可选游戏名（用于展示与 id 生成）。
             source_lang: 规则文本语言。
             use_llm: 是否走 LLM 翻译路径。
+            strict_llm: LLM 失败是否直接报错（不外兜底）。None 时随
+                ``use_llm`` 走：显式要求 LLM 翻译 → 严格，API 错误/传输
+                失败如实上报，防止静默产出与描述不符的模板游戏。
             llm_client / llm_model_path: 透传给翻译器的 LLM 参数。
 
         Returns:
@@ -224,6 +228,8 @@ class CustomGameRegistry:
         Raises:
             CustomGameError: 校验失败 / 族不支持 / 参数缺失 / 变体翻译不可用。
         """
+        if strict_llm is None:
+            strict_llm = use_llm
         if mode == "from_scratch":
             if not rule_text or not str(rule_text).strip():
                 raise CustomGameError("缺少规则文本 (rule_text)")
@@ -233,6 +239,7 @@ class CustomGameRegistry:
                 game_name=game_name,
                 run_engine_validation=True,
                 use_llm=use_llm,
+                strict_llm=bool(strict_llm),
                 llm_client=llm_client,
                 llm_model=llm_model,
                 llm_model_path=llm_model_path,
@@ -250,6 +257,7 @@ class CustomGameRegistry:
                 game_name,
                 source_lang,
                 use_llm,
+                bool(strict_llm),
                 llm_client,
                 llm_model,
                 llm_model_path,
@@ -337,6 +345,7 @@ class CustomGameRegistry:
         game_name: str | None,
         source_lang: str,
         use_llm: bool,
+        strict_llm: bool,
         llm_client: Any | None,
         llm_model: str | None,
         llm_model_path: str | None,
@@ -352,6 +361,7 @@ class CustomGameRegistry:
             source_lang=source_lang,
             game_name=game_name,
             use_llm=use_llm,
+            strict_llm=strict_llm,
             llm_client=llm_client,
             llm_model=llm_model,
             llm_model_path=llm_model_path,

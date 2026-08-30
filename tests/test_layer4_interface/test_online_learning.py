@@ -347,6 +347,32 @@ class TestPlayManagerHooks:
         manager.move(session.game_id, {"cell_index": 0})
         assert store.read_matches("moon_chess") == [], "关闭学习后不得落盘轨迹"
 
+    def test_finish_without_capture_is_silent_noop(self, store_dir: Path):
+        """回归（月亮棋 500）：开局时学习未启用的对局，终局不得崩溃。
+
+        recorder 只在开局且 enabled 时装配（B5 门控按开局判定），而
+        ``PlayManager.move`` 对任何挂了 learning 的会话都调
+        ``on_finished``——旧实现在其中无条件 ``session.recorder.finish``，
+        默认配置下的月亮棋整局没有录制器，最后一手直接 500：
+        ``internal error: 'NoneType' object has no attribute 'finish'``。
+        """
+        learning, store = _make_manager(store_dir)
+        manager = PlayManager(
+            provider=default_provider,
+            history=MatchHistory(store_dir / "matches"),
+            seed=42,
+            learning=learning,
+        )
+        session = manager.start("moon_chess", "p_black", "easy")
+        assert session.recorder is None, "moon_chess 默认未启用学习，开局不装配录制器"
+        for _ in range(60):
+            if session.over:
+                break
+            manager.move(session.game_id, {"cell_index": _first_legal_cell(session)})
+        assert session.over
+        assert store.read_matches("moon_chess") == [], "未采集的整局不得落盘轨迹"
+        assert manager.active_sessions() == [], "终局清理不得被异常跳过（幽灵会话）"
+
     def test_texas_holdem_captures_info_keys_and_ai_loop(self, store_dir: Path, learning_manager):
         learning, store = learning_manager
         manager = PlayManager(

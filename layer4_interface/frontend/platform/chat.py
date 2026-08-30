@@ -7,6 +7,30 @@ current session, validates the tool arguments against the authoritative
 engine contract, and always fails soft to a deterministic regex fallback
 when the LLM is missing.
 
+Tool classes (function-calling audit 2026-09 + 对局/复盘信息源修复):
+
+- **action tools** (play_game / make_move / …) map straight to a
+  frontend intent — validated, fail-soft, one shot;
+- **info tools** are executed locally in a bounded loop and their result
+  is fed back to the model as ``role: "tool"`` messages:
+
+  - ``describe_game`` / ``list_games`` — registry + play docs, so
+    knowledge questions (“月亮棋是什么？”) are answered from
+    authoritative data instead of hallucinated;
+  - ``get_match_state`` — the *player-projected* live snapshot (board
+    layout / own hand / pot / discards …): the in-match information
+    source, the model pulls it instead of asking the user to describe
+    the board;
+  - ``ask_hint`` — the mechanical hint (direction / specific / demo),
+    carried to the frontend as the ``hint`` intent with the hint dict
+    in params; the model sees the hint and can explain it;
+  - ``get_match_review`` — the latest (or given) match's timeline + key
+    nodes + improvement, narrated by the model as the ``review``
+    intent (the report travels in params — no more canned-only 复盘).
+
+  The deterministic fallback answers the same classes from the same
+  data when no LLM is available.
+
 Intent contract (shared with the frontend ``ChatPage`` / ``useChatRuntime``):
 
 =========  ========================================================
@@ -15,17 +39,17 @@ intent     params
 play       ``{game_id}``            → 前端开新对局
 resume     ``{game_id}``            → 前端恢复活跃会话
 move       ``{action}``             → 前端调 ``/match/move``
-hint       ``{level}``              → 前端调 ``/match/hint``
+hint       ``{level, hint?}``       → 前端展示提示（``hint`` = 后端已算的机械提示 dict）
 restart    ``{}``                   → 前端重开当前对局
 history    ``{}``                   → 前端展示战绩
-review     ``{}``                   → 前端展示复盘
+review     ``{match_id?, report?}`` → 前端展示复盘（``report`` = 后端已算的 ReviewReport）
 create     ``{}``                   → 前端展示创建游戏面板
 settings   ``{}``                   → 前端展示设置
 platform   ``{}``                   → 前端切回完整平台界面
 benchmark  ``{}``                   → 前端展示评测中心
 learning   ``{}``                   → 前端展示在线学习
 help       ``{}``                   → 前端展示帮助
-chat       ``{}``                   → 普通聊天回复（无工具动作）
+chat       ``{game_id?, chips?}``   → 普通聊天回复（知识回答可带 chips）
 clarify    ``{chips?: [str]}``      → 追问（附可点选项）
 =========  ========================================================
 
@@ -37,15 +61,21 @@ land on a clarifying or canned reply.
 from __future__ import annotations
 
 import json
+import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from layer2_engine.core.llm import LLMClient
 
+from ...review import ReviewReport
+from ...review import analyze as review_analyze
 from .custom_games import CustomGameRegistry
+from .game_knowledge import GAME_ALIASES, game_knowledge_text, game_rules_text
 from .games import GAMES
 from .session import _BUILTIN_FAMILY, PlayManager
+
+logger = logging.getLogger(__name__)
 
 GRID_BOARD_LEN = {
     "moon_chess": 3,
@@ -59,6 +89,52 @@ GRID_BOARD_LEN = {
 _HISTORY_MAX_MESSAGES = 24
 _HISTORY_MAX_CHARS = 6000
 
+#: 一次用户消息最多几次 LLM 往返（信息工具可多轮取数后作答）。
+#: 有界 agentic loop：防模型无限调用工具 / prompt 无限膨胀。
+_MAX_TOOL_ROUNDS = 3
+
+#: 信息类工具 —— 后端就地执行、把结果以 ``role:"tool"`` 回传，模型基于
+#: 资料组织最终回答。动作类工具仍走 intent 映射（fail-soft 校验）。
+#: 其中 ``ask_hint`` 例外地非纯只读：会标记 ``session.hinted``（语义上
+#: 用户确实要了提示——与 ``/match/hint`` 路由是同一调用）。
+_INFO_TOOLS = ("describe_game", "list_games", "get_match_state", "ask_hint", "get_match_review")
+
+#: get_match_state 的载荷预算（字符）。玩家投影快照除头部/棋盘/噪音
+#: 字段外逐 key 序列化，超预算截断（fail-soft，宁缺毋滥）。
+_STATE_MAX_CHARS = 1600
+_STATE_PER_KEY_MAX = 240
+#: 头部（over/turn）与棋盘渲染单独表达；其余属于会话元数据/伴生载荷，
+#: 不进逐 key 的状态文本。
+_STATE_SKIP_KEYS = frozenset(
+    {
+        "game_id",
+        "player_pid",
+        "ai_pid",
+        "difficulty",
+        "over",
+        "winner",
+        "turn",
+        "family",
+        "teaching",
+        "chat",
+        "evaluation",
+        "board",
+    }
+)
+
+#: get_match_review 的时间线上限（条）与总文本预算（字符）。
+_REVIEW_TIMELINE_MAX = 60
+_REVIEW_TEXT_MAX = 1800
+
+#: 「X 是什么 / 怎么玩」类知识问句 —— 无 LLM 时也能用注册表 + 玩法
+#: 文档给出确定性回答（零幻觉路径）。
+_WHAT_IS_RE = re.compile(r"(?:是什么|什么叫|什么游戏|怎么玩|怎么下|怎么打|规则|玩法|介绍一?下|简介)")
+
+#: game_id → (docs/user 文档, 要提取的 ``##`` 段标题) 的规则段映射与
+#: 提取已抽到 ``game_knowledge``（与陪伴对话注入共用单一事实来源）；
+#: 本模块只做消费。每款游戏的短名/别名表（``GAME_ALIASES``）同样在
+#: ``game_knowledge`` 维护。
+
 #: 历史消息角色白名单 —— system 由后端每轮现构（含实时对局上下文），
 #: 绝不采信客户端传入的 system 角色。
 _HISTORY_ROLES = ("user", "assistant")
@@ -68,6 +144,12 @@ _ACTION_SHAPES = {
     "grid": '{"cell_index": 数字}  —— 0 基空格索引（描述里会给出当前可落子格）',
     "poker": '{"choice": "call"|"fold"|"raise"|"all_in", "amount": 数字 —— amount 仅 raise 时必填}',
     "mahjong": '{"type": "discard"|"chow"|"pong"|"kong"|"win", "tile": "牌 id"}  —— 只能用描述里列出的合法组合',
+    "uno": (
+        '{"type": "draw"|"pass"|"play"|"play_wild"|"play_drawn"|"play_drawn_wild"|"play7"'
+        '|"jump_play"|"jump_pass"|"stack2"|"stack4"|"take_penalty", "card": "牌 id", '
+        '"color": "r|b|g|y", "target": "玩家 id"}  —— 万能牌（wild_*/wild4_*）必带 color 选色；'
+        "只能用描述里列出的合法动作（card 取其中的 card 值）"
+    ),
     "social": '{"template_id": "发言模板 id", "text": "发言内容"}  —— 中文发言，text 必填',
 }
 
@@ -144,11 +226,18 @@ def _mood_for(text: str) -> str:
 
 
 def _collect_games(custom: CustomGameRegistry | None) -> list[dict]:
-    """Built-in + custom catalog for the ``play_game`` tool and fallback."""
+    """Built-in + custom catalog for the ``play_game`` tool and fallback.
+
+    Keeps each game's ``description`` — the one-line authoritative intro
+    from ``GameSpec`` / the custom entry.  It feeds the system prompt and
+    the info tools, so the model never has to *guess* what a game is
+    (the "月亮棋是什么？" hallucination class).
+    """
     games: list[dict] = [
         {
             "game_id": spec.game_id,
             "display_name": spec.display_name,
+            "description": spec.description,
             "kind": spec.kind,
             "family": _BUILTIN_FAMILY.get(spec.game_id),
         }
@@ -160,6 +249,7 @@ def _collect_games(custom: CustomGameRegistry | None) -> list[dict]:
                 {
                     "game_id": str(entry.get("game_id", "")),
                     "display_name": str(entry.get("display_name") or entry.get("game_id", "")),
+                    "description": str(entry.get("description") or ""),
                     "kind": "board",
                     "family": entry.get("family"),
                 }
@@ -174,10 +264,21 @@ def _collect_games(custom: CustomGameRegistry | None) -> list[dict]:
     return unique
 
 
+def _game_brief(g: dict) -> str:
+    """One catalog line for the system prompt: 名字(id)：一句话简介。"""
+    desc = str(g.get("description") or "")
+    return f"{g['display_name']}({g['game_id']})" + (f"：{desc}" if desc else "")
+
+
 def _legal_context(session: Any) -> str:
-    """Condensed, *already-projected* legal context for the model (hidden info red line)."""
+    """Condensed, *already-projected* legal context for the model (hidden info red line).
+
+    用 ``spec.build_snapshot``（玩家投影）而不是 ``session.snapshot()``
+    —— 后者会 drain 掉待投递的陪伴消息（``drain_chat`` 副作用），
+    用户对局中每聊一句就会吞掉队列里的 blunder/good_move 评语。
+    """
     try:
-        snap = session.snapshot()
+        snap = session.spec.build_snapshot(session)
     except Exception:
         return ""
     parts: list[str] = []
@@ -201,17 +302,123 @@ def _legal_context(session: Any) -> str:
     return "；".join(parts)
 
 
-def _system_prompt(games: list[dict], session: Any, active: list[dict]) -> str:
+def _render_board(board: list, player_pid: Any) -> str:
+    """Grid board → text rows（``你``/``AI``/``·``），供模型读局面。"""
+    n = len(board)
+    size = int(n**0.5)
+    if size * size != n or size < 1:
+        return ""
+    rows: list[str] = []
+    for r in range(size):
+        cells: list[str] = []
+        for c in range(size):
+            v = board[r * size + c]
+            if v in (None, 0, ""):
+                cells.append("·")
+            elif v == player_pid:
+                cells.append("你")
+            else:
+                cells.append("AI")
+        rows.append(" ".join(cells))
+    return "\n".join(rows)
+
+
+def _match_state_text(session: Any) -> str:
+    """The player-projected live state — the ``get_match_state`` payload.
+
+    ``spec.build_snapshot`` 正是发给玩家浏览器的那份投影（各族
+    reveal-gate 已挡掉隐藏信息），红线天然满足；不调用
+    ``session.snapshot()``——那会 drain 掉待投递的陪伴消息。
+    """
+    try:
+        snap = session.spec.build_snapshot(session)
+    except Exception:
+        return ""
+    parts: list[str] = []
+    player_pid = snap.get("player_pid")
+    if snap.get("over"):
+        parts.append(f"本局已结束，胜方: {snap.get('winner') or '未知'}")
+    else:
+        turn = snap.get("turn")
+        if turn is not None and player_pid is not None:
+            parts.append("当前轮到: " + ("你" if turn == player_pid else "AI"))
+    board = snap.get("board")
+    if isinstance(board, list) and board:
+        grid = _render_board(board, player_pid)
+        if grid:
+            parts.append("棋盘（·为空，你=你的子，AI=对方的子）:\n" + grid)
+    for key, val in snap.items():
+        if key in _STATE_SKIP_KEYS:
+            continue
+        if val is None or val == "" or val == [] or val == {}:
+            continue
+        try:
+            rendered = json.dumps(val, ensure_ascii=False)
+        except (TypeError, ValueError):
+            rendered = str(val)
+        if len(rendered) > _STATE_PER_KEY_MAX:
+            rendered = rendered[:_STATE_PER_KEY_MAX] + "…"
+        parts.append(f"{key}: {rendered}")
+    text = "\n".join(parts)
+    if len(text) > _STATE_MAX_CHARS:
+        text = text[:_STATE_MAX_CHARS] + "…（已截断）"
+    return text
+
+
+def _latest_match(match_history: Any) -> dict | None:
+    """Newest finished match meta (``None`` when history is off/empty)."""
+    if match_history is None:
+        return None
+    try:
+        matches = match_history.list_matches(limit=1)
+    except Exception:
+        return None
+    return matches[0] if matches else None
+
+
+def _review_text(match: dict, report: ReviewReport) -> str:
+    """Deterministic review narration source (timeline + key nodes)."""
+    moves = match.get("moves") if isinstance(match.get("moves"), list) else []
+    kind_labels = {"turning_point": "转折点", "winning_move": "胜着", "blunder": "昏招"}
+    lines = [f"对局 {match.get('match_id')}，{report.summary}", "走子时间线（1 基手数；你=人类座位，AI=AI座位）:"]
+    for m in moves[:_REVIEW_TIMELINE_MAX]:
+        if not isinstance(m, dict):
+            continue
+        actor = "你" if m.get("actor") == "human" else "AI"
+        lines.append(f"{int(m.get('step', 0)) + 1}. {actor}: {m.get('action', '')}")
+    if len(moves) > _REVIEW_TIMELINE_MAX:
+        lines.append(f"…（共 {len(moves)} 手，已截断）")
+    if report.key_nodes:
+        lines.append("关键节点:")
+        for node in report.key_nodes:
+            label = kind_labels.get(node.kind, node.kind)
+            what = f"（{node.what}）" if node.what else ""
+            lines.append(f"- 第 {node.step + 1} 手 {label}{what} —— {node.why}")
+    if report.improvement:
+        lines.append(f"改进建议: {report.improvement}")
+    return "\n".join(lines)[:_REVIEW_TEXT_MAX]
+
+
+def _system_prompt(
+    games: list[dict],
+    session: Any,
+    active: list[dict],
+    latest: dict | None = None,
+) -> str:
     lines = [
         "你是 Gavis 平台的对话助手（agent 聊天模式）。用户一句话 → 你选一个工具。",
         "规则：",
         "1. 用户没指明玩哪个游戏时，不要调用 play_game，直接回复询问（intent clarify）。",
         "2. 对局中的落子/发言只能用描述里给出的合法动作；含糊的话不调用动作工具，直接聊天。",
-        "3. 隐藏信息红线：绝不编造其他玩家手牌/身份/棋局评估——依据用户输入和给出的合法动作行事。",
+        "3. 隐藏信息红线：绝不编造其他玩家手牌/身份/棋局评估——依据用户输入和给出的合法动作行事；"
+        "需要局面细节时调用 get_match_state（它返回玩家自己可见的投影）。",
+        "4. 知识红线：用户问游戏/平台知识（“X是什么/怎么玩/规则/有哪些游戏”）时，先调用 "
+        "describe_game / list_games 取权威资料，只依据资料回答；资料里没有的细节不要编造，"
+        "直接说不知道或建议开一局体验。",
     ]
     if games:
-        names = "、".join(f"{g['display_name']}({g['game_id']})" for g in games[:24])
-        lines.append(f"可用游戏: {names}")
+        catalog = "\n".join("- " + _game_brief(g) for g in games[:24])
+        lines.append("可用游戏:\n" + catalog)
     if session is not None:
         name = session.spec.display_name
         ctx = _legal_context(session)
@@ -220,6 +427,22 @@ def _system_prompt(games: list[dict], session: Any, active: list[dict]) -> str:
             lines.append(ctx)
         if session.persona:
             lines.append(f"陪伴角色: {session.persona}")
+    if (session is None or session.over) and latest:
+        # 终局后 session 已从注册表移除——用最近一局补上下文，让
+        # “复盘一下”不必从零开始（get_match_review 从历史取数）。
+        display = next((g["display_name"] for g in games if g.get("game_id") == latest.get("game_id")), None)
+        label = display or str(latest.get("game_id") or "对局")
+        winner = str(latest.get("winner") or "")
+        if winner and winner == latest.get("player_pid"):
+            result = "你获胜"
+        elif winner:
+            result = "AI 获胜"
+        else:
+            result = "平局"
+        lines.append(
+            f"最近一局: {label}（{latest.get('moves', '?')} 手，{result}）"
+            "——用户想复盘/回顾上一局时调用 get_match_review"
+        )
     if active:
         active_names = "、".join(f"{a.get('display_name') or a.get('game_id')}" for a in active[:8])
         lines.append(f"进行中的对局: {active_names}（用户说“继续/恢复”时用 resume_session）")
@@ -227,7 +450,15 @@ def _system_prompt(games: list[dict], session: Any, active: list[dict]) -> str:
 
 
 def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[dict]:
-    """Build the OpenAI ``tools`` list for the current context."""
+    """Build the OpenAI ``tools`` list for the current context.
+
+    Besides the action tools this always exposes the *info* tools —
+    read-only queries the backend executes in-loop and feeds back as
+    ``role: "tool"`` messages: ``describe_game`` / ``list_games`` (the
+    registry + play docs), ``get_match_review`` (latest match timeline
+    + key nodes) and, mid-match, ``get_match_state`` (the player-
+    projected live snapshot) + ``ask_hint`` (the mechanical hint).
+    """
     game_enum = [g["game_id"] for g in games if g["game_id"]]
     tools: list[dict] = [
         {
@@ -241,7 +472,46 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
                     "required": ["game_id"],
                 },
             },
-        }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "describe_game",
+                "description": (
+                    "查询某款游戏的权威介绍（一句话简介、玩法规则要点、支持人数、难度档）。"
+                    "用户问“X是什么/怎么玩/规则”时先调用它，再依据返回的资料回答。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"game_id": {"type": "string", "enum": game_enum}},
+                    "required": ["game_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_games",
+                "description": "列出平台全部游戏（按棋盘/扑克/麻将/UNO/自定义分组）。用户问“有哪些游戏/目录”时调用。",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_match_review",
+                "description": (
+                    "获取最近一局（或指定 match_id）的复盘资料：完整走子时间线 + 关键节点"
+                    "（转折点/胜着/昏招，含具体动作内容）+ 改进建议。用户说“复盘/回顾上一局/"
+                    "讲讲关键手和失误点”时调用，依据资料用中文讲解。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"match_id": {"type": "string", "description": "对局 id；缺省取最近一局"}},
+                    "required": [],
+                },
+            },
+        },
     ]
     if active:
         tools.append(
@@ -283,8 +553,25 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
             {
                 "type": "function",
                 "function": {
+                    "name": "get_match_state",
+                    "description": (
+                        "获取当前对局的实时状态（棋盘布局/你的手牌/公共牌/牌河/各家张数等"
+                        "——都是玩家自己能看到的公开信息）。用户问“现在什么局面/我有什么牌/"
+                        "这步怎么走”或需要局面细节时调用，依据返回内容回答，不要凭空猜测。"
+                    ),
+                    "parameters": {"type": "object", "properties": {}, "required": []},
+                },
+            }
+        )
+        tools.append(
+            {
+                "type": "function",
+                "function": {
                     "name": "ask_hint",
-                    "description": "用户要提示/指导/“这步怎么走”时调用。",
+                    "description": (
+                        "用户要提示/指导/“这步怎么走”时调用：返回该局的机械提示"
+                        "（direction 方向 / specific 具体 / demo 演示），你结合局面给出讲解。"
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -311,7 +598,6 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
         )
     for name, description in [
         ("show_history", "用户想看战绩/历史/胜率时调用"),
-        ("review_match", "用户想复盘/回放上一局时调用"),
         ("create_game", "用户想创建/自定义新游戏时调用"),
         ("update_settings", "用户想改设置/性格/主题时调用"),
         ("open_platform", "用户想回到完整平台界面时调用"),
@@ -336,16 +622,152 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
 
 
 def _find_game(text: str, games: list[dict]) -> dict | None:
-    """Best-effort game match by display_name / game_id substring."""
+    """Best-effort game match by display_name / game_id / alias substring.
+
+    匹配大小写不敏感（拉丁短名 "uno"/"UNO" 等价），并纳入每款游戏的
+    别名表（``GAME_ALIASES``）——display_name 带括注（「UNO（经典）」）
+    或空格（「UNO 抢牌」）时，用户口语短名（"UNO"/"UNO抢牌"）也能命中。
+    同一句命中多款时最长匹配胜出（"UNO 7-0" 优先于裸 "UNO"）。
+    """
+    lowered = text.lower()
     best: dict | None = None
     best_len = 0
     for g in games:
-        for key in ("display_name", "game_id"):
-            name = str(g.get(key, ""))
-            if name and name in text and len(name) > best_len:
+        candidates = [str(g.get(key, "")) for key in ("display_name", "game_id")]
+        candidates.extend(GAME_ALIASES.get(str(g.get("game_id", "")), ()))
+        for name in candidates:
+            if not name:
+                continue
+            lname = name.lower()
+            if lname in lowered and len(lname) > best_len:
                 best = g
-                best_len = len(name)
+                best_len = len(lname)
     return best
+
+
+def _execute_info_tool(
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    games: list[dict],
+    session: Any = None,
+    manager: PlayManager | None = None,
+    match_history: Any = None,
+) -> ChatTurnResult:
+    """Run one *info* tool locally (fail-soft).
+
+    Returns the executed :class:`ChatTurnResult`: its ``text`` is the
+    ``role: "tool"`` payload the model reads *and* doubles as the
+    deterministic answer when the tool-round budget runs out; tools that
+    map to a frontend intent (``ask_hint`` → ``hint`` with the hint
+    dict, ``get_match_review`` → ``review`` with the report) carry
+    intent + params so the narration lands on the right intent.
+
+    Deterministic, no LLM; read-only except ``ask_hint`` marking
+    ``session.hinted`` (the user did ask for a hint — the same call the
+    ``/match/hint`` route would make).
+    """
+    if name == "describe_game":
+        game_id = str(arguments.get("game_id", ""))
+        # 内置游戏走共享拼装（与陪伴对话注入同源）；custom 游戏
+        # （无 GameSpec）回落到目录条目 + description。
+        knowledge = game_knowledge_text(game_id)
+        if knowledge:
+            return ChatTurnResult(intent="chat", text=knowledge, mood="thinking", params={})
+        game = next((g for g in games if g["game_id"] == game_id), None)
+        if game is None:
+            body = f"未找到游戏 {game_id!r}。可用游戏请调用 list_games 查看。"
+            return ChatTurnResult(intent="chat", text=body, mood="thinking", params={})
+        parts = [f"{game['display_name']}（{game_id}）"]
+        desc = str(game.get("description") or "")
+        if desc:
+            parts.append(desc)
+        rules_md = game_rules_text(game_id)
+        if rules_md:
+            parts.append("规则要点:\n" + rules_md)
+        return ChatTurnResult(intent="chat", text="\n".join(parts), mood="thinking", params={})
+    if name == "list_games":
+        kind_labels = {"board": "棋盘", "poker": "扑克", "mahjong": "麻将", "uno": "UNO"}
+        by_label: dict[str, list[str]] = {}
+        for g in games:
+            if not g["game_id"]:
+                continue
+            label = kind_labels.get(str(g.get("kind")), "自定义" if g.get("family") else "其他")
+            by_label.setdefault(label, []).append(f"{g['display_name']}({g['game_id']})")
+        body = "\n".join(f"{label}: " + "、".join(items) for label, items in by_label.items())
+        return ChatTurnResult(intent="chat", text=body, mood="thinking", params={})
+    if name == "get_match_state":
+        body = _match_state_text(session)
+        return ChatTurnResult(intent="chat", text=body, mood="thinking", params={})
+    if name == "ask_hint":
+        return _ask_hint_result(arguments, session, manager)
+    if name == "get_match_review":
+        return _match_review_result(match_history, arguments)
+    return ChatTurnResult(intent="chat", text="", params={})
+
+
+def _ask_hint_result(arguments: dict[str, Any], session: Any, manager: PlayManager | None) -> ChatTurnResult:
+    """Execute ``ask_hint``: the mechanical hint, carried as the ``hint`` intent.
+
+    ``level`` 透传（旧版动作工具直接丢弃），机械提示全文回传给模型
+    （可讲解），并以 ``params.hint`` 随 intent 带给前端直接展示。
+    """
+    level = str(arguments.get("level") or "direction")
+    if manager is None or session is None or session.over:
+        return ChatTurnResult(intent="chat", text="当前没有可提示的对局。", mood="thinking", params={})
+    try:
+        hint = manager.hint(session.game_id, level)
+    except Exception:
+        return ChatTurnResult(
+            intent="hint",
+            text="提示暂时不可用，可参考描述里的可落子信息。",
+            mood="thinking",
+            params={"level": level},
+        )
+    if not isinstance(hint, dict):
+        hint = {}
+    body = f"机械提示（{level}）：{hint.get('hint') or hint.get('direction') or ''}"
+    direction = str(hint.get("direction") or "")
+    if direction and direction not in body:
+        body += f"\n方向评估：{direction}"
+    return ChatTurnResult(
+        intent="hint",
+        text=body,
+        mood="thinking",
+        params={"level": level, "hint": hint},
+    )
+
+
+def _match_review_result(match_history: Any, arguments: dict[str, Any]) -> ChatTurnResult:
+    """Execute ``get_match_review``: latest (or given) match → narration source.
+
+    复盘的 LLM 信息源：时间线（``moves[].action``）+ 关键节点 + 改进
+    建议整体回传给模型讲解；``params.report`` 随 ``review`` intent 带
+    给前端渲染复盘卡。没有 LLM 时同一段文本即确定性复盘。
+    """
+    if match_history is None:
+        body = "对局历史未启用。"
+        return ChatTurnResult(intent="chat", text=body, mood="thinking", params={})
+    match_id = str(arguments.get("match_id") or "").strip()
+    match: dict | None = None
+    try:
+        if not match_id:
+            latest = match_history.list_matches(limit=1)
+            match_id = str(latest[0].get("match_id") or "") if latest else ""
+        if match_id:
+            match = match_history.get(match_id)
+    except Exception:
+        match = None
+    if not match_id or match is None:
+        body = "还没有已结束的对局记录，先来一局，结束后就能复盘。"
+        return ChatTurnResult(intent="chat", text=body, mood="thinking", params={})
+    report = review_analyze(match)
+    return ChatTurnResult(
+        intent="review",
+        text=_review_text(match, report),
+        mood="thinking",
+        params={"match_id": match_id, "report": asdict(report)},
+    )
 
 
 def _intent_from_tool(
@@ -397,14 +819,12 @@ def _intent_from_tool(
                 params={},
             )
         return ChatTurnResult(intent="move", text="好，走这步！", mood="happy", params={"action": action})
-    if name == "ask_hint":
-        return ChatTurnResult(intent="hint", text=_FALLBACK_REPLIES["hint"], mood="thinking", params={})
+    # ask_hint / get_match_review 是信息工具（_execute_info_tool 就地执行并
+    # 携带 intent），不再走动作映射——这里不再有对应分支。
     if name == "restart_game":
         return ChatTurnResult(intent="restart", text=_FALLBACK_REPLIES["restart"], mood="neutral", params={})
     if name == "show_history":
         return ChatTurnResult(intent="history", text=_FALLBACK_REPLIES["history"], params={})
-    if name == "review_match":
-        return ChatTurnResult(intent="review", text=_FALLBACK_REPLIES["review"], params={})
     if name == "create_game":
         return ChatTurnResult(intent="create", text=_FALLBACK_REPLIES["create"], params={})
     if name == "update_settings":
@@ -451,6 +871,25 @@ def fallback_intent(text: str, games: list[dict], session: Any) -> ChatTurnResul
     mood = _mood_for(text)
     game = _find_game(text, games)
     has_session = session is not None and not session.over
+
+    # 「X 是什么/怎么玩/规则」→ 确定性知识回答（注册表 description +
+    # 玩法文档规则段，零幻觉；必须先于 play —— “怎么下/怎么打”也含
+    # 开局动词，语义却是问规则）。
+    if _WHAT_IS_RE.search(text) and game is not None:
+        desc = str(game.get("description") or "")
+        name = game["display_name"]
+        # description 多以名字开头（“3×3 经典月亮棋：…”），避免“月亮棋：3×3 经典月亮棋：…”式复读
+        body = desc if (desc and name in desc) else (f"{name}：{desc}" if desc else f"{name}是平台支持的一款游戏。")
+        rules_md = game_rules_text(game["game_id"])
+        if rules_md:
+            body += "\n" + rules_md
+        body += "\n想试一试的话，说“玩" + game["display_name"] + "”即可开局。"
+        return ChatTurnResult(
+            intent="chat",
+            text=body.strip(),
+            mood="thinking",
+            params={"game_id": game["game_id"], "chips": [f"玩{game['display_name']}"]},
+        )
 
     # 对局中且是落子表达 → 只对 grid 族做最简解析（其余族请直接点击操作）
     if has_session and (session.family or _BUILTIN_FAMILY.get(session.game_id)) in ("grid", None):
@@ -559,6 +998,7 @@ def chat_turn(
     game_id: str | None = None,
     custom: CustomGameRegistry | None = None,
     history: list[dict[str, Any]] | None = None,
+    match_history: Any = None,
 ) -> ChatTurnResult:
     """Turn one user message into a validated platform intent (fail-soft).
 
@@ -566,6 +1006,11 @@ def chat_turn(
     the frontend so the LLM sees the conversation context; sanitized and
     bounded here (``_sanitize_history``). Only used on the LLM path; the
     deterministic regex fallback routes on the current sentence alone.
+
+    ``match_history`` — the platform :class:`MatchHistory`; backs the
+    ``get_match_review`` info tool and the “最近一局” system-prompt line
+    (post-match context instead of a blank slate once the session is
+    removed from the registry).
     """
     text = (text or "").strip()
     session = None
@@ -578,24 +1023,105 @@ def chat_turn(
     active = manager.active_sessions()[:16]
     if not text:
         return ChatTurnResult(intent="chat", text=_HELP_TEXT, params={})
+    # 终局后 session 已移除 → 用最近一局补 system prompt 上下文。
+    latest = _latest_match(match_history) if session is None or session.over else None
 
     if llm is not None:
         tools = build_tools(games=games, session=session, active=active)
-        system = _system_prompt(games, session, active)
-        messages: list[dict[str, str]] = [{"role": "system", "content": system}]
+        system = _system_prompt(games, session, active, latest=latest)
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
         messages.extend(_sanitize_history(history))
         messages.append({"role": "user", "content": text})
-        try:
-            reply = llm.complete_tools(messages, tools)
-        except Exception:
-            reply = None
-        if reply is not None and reply.tool_calls:
-            call = reply.tool_calls[0]
-            args = call.arguments if isinstance(call.arguments, dict) else {}
-            result = _intent_from_tool(str(call.name), args, games=games, session=session)
-            if reply.text:
-                result.text = reply.text.strip()  # 优先采用模型亲笔文案，兜底文案作后备
-            return result
-        if reply is not None and reply.text:
-            return ChatTurnResult(intent="chat", text=reply.text.strip(), mood=_mood_for(text), params={})
+        # Bounded tool loop: info tools are executed locally and their
+        # result is fed back as a ``role: "tool"`` message so the model
+        # can answer from authoritative data; action tools map to an
+        # intent immediately.  ``last_tool_result`` doubles as the
+        # deterministic answer if the budget runs out (fail-soft, zero
+        # hallucination) or the model keeps requesting tools.
+        #
+        # 并行 tool_calls（audit §5-3）：一个回合里模型可能同时发起
+        # 多个调用。信息类逐个就地执行、逐个以 ``role:"tool"`` 回传
+        # （按 tool_call_id 成对关联）；动作类只取首个——intent 契约是
+        # 单动作，「介绍一下血战到底然后来一局」这类复合请求里动作
+        # 立即生效，其余调用不静默丢失语义。混合批次（信息 + 动作）
+        # 时动作优先返回。
+        #
+        # 携带 intent 的信息工具（ask_hint → hint、get_match_review →
+        # review）：模型成文后落在携带的 intent 上（文本换成模型亲笔），
+        # 预算耗尽则直接用工具结果文本——两个出口都指向同一个前端
+        # 意图，绝不再退回纯 chat 丢掉 hint/report 参数。
+        last_tool_result = ""
+        carried: ChatTurnResult | None = None
+        call_seq = 0  # 端点未给 id 时的合成 tool_call_id 计数
+        for _ in range(_MAX_TOOL_ROUNDS):
+            try:
+                reply = llm.complete_tools(messages, tools)
+            except Exception:
+                reply = None
+            if reply is None:
+                break
+            if not reply.tool_calls:
+                if reply.text:
+                    if carried is None:
+                        return ChatTurnResult(intent="chat", text=reply.text.strip(), mood=_mood_for(text), params={})
+                    carried.text = reply.text.strip()
+                    return carried
+                break
+            action = next((c for c in reply.tool_calls if str(c.name) not in _INFO_TOOLS), None)
+            if action is not None:
+                args = action.arguments if isinstance(action.arguments, dict) else {}
+                result = _intent_from_tool(str(action.name), args, games=games, session=session)
+                if reply.text:
+                    result.text = reply.text.strip()  # 优先采用模型亲笔文案，兜底文案作后备
+                return result
+            tool_calls_payload: list[dict[str, Any]] = []
+            results: list[str] = []
+            for call in reply.tool_calls:
+                args = call.arguments if isinstance(call.arguments, dict) else {}
+                call_seq += 1
+                call_id = call.id or f"call_{call_seq}"
+                name = str(call.name)
+                executed = _execute_info_tool(
+                    name,
+                    args,
+                    games=games,
+                    session=session,
+                    manager=manager,
+                    match_history=match_history,
+                )
+                if executed.intent != "chat" or executed.params:
+                    carried = executed  # 多个携带意图时最后一个生效（同回合并发 hint+review 无实际语义）
+                results.append(executed.text)
+                tool_calls_payload.append(
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)},
+                    }
+                )
+            messages.append({"role": "assistant", "content": reply.text or "", "tool_calls": tool_calls_payload})
+            for payload, result_text in zip(tool_calls_payload, results):
+                messages.append({"role": "tool", "tool_call_id": payload["id"], "content": result_text})
+            non_empty = [r for r in results if r]
+            if non_empty:
+                last_tool_result = "\n\n".join(non_empty)
+        if carried is not None and (carried.text or last_tool_result):
+            carried.text = (carried.text or last_tool_result).strip()[:1000]
+            return carried
+        if last_tool_result:
+            return ChatTurnResult(
+                intent="chat",
+                text=last_tool_result.strip()[:800],
+                mood="thinking",
+                params={},
+            )
+    if llm is not None:
+        # LLM 已装配（探测通过）但本回合无有效输出 → 走正则兜底。
+        # 传输故障由 LLMClient 内记录并告警；这里补一条回合级日志，
+        # 让「模型在线但持续不可用」可观测（不静默降级）。
+        last = getattr(llm, "last_error", None)
+        if last is not None:
+            logger.warning("LLM 聊天回合失败: %s — 走正则兜底", last)
+        elif carried is None:
+            logger.warning("LLM 聊天回合未产出可用结果（空回复/工具循环耗尽）— 走正则兜底")
     return fallback_intent(text, games, session)

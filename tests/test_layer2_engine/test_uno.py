@@ -327,6 +327,19 @@ def test_draw_then_play_drawn_or_pass() -> None:
     col = eng.expr.eval({"call": ["color_of", {"var": "$env.drawnCard"}]}, ctx)
     sym = eng.expr.eval({"call": ["symbol_of", {"var": "$env.drawnCard"}]}, ctx)
     playable = col == "r" or sym == "5" or sym in ("wild", "wild4")
+    is_wild = sym in ("wild", "wild4")
+    if is_wild:
+        # 万能牌走 play_drawn_wild（带选色），play_drawn 不再对其开放
+        assert _legal(eng, st, "play_drawn", card=drawn) is None, (drawn, col, sym)
+        assert playable
+        pdw = _legal(eng, st, "play_drawn_wild", card=drawn, color="g")
+        assert pdw is not None, (drawn, col, sym)
+        st2 = eng.apply_action(st, pdw)
+        assert drawn not in _hand(st2, "p0")
+        assert st2["env"]["drawnCard"] is None
+        assert st2["env"]["topColor"] == "g"  # 摸到即出同样要选色
+        assert st2["env"]["phase"] in ("play", "penalty_pick", "respond")
+        return
     pd = _legal(eng, st, "play_drawn", card=drawn)
     assert (pd is not None) == playable, (drawn, col, sym)
     if pd is not None:
@@ -341,6 +354,61 @@ def test_draw_then_play_drawn_or_pass() -> None:
         assert st2["env"]["phase"] == "play"
         assert st2["env"]["drawnCard"] is None
         assert st2["env"]["turn"] == "p1"
+
+
+def test_drawn_wild_requires_color_choice() -> None:
+    """P1-7：摸牌后立即打出万能牌必须带选色（play_drawn 不收万能牌）。
+
+    回归背景：``play_drawn`` 曾对万能牌开放而 effect 硬编码 color=None →
+    台面颜色变 "none"、下家普通牌全部锁死（只能再出万能/摸牌）。
+    """
+    from layer2_engine.core.state_graph import ChanceOutcome
+
+    eng = _engine()
+    state = _craft(eng, hands={"p0": ["b1a"]}, top=("r", "5"), turn="p0")
+    st = eng.apply_action(state, _legal(eng, state, "draw"))
+    assert st["env"]["phase"] == "pick"
+    st = eng.apply_chance(
+        st, ChanceOutcome(key="wild4_2", probability=1.0, effect_ref="do_pick", canonical_key="pick:wild4_2")
+    )
+    assert st["env"]["phase"] == "draw_result"
+    assert st["env"]["drawnCard"] == "wild4_2"
+
+    # 旧路径已封死：万能牌不能用 play_drawn（无 color）
+    assert _legal(eng, st, "play_drawn", card="wild4_2") is None
+    # 新路径：play_drawn_wild × 4 色
+    colors = [a.params.get("color") for a in eng.get_legal_actions(st) if a.template_id == "play_drawn_wild"]
+    assert sorted(colors) == ["b", "g", "r", "y"]
+
+    st2 = eng.apply_action(st, _legal(eng, st, "play_drawn_wild", card="wild4_2", color="b"))
+    assert st2["env"]["topColor"] == "b"
+    assert st2["env"]["topSymbol"] == "wild4"
+    assert st2["env"]["phase"] == "penalty_pick"  # classic：+4 罚牌
+    # 罚牌结算后下家（p2）可正常按所选颜色出牌
+    for _ in range(4):
+        st2 = eng.sample_chance(st2)[1]
+    assert st2["env"]["phase"] == "play"
+    assert _legal(eng, st2, "play", card="b1a") is not None  # p2 手里的蓝牌可接
+
+
+def test_drawn_plain_wild_color_choice() -> None:
+    """普通万能牌（非 +4）摸到即出同样选色，台面颜色不再是 "none"。"""
+    from layer2_engine.core.state_graph import ChanceOutcome
+
+    eng = _engine()
+    state = _craft(eng, hands={"p0": ["b1a"]}, top=("r", "5"), turn="p0")
+    st = eng.apply_action(state, _legal(eng, state, "draw"))
+    st = eng.apply_chance(
+        st, ChanceOutcome(key="wild_3", probability=1.0, effect_ref="do_pick", canonical_key="pick:wild_3")
+    )
+    assert st["env"]["drawnCard"] == "wild_3"
+    assert _legal(eng, st, "play_drawn", card="wild_3") is None
+    st2 = eng.apply_action(st, _legal(eng, st, "play_drawn_wild", card="wild_3", color="b"))
+    assert st2["env"]["topColor"] == "b"
+    assert st2["env"]["phase"] == "play"  # wild 无罚牌
+    assert st2["env"]["turn"] == "p1"
+    # 下家（填充牌 b1a）按所选颜色可接蓝牌
+    assert _legal(eng, st2, "play", card="b1a") is not None
 
 
 # ── 7-0 变种 ─────────────────────────────────────────────────────────

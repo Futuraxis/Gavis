@@ -240,7 +240,10 @@ class TestUndercoverSession:
     def _check_snapshot(self, snap: dict, roles: list, words: list, mine: str, index: int) -> None:
         """Contract + hidden-information red-line assertions for one snapshot."""
         assert snap["family"] == "social"
-        assert set(snap) - {"chat", "evaluation"} == SOCIAL_CONTRACT_KEYS
+        # "chat"/"evaluation"/"teaching" 是 session.snapshot() 统一注入的
+        # 会话级键（聊天增量 / 局势评估 / 教学对局标记），不属于 social 族
+        # 快照本体契约。
+        assert set(snap) - {"chat", "evaluation", "teaching"} == SOCIAL_CONTRACT_KEYS
         assert snap["my_role"] == roles[index]
         assert snap["ai_mode"] in {"ollama", "random"}
         strings = _collect_strings(snap)
@@ -343,6 +346,43 @@ class TestOllamaProbe:
         assert provider.calls
         assert all(call["name"] == "random" for call in provider.calls)
 
+    def test_ollama_degraded_reports_random_mode(self, tmp_path, monkeypatch):
+        """审查（LLM 兜底系统性排查）：探测通过（mode=ollama）但求解器实际
+        调用失败（``last_call_ok=False`` → 随机兜底）时，ai_mode 如实降级为
+        ``random``，不顶着「本地大模型」名义随机出招。"""
+
+        class DegradedHandle:
+            """模拟 OllamaSolver 持续失败的句柄（暴露 last_call_ok=False）。"""
+
+            def __init__(self, engine: GameEngine) -> None:
+                self.engine = engine
+                self.last_call_ok = False
+
+            @property
+            def name(self) -> str:
+                return "degraded"
+
+            def select_action(self, state: dict):
+                legal = self.engine.get_legal_actions(state)
+                return legal[0] if legal else None
+
+            def solve(self, state: dict, **kwargs: object):
+                return self.select_action(state)
+
+            def train(self, episodes: int, **kwargs: object) -> None:
+                return None
+
+        class DegradedProvider:
+            def create_solver(self, game_id, name, engine, seed, budget, **kwargs):
+                return DegradedHandle(engine)
+
+        monkeypatch.setattr(LLMClient, "available", staticmethod(lambda: True))
+        manager = PlayManager(provider=DegradedProvider(), seed=42, custom=_registry(tmp_path, "undercover"))
+        session = manager.start("undercover", "p0", "easy", player_count=8)
+        assert session.snapshot()["ai_mode"] == "ollama"  # 初始探测标注
+        result = manager.move(session.game_id, {"type": "speak", "text": "大家好"})
+        assert result["ai_mode"] == "random"  # LLM 实际失败 → 如实降级
+
 
 # ── 狼人杀冒烟（夜晚由 AI 先行 / 快照红线条目）────────────────────────
 
@@ -361,7 +401,10 @@ class TestWerewolfSmoke:
         assert session.family == "social"
         roles = list(session.state["_arrays"]["roles"])
         snap = session.snapshot()
-        assert set(snap) - {"chat", "evaluation"} == SOCIAL_CONTRACT_KEYS
+        # "chat"/"evaluation"/"teaching" 是 session.snapshot() 统一注入的
+        # 会话级键（聊天增量 / 局势评估 / 教学对局标记），不属于 social 族
+        # 快照本体契约。
+        assert set(snap) - {"chat", "evaluation", "teaching"} == SOCIAL_CONTRACT_KEYS
         assert snap["my_role"] == roles[0]
         if not snap["over"]:
             assert len(snap["alive"]) >= 1  # 存活列表为公开投影

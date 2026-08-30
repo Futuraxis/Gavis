@@ -15,7 +15,10 @@ const GAME_LABELS: Record<string, string> = {
   texas_holdem: '德州扑克',
   mahjong_guangdong: '广东麻将',
   mahjong_hongzhong: '红中麻将',
-  mahjong_blood: '血战到底',
+  mahjong_blood: '血流成河',
+  mahjong_sichuan: '四川麻将（血战到底）',
+  mahjong_changsha: '长沙麻将（258将）',
+  mahjong_taiwan: '台湾麻将（16张）',
 }
 
 const SEAT_LABELS: Record<string, string> = {

@@ -209,6 +209,44 @@ class TestCustomGameRegistry:
         assert exc.value.validation.valid is False
         assert exc.value.validation.errors == ["该规则暂不支持平台对弈"]
 
+    def test_create_with_llm_failure_surfaces_real_error(self, registry):
+        """审查（LLM 兜底系统性排查）：``use_llm=True`` 时 LLM API/传输失败
+        不再静默模板兜底 —— ``create()`` 抛 ``CustomGameError`` 且
+        ``validation.errors`` 携带真实失败原因，也不产生半成品游戏。"""
+
+        class DeadClient:
+            def complete(self, messages, max_tokens=8192):  # noqa: ANN001
+                raise ConnectionError("LLM 服务不可达")
+
+        with pytest.raises(CustomGameError, match="规则校验未通过") as exc:
+            registry.create(
+                mode="from_scratch",
+                rule_text=CONNECT4_TEXT,
+                use_llm=True,
+                llm_client=DeadClient(),
+            )
+        assert exc.value.validation is not None
+        assert exc.value.validation.valid is False
+        assert any("LLM 服务不可达" in e for e in exc.value.validation.errors)
+        assert registry.list_games() == []  # 失败不落盘
+
+    def test_create_variant_llm_failure_surfaces_real_error(self, registry):
+        class DeadClient:
+            def complete(self, messages, max_tokens=8192):  # noqa: ANN001
+                raise ConnectionError("LLM API 连接失败")
+
+        with pytest.raises(CustomGameError, match="规则校验未通过") as exc:
+            registry.create(
+                mode="variant",
+                base_game_id="stochastic_gomoku",
+                change_text="棋盘改为 5x5",
+                use_llm=True,
+                llm_client=DeadClient(),
+            )
+        assert exc.value.validation is not None
+        assert exc.value.validation.valid is False
+        assert any("LLM API 连接失败" in e for e in exc.value.validation.errors)
+
     def test_spec_for_rejects_no_family_entry(self, registry, tmp_path):
         # 直接注入"通过校验但无族"的规则（werewolf 去掉 speak 动作后 social
         # 不识别、其余族也不识别）→ spec_for 必须明确拒绝。

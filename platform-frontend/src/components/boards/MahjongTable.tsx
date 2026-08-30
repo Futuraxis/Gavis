@@ -76,7 +76,11 @@ function Seat({ pid, label, snapshot, interactive, onAction, isHuman, isTurn }: 
   const hiddenCount = isHuman ? 0 : snapshot.hand_counts[pid] ?? 0
   const [selected, setSelected] = useState<string | null>(null)
 
-  const canAct = interactive && isHuman && isTurn
+  // 出牌入口只在出牌阶段开放（action = 摸牌后出牌 / discard = 吃碰后强制
+  // 出牌）。claim 阶段是响应别人打出的牌（碰/杠/胡/过）——此时点手牌
+  // 「打出」只会在后端得到「非法动作: discard …」，不提供该交互入口。
+  const inPlayPhase = snapshot.phase === 'action' || snapshot.phase === 'discard'
+  const canAct = interactive && isHuman && isTurn && inPlayPhase
   // 刚摸进的牌：行动阶段里手牌末尾那张（do_draw 总是 append 到最后）。
   const drawnIndex =
     isHuman && isTurn && snapshot.phase === 'action' && snapshot.last_drawn
@@ -217,6 +221,12 @@ export default function MahjongTable({ snapshot, interactive, onAction }: Props)
 
       {!over && canAct && snapshot.phase === 'claim' && (
         <div className="action-panel mahjong-claim-bar">
+          {/* 响应提示：是谁打出的哪张牌（旧后端快照无 last_discarder 时兜底「对手」）。 */}
+          <span className="claim-prompt">
+            {snapshot.last_discarder ? seatLabel(snapshot.last_discarder) : '对手'}打出了{' '}
+            {snapshot.last_discard ? tileLabel(snapshot.last_discard) : '一张牌'}
+            ，请选择：
+          </span>
           {claimWin.map((l) => (
             <button key="win" className="btn btn-primary" onClick={() => onAction?.({ type: 'claim_win', tile: l.tile })}>
               荣和 🎉

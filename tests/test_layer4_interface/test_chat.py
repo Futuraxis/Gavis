@@ -24,6 +24,7 @@ from layer4_interface.frontend.platform.chat import (
     chat_turn,
     fallback_intent,
 )
+from layer4_interface.frontend.platform.game_knowledge import game_knowledge_text
 from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.session import PlayManager
 from train_cli import default_provider
@@ -55,6 +56,25 @@ class _RecordingLLM(_FakeLLM):
     def complete_tools(self, messages: list[dict], tools: list[dict], **_: object) -> ChatReply:
         self.seen = list(messages)
         return super().complete_tools(messages, tools, **_)
+
+
+class _ScriptedLLM:
+    """Fake LLM playing a fixed reply script; records every round's messages.
+
+    Models the agentic tool loop: each ``complete_tools`` call pops the
+    next scripted ``ChatReply`` so a test can simulate "model asks for a
+    tool → gets the ``role: 'tool'`` result → answers from it".
+    """
+
+    def __init__(self, replies: list[ChatReply]) -> None:
+        self._replies = list(replies)
+        self.seen: list[list[dict]] = []
+
+    def complete_tools(self, messages: list[dict], tools: list[dict], **_: object) -> ChatReply:
+        self.seen.append(list(messages))
+        if not self._replies:
+            return ChatReply(text="")
+        return self._replies.pop(0)
 
 
 # ── Deterministic fallback (no LLM) ───────────────────────────────
@@ -123,6 +143,50 @@ class TestFallbackIntent:
         assert fallback_intent("你能做什么", _games(manager), None).intent == "help"
         assert fallback_intent("你好呀", _games(manager), None).intent == "chat"
 
+    def test_what_is_game_answers_from_registry(self, manager: PlayManager) -> None:
+        """“月亮棋是什么？” —— 无 LLM 也有确定性回答（零幻觉路径）。"""
+        result = fallback_intent("月亮棋是什么", _games(manager), None)
+        assert result.intent == "chat"
+        assert result.params["game_id"] == "moon_chess"
+        assert "月亮棋" in result.text
+        assert "3×3" in result.text  # GameSpec.description / 玩法文档的权威内容
+        assert result.params.get("chips")
+
+    def test_what_is_beats_play_verb(self, manager: PlayManager) -> None:
+        """“怎么下/怎么打”含开局动词，语义却是问规则 —— 知识分支优先于 play。"""
+        result = fallback_intent("月亮棋怎么下", _games(manager), None)
+        assert result.intent == "chat"
+        assert "3×3" in result.text
+
+    def test_what_is_without_game_falls_through(self, manager: PlayManager) -> None:
+        """问句不点名任何已注册游戏 → 维持原兜底（不猜、不编）。"""
+        result = fallback_intent("围棋是什么", _games(manager), None)
+        assert result.intent == "chat"
+        assert "3×3" not in result.text
+
+    def test_uno_short_name_matches_via_alias(self, manager: PlayManager) -> None:
+        """短名匹配（audit §5-5）：“UNO 的规则”接不住 display_name
+        「UNO（经典）」—— 别名表 + 大小写不敏感补上；play 分支同样受益。"""
+        games = _games(manager)
+        result = fallback_intent("UNO的规则", games, None)
+        assert result.intent == "chat"
+        assert result.params["game_id"] == "uno"
+        assert "108" in result.text  # 来自注册表 description 的权威内容
+        assert result.params["chips"] == ["玩UNO（经典）"]
+        # 大小写不敏感：“玩uno” 同样开局（game_id 子串大小写旧逻辑接不住）
+        assert fallback_intent("玩uno", games, None).params["game_id"] == "uno"
+
+    def test_uno_variant_longest_alias_wins(self, manager: PlayManager) -> None:
+        """“UNO 7-0” 同时命中 uno 的 "UNO" 与 seven_zero 的 "UNO 7-0" —— 最长匹配胜出。"""
+        result = fallback_intent("UNO 7-0怎么玩", _games(manager), None)
+        assert result.params["game_id"] == "uno_seven_zero"
+
+    def test_alias_matches_play_branch(self, manager: PlayManager) -> None:
+        """别名不止服务知识问句：“来一局德扑”（德州别名）同样开局。"""
+        result = fallback_intent("来一局德扑", _games(manager), None)
+        assert result.intent == "play"
+        assert result.params["game_id"] == "texas_holdem"
+
 
 # ── LLM + function calling ────────────────────────────────────────
 
@@ -169,6 +233,316 @@ class TestChatTurnLLM:
         fake = _FakeLLM(tool_calls=(("resume_session", {}),))
         result = chat_turn(manager, "继续", llm=fake, game_id=session.game_id)
         assert result.intent == "resume"
+
+
+# ── Info tools (describe_game / list_games) ────────────────────────
+
+
+class TestInfoTools:
+    """知识类问题的 function-calling 路径：工具在本地执行、结果以
+    ``role:"tool"`` 回传，模型基于权威资料作答（而不是幻觉）。"""
+
+    def test_build_tools_always_exposes_info_tools(self, manager: PlayManager) -> None:
+        names = [t["function"]["name"] for t in build_tools(games=_games(manager), session=None, active=[])]
+        assert "describe_game" in names
+        assert "list_games" in names
+
+    def test_describe_game_tool_loop(self, manager: PlayManager) -> None:
+        fake = _ScriptedLLM(
+            [
+                ChatReply(text="", tool_calls=[ToolCall("describe_game", {"game_id": "moon_chess"}, id="call_1")]),
+                ChatReply(text="月亮棋是 3×3 的连线棋：每方最多 3 子，最老的会被挤出，三连即胜。"),
+            ]
+        )
+        result = chat_turn(manager, "月亮棋是什么？", llm=fake)
+        assert result.intent == "chat"
+        assert "3×3" in result.text
+        # 第二轮：模型必须收到 role:"tool" 的权威资料（关联 call_id）
+        assert len(fake.seen) == 2
+        first, second = fake.seen
+        assert first[-1] == {"role": "user", "content": "月亮棋是什么？"}
+        tool_msgs = [m for m in second if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0]["tool_call_id"] == "call_1"
+        assert "3×3" in tool_msgs[0]["content"]  # 来自 GameSpec.description / 玩法文档
+        # 发起调用的 assistant 消息成对出现在 tool 消息之前
+        assistant_idx = next(i for i, m in enumerate(second) if m.get("role") == "assistant" and m.get("tool_calls"))
+        assert second[assistant_idx]["tool_calls"][0]["id"] == "call_1"
+        assert second[assistant_idx]["tool_calls"][0]["function"]["name"] == "describe_game"
+        assert second[assistant_idx + 1] is tool_msgs[0]
+
+    def test_list_games_tool_loop(self, manager: PlayManager) -> None:
+        fake = _ScriptedLLM(
+            [
+                ChatReply(text="", tool_calls=[ToolCall("list_games", {})]),
+                ChatReply(text="平台有月亮棋、随机五子棋和德州扑克，详见列表。"),
+            ]
+        )
+        result = chat_turn(manager, "你们平台都有什么游戏？", llm=fake)
+        assert result.intent == "chat"
+        tool_msgs = [m for m in fake.seen[1] if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert "月亮棋" in tool_msgs[0]["content"]
+        assert "德州扑克" in tool_msgs[0]["content"]
+
+    def test_info_tool_budget_exhausted_answers_deterministically(self, manager: PlayManager) -> None:
+        """模型一直要查资料（预算耗尽）→ 用工具执行结果直接作答，绝不空转。"""
+        looping = ChatReply(text="", tool_calls=[ToolCall("describe_game", {"game_id": "moon_chess"})])
+        fake = _ScriptedLLM([looping, looping, looping])
+        result = chat_turn(manager, "月亮棋是什么？", llm=fake)
+        assert result.intent == "chat"
+        assert "3×3" in result.text
+        assert len(fake.seen) == 3  # _MAX_TOOL_ROUNDS 上限生效
+
+    def test_system_prompt_carries_game_descriptions(self, manager: PlayManager) -> None:
+        """上下文注入：系统提示的游戏目录必须带一句话简介（防模型瞎猜）。"""
+        fake = _RecordingLLM(text="嗯。")
+        chat_turn(manager, "在吗", llm=fake)
+        system = fake.seen[0]["content"]
+        assert "月亮棋" in system
+        assert "三子连珠" in system  # moon_chess 的 description 关键词
+        assert "知识红线" in system
+
+    def test_parallel_info_calls_all_executed_and_fed_back(self, manager: PlayManager) -> None:
+        """并行 tool_calls（audit §5-3）：一个回合并行发起的两个信息查询
+        都就地执行、都以 ``role:"tool"`` 回传（按 tool_call_id 成对关联），
+        不再只取 ``tool_calls[0]``。"""
+        fake = _ScriptedLLM(
+            [
+                ChatReply(
+                    text="",
+                    tool_calls=[
+                        ToolCall("describe_game", {"game_id": "moon_chess"}, id="call_a"),
+                        ToolCall("describe_game", {"game_id": "texas_holdem"}, id="call_b"),
+                    ],
+                ),
+                ChatReply(text="月亮棋是 3×3 连线棋；德州是双人扑克。"),
+            ]
+        )
+        result = chat_turn(manager, "月亮棋和德州扑克分别是什么？", llm=fake)
+        assert result.intent == "chat"
+        assert "3×3" in result.text
+        second = fake.seen[1]
+        tool_msgs = [m for m in second if m.get("role") == "tool"]
+        assert len(tool_msgs) == 2
+        assert {m["tool_call_id"] for m in tool_msgs} == {"call_a", "call_b"}
+        joined = "\n".join(str(m["content"]) for m in tool_msgs)
+        assert "3×3" in joined  # moon_chess 资料
+        assert "四轮下注" in joined  # texas_holdem 资料
+        # 发起方 assistant 消息携带全部两个 tool_calls（OpenAI 协议形态）
+        assistant = next(m for m in second if m.get("role") == "assistant" and m.get("tool_calls"))
+        assert [c["id"] for c in assistant["tool_calls"]] == ["call_a", "call_b"]
+
+    def test_parallel_mixed_batch_action_wins(self, manager: PlayManager) -> None:
+        """混合批次（信息 + 动作）：动作类只取首个立即映射 intent——
+        旧逻辑只看 ``tool_calls[0]``，信息查询排在前时动作被静默丢弃。"""
+        fake = _ScriptedLLM(
+            [
+                ChatReply(
+                    text="",
+                    tool_calls=[
+                        ToolCall("describe_game", {"game_id": "moon_chess"}),
+                        ToolCall("play_game", {"game_id": "texas_holdem"}),
+                    ],
+                ),
+            ]
+        )
+        result = chat_turn(manager, "介绍一下月亮棋，然后来一局德州", llm=fake)
+        assert result.intent == "play"
+        assert result.params["game_id"] == "texas_holdem"
+        assert len(fake.seen) == 1  # 动作立即返回，没有第二轮取数
+
+
+# ── Shared knowledge assembly (game_knowledge) ─────────────────────
+
+
+class TestGameKnowledge:
+    """chat 信息工具与陪伴对话注入共用的资料拼装（单一事实来源）。"""
+
+    def test_builtin_game_assembles_description_and_rules(self) -> None:
+        text = game_knowledge_text("moon_chess")
+        assert "月亮棋" in text
+        assert "3×3" in text  # GameSpec.description
+        assert "规则要点" in text  # docs/user/play_moon_chess.md 规则段
+
+    def test_unknown_game_returns_empty(self) -> None:
+        """未知 / custom 游戏返回空串 —— 调用方各自 fail-soft。"""
+        assert game_knowledge_text("no_such_game") == ""
+        assert game_knowledge_text("") == ""
+
+
+# ── In-match / post-match info tools (对局信息源修复) ───────────────
+
+
+def _recorded_moon_match(history: MatchHistory) -> str:
+    """写入一局已结束的月亮棋记录（人类 p_black 落败），返回 match_id。"""
+    boards = [
+        ["p_black", None, None, None, None, None, None, None, None],
+        ["p_black", None, "p_white", None, None, None, None, None, None],
+        ["p_black", "p_black", "p_white", None, None, None, None, None, None],
+        ["p_black", "p_black", "p_white", None, None, "p_white", None, None, None],
+        ["p_black", "p_black", "p_white", "p_black", None, "p_white", None, None, None],
+        ["p_black", "p_black", "p_white", "p_black", None, "p_white", None, None, "p_white"],
+    ]
+    moves = []
+    for i, board in enumerate(boards):
+        over = i == len(boards) - 1
+        moves.append(
+            {
+                "step": i,
+                "actor": "human" if i % 2 == 0 else "ai",
+                "action": f"cell_{i}",
+                "snapshot": {
+                    "player_pid": "p_black",
+                    "board": board,
+                    "turn": "p_white" if i % 2 == 0 else "p_black",
+                    "winner": "p_white" if over else None,
+                    "over": over,
+                    "round": i + 1,
+                },
+            }
+        )
+    return history.record(
+        {
+            "match_id": "mtest0001",
+            "game_id": "moon_chess",
+            "player_pid": "p_black",
+            "ai_pid": "p_white",
+            "difficulty": "easy",
+            "winner": "p_white",
+            "over": True,
+            "moves": moves,
+        }
+    )
+
+
+@pytest.fixture
+def manager_history(tmp_path) -> tuple[PlayManager, MatchHistory]:
+    history = MatchHistory(tmp_path)
+    return PlayManager(provider=default_provider, history=history, seed=42), history
+
+
+class TestMatchStateTools:
+    """对局中信息源（get_match_state）与提示回流（ask_hint）。"""
+
+    def test_get_match_state_feeds_board_layout(self, manager: PlayManager) -> None:
+        """对局信息源：模型能拉到棋盘布局（含占据方），不再反问用户描述棋盘。"""
+        session = manager.start("moon_chess", "p_black", "easy")
+        manager.move(session.game_id, {"cell_index": 4})  # 双方各落一子
+        fake = _ScriptedLLM(
+            [
+                ChatReply(text="", tool_calls=[ToolCall("get_match_state", {}, id="c1")]),
+                ChatReply(text="中心点已经被你占住了，接下来注意边路。"),
+            ]
+        )
+        result = chat_turn(manager, "现在局面怎么样", llm=fake, game_id=session.game_id)
+        assert result.intent == "chat"
+        assert result.text == "中心点已经被你占住了，接下来注意边路。"
+        tool_msgs = [m for m in fake.seen[1] if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        content = tool_msgs[0]["content"]
+        assert "棋盘" in content
+        assert "你" in content and "AI" in content  # 占据布局可见（旧版只有空位索引）
+
+    def test_get_match_state_mahjong_hand_visible(self, manager: PlayManager) -> None:
+        """各族投影字段直达模型：麻将的 my_hand（玩家自己的手牌）不再被红线误伤。"""
+        session = manager.start("mahjong_guangdong", "p0", "easy")
+        fake = _ScriptedLLM(
+            [
+                ChatReply(text="", tool_calls=[ToolCall("get_match_state", {})]),
+                ChatReply(text="你的手牌如上，建议先拆边张。"),
+            ]
+        )
+        result = chat_turn(manager, "我手上有什么牌", llm=fake, game_id=session.game_id)
+        assert result.intent == "chat"
+        tool_msgs = [m for m in fake.seen[1] if m.get("role") == "tool"]
+        assert "my_hand" in tool_msgs[0]["content"]
+
+    def test_ask_hint_carries_level_and_hint(self, manager: PlayManager) -> None:
+        """提示回流：level 透传、机械提示全文进 ``role:"tool"``，模型成文讲解。"""
+        session = manager.start("moon_chess", "p_black", "easy")
+        fake = _ScriptedLLM(
+            [
+                ChatReply(text="", tool_calls=[ToolCall("ask_hint", {"level": "direction"}, id="c1")]),
+                ChatReply(text="这一步建议先占中心，控制两条线。"),
+            ]
+        )
+        result = chat_turn(manager, "这步怎么走", llm=fake, game_id=session.game_id)
+        assert result.intent == "hint"
+        assert result.params["level"] == "direction"
+        assert isinstance(result.params["hint"], dict) and result.params["hint"]
+        assert result.text == "这一步建议先占中心，控制两条线。"
+        tool_msgs = [m for m in fake.seen[1] if m.get("role") == "tool"]
+        assert "机械提示" in tool_msgs[0]["content"]
+
+    def test_ask_hint_budget_exhausted_returns_mechanical_hint(self, manager: PlayManager) -> None:
+        """预算耗尽也落在 hint 意图上（带 params），不退回纯 chat 丢参数。"""
+        session = manager.start("moon_chess", "p_black", "easy")
+        looping = ChatReply(text="", tool_calls=[ToolCall("ask_hint", {"level": "direction"})])
+        fake = _ScriptedLLM([looping, looping, looping])
+        result = chat_turn(manager, "这步怎么走", llm=fake, game_id=session.game_id)
+        assert result.intent == "hint"
+        assert result.params["level"] == "direction"
+        assert result.text  # 机械提示文本兜底
+
+
+class TestMatchReviewTools:
+    """赛后复盘（get_match_review）：时间线 + 关键节点喂给模型讲解。"""
+
+    def test_get_match_review_narrates_with_report(self, manager_history) -> None:
+        manager, history = manager_history
+        match_id = _recorded_moon_match(history)
+        fake = _ScriptedLLM(
+            [
+                ChatReply(text="", tool_calls=[ToolCall("get_match_review", {}, id="c1")]),
+                ChatReply(text="这局的关键在第 3 手：你在边路落子后局势开始倾斜。"),
+            ]
+        )
+        result = chat_turn(manager, "复盘一下关键手和失误点", llm=fake, match_history=history)
+        assert result.intent == "review"
+        assert result.params["match_id"] == match_id
+        report = result.params["report"]
+        assert report["key_nodes"]
+        assert report["key_nodes"][0]["what"]  # 动作内容进了报告（不再是纯序号）
+        assert result.text == "这局的关键在第 3 手：你在边路落子后局势开始倾斜。"
+        tool_msgs = [m for m in fake.seen[1] if m.get("role") == "tool"]
+        content = tool_msgs[0]["content"]
+        assert "走子时间线" in content
+        assert "你:" in content  # 动作时间线（moves[].action）
+
+    def test_get_match_review_without_history_answers_deterministically(self, manager_history) -> None:
+        manager, history = manager_history  # 空历史
+        fake = _ScriptedLLM(
+            [
+                ChatReply(text="", tool_calls=[ToolCall("get_match_review", {})]),
+                ChatReply(text="还没有打完的局，先来一局吧。"),
+            ]
+        )
+        result = chat_turn(manager, "复盘一下", llm=fake, match_history=history)
+        assert result.intent == "chat"
+        tool_msgs = [m for m in fake.seen[1] if m.get("role") == "tool"]
+        assert "还没有已结束的对局记录" in tool_msgs[0]["content"]
+
+    def test_system_prompt_mentions_latest_match(self, manager_history) -> None:
+        """终局后 session 移除 → system prompt 用最近一局补上下文（不再一片空白）。"""
+        manager, history = manager_history
+        _recorded_moon_match(history)
+        fake = _RecordingLLM(text="嗯")
+        chat_turn(manager, "在吗", llm=fake, match_history=history)
+        system = fake.seen[0]["content"]
+        assert "最近一局" in system
+        assert "get_match_review" in system
+
+    def test_build_tools_gates_state_tool_on_session(self, manager: PlayManager) -> None:
+        games = _games(manager)
+        names = [t["function"]["name"] for t in build_tools(games=games, session=None, active=[])]
+        assert "get_match_review" in names  # 复盘资料工具常驻（历史驱动）
+        assert "get_match_state" not in names
+        assert "ask_hint" not in names
+        session = manager.start("moon_chess", "p_black", "easy")
+        names = [t["function"]["name"] for t in build_tools(games=games, session=session, active=[])]
+        assert "get_match_state" in names
+        assert "ask_hint" in names
 
 
 # ── Conversation history ──────────────────────────────────────────
@@ -251,7 +625,41 @@ class TestChatTurnMisc:
 
 def _games(manager: PlayManager) -> list[dict]:
     return [
-        {"game_id": "moon_chess", "display_name": "月亮棋", "kind": "board", "family": "grid"},
-        {"game_id": "stochastic_gomoku", "display_name": "随机五子棋", "kind": "board", "family": "grid"},
-        {"game_id": "texas_holdem", "display_name": "德州扑克", "kind": "poker", "family": "poker"},
+        {
+            "game_id": "moon_chess",
+            "display_name": "月亮棋",
+            "description": "3×3 经典月亮棋：三子连珠即胜，棋盘满时最旧的棋子被挤出。",
+            "kind": "board",
+            "family": "grid",
+        },
+        {
+            "game_id": "stochastic_gomoku",
+            "display_name": "随机五子棋",
+            "description": "9×9 五子棋变体：每次落子后棋子有 50% 概率被随机抹去。",
+            "kind": "board",
+            "family": "grid",
+        },
+        {
+            "game_id": "texas_holdem",
+            "display_name": "德州扑克",
+            "description": "双人德州扑克：翻前/翻牌/转牌/河牌四轮下注，AI 使用混合求解器。",
+            "kind": "poker",
+            "family": "poker",
+        },
+        # UNO（display_name 与真实注册表一致——带括注/空格，短名匹配的
+        # 问题形态；别名表见 game_knowledge.GAME_ALIASES）。
+        {
+            "game_id": "uno",
+            "display_name": "UNO（经典）",
+            "description": "四人经典 UNO：108 张牌，同色或同符号接牌，先清空手牌者胜。",
+            "kind": "uno",
+            "family": "uno",
+        },
+        {
+            "game_id": "uno_seven_zero",
+            "display_name": "UNO 7-0（换手/移交）",
+            "description": "UNO 7-0 变体：打出 7 可与任一玩家换手，打出 0 全场手牌按方向移交。",
+            "kind": "uno",
+            "family": "uno",
+        },
     ]

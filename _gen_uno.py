@@ -23,6 +23,11 @@ Variants (``variants.options`` constants patches — all off in ``classic``):
 Game flow: deal(7×n) → flip(翻开首张，处理首张特殊效果) → play 循环：
 出牌（play / play_wild / play7）或摸牌（draw → pick → draw_result 可打可过）。
 
+万能牌选色（P1-7 修复）：手牌出 ``play_wild``（card + color）、摸到立即出
+``play_drawn_wild``（card + color）——两者都带 color 参数；``play_drawn``
+仅限非万能牌（否则 effect 里 color 恒 None，台面颜色会变成 "none"，
+下家只能再出万能牌，普通牌全部锁死）。
+
 Turn rotation is fully local/O(1) via ``env.turn`` / ``env.direction``;
 special-card effects are settled inline by the effector of the played card
 (skip=进2、reverse=翻方向（2 人局相当于 skip）、+2/+4=罚牌循环、7-0 换手/
@@ -405,17 +410,35 @@ def _actions():
             "canonicalKey": {"const": "draw"},
         },
         # ── draw_result：可打出刚摸的牌（若可打）或过 ──
+        # 万能牌必须走 play_drawn_wild（带 color）——play_drawn 的 effect
+        # color 恒 None，若允许万能牌经此打出，台面颜色会变成 "none"，
+        # 下家普通牌全部不可出（只能再出万能/摸牌，牌局实质锁死）。
         {
             "id": "play_drawn",
             "type": "move",
             "phases": ["draw_result"],
-            "params": {"card": _hand_param()},
+            "params": {"card": _hand_param({"not": _is_wild_expr()})},
             "legal": AND(
                 EQ(V("$card"), V("$env.drawnCard")),
                 CALL("can_play", V("$card"), CALL("hand_of", V("$env.turn"))),
             ),
             "effectRef": "do_play_drawn",
             "canonicalKey": {"template": "play:{card}"},
+        },
+        {
+            "id": "play_drawn_wild",
+            "type": "move",
+            "phases": ["draw_result"],
+            "params": {
+                "card": _hand_param(_is_wild_expr()),
+                "color": {"domain": list(COLORS)},
+            },
+            "legal": AND(
+                EQ(V("$card"), V("$env.drawnCard")),
+                CALL("can_play", V("$card"), CALL("hand_of", V("$env.turn"))),
+            ),
+            "effectRef": "do_play_drawn_wild",
+            "canonicalKey": {"template": "play:{card}:{color}"},
         },
         {
             "id": "pass",
@@ -878,11 +901,22 @@ def _effectors():
         ],
     }
     e["do_play_drawn"] = {
-        "description": "打出刚摸的牌",
+        "description": "打出刚摸的牌（非万能）",
         "ops": [
             _call_effect(
                 "do_play_card",
                 {"player": V("$env.turn"), "card": V("$card"), "color": C(None), "swapTarget": C(None), "advance": C(True)},
+            ),
+            _set_env("drawnCard", C(None)),
+            _call_effect("do_end_check"),
+        ],
+    }
+    e["do_play_drawn_wild"] = {
+        "description": "打出刚摸的万能牌（选色；play_wild 的摸牌即出对应版）",
+        "ops": [
+            _call_effect(
+                "do_play_card",
+                {"player": V("$env.turn"), "card": V("$card"), "color": V("$color"), "swapTarget": C(None), "advance": C(True)},
             ),
             _set_env("drawnCard", C(None)),
             _call_effect("do_end_check"),
@@ -1027,7 +1061,11 @@ def _phases():
         {"id": "flip", "actions": [], "description": "翻开首张牌（chance）"},
         {"id": "play", "actions": ["play", "play_wild", "play7", "draw"], "description": "玩家：出牌或摸牌"},
         {"id": "pick", "actions": [], "description": "摸牌（chance）"},
-        {"id": "draw_result", "actions": ["play_drawn", "pass"], "description": "玩家：可打出刚摸的牌或过"},
+        {
+            "id": "draw_result",
+            "actions": ["play_drawn", "play_drawn_wild", "pass"],
+            "description": "玩家：可打出刚摸的牌（万能牌选色）或过",
+        },
         {"id": "jump", "actions": ["jump_play", "jump_pass"], "description": "玩家：抢牌窗口"},
         {"id": "respond", "actions": ["stack2", "stack4", "take_penalty"], "description": "玩家：叠牌或吃罚牌"},
         {"id": "penalty_pick", "actions": [], "description": "罚牌摸取（chance）"},

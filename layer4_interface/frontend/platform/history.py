@@ -55,6 +55,8 @@ class MatchHistory:
             "persona": match.get("persona"),
             "hinted": match.get("hinted"),
             "ai_strength": match.get("ai_strength"),
+            # 教学对局标记（旧记录缺省 None = 非教学局）。
+            "teaching": match.get("teaching"),
         }
         path = self.data_dir / f"{match_id}.json"
         self._atomic_write(path, match)

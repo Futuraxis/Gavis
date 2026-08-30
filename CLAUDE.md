@@ -99,6 +99,7 @@ custom-games 工作流: layer1_translator/variant_translator.py（变体翻译�
 | `docs/user/play_undercover.md` | 谁是卧底使用说明（场景词对 × 4-12 人，text 发言桌游） |
 | `docs/user/play_uno.md` | UNO 使用说明（六变体 × 2-10 人，rules/uno.json） |
 | `docs/user/custom_games.md` | 自定义游戏使用说明（自然语言规则 / 模板变体 → 平台可对弈；四规则族） |
+| `docs/user/teaching.md` | 教学对局使用说明（教练看玩家自己的牌推理：agent/coach.py 三红线——玩家投影/双脑分离/raw_solver 防录制污染） |
 
 ## 常用命令
 

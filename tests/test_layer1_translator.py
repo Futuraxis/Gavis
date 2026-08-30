@@ -1131,7 +1131,44 @@ class TestLLMRuleTranslator:
         assert response.validation is not None
         assert response.validation.valid
         assert response.rules_json["meta"]["gameId"] == "stochastic_gomoku"
-        assert any("本地 LLM 不可用" in warning for warning in response.validation.warnings)
+        # 修复后：真实失败原因（端点不可达 / HTTP 404 model not found）由
+        # 统一客户端记录并上浮到警告，不再笼统报「本地 LLM 不可用（未返回内容）」。
+        assert any("LLM" in warning and "兜底" in warning for warning in response.validation.warnings)
+
+    def test_strict_llm_surfaces_transport_error_without_template_fallback(self) -> None:
+        """审查（LLM 兜底系统性排查）：``strict_llm=True`` 时 LLM 传输失败
+        直接返回失败响应（真实原因进 ``validation.errors``），绝不静默走
+        模板兜底产出与描述不符的游戏。"""
+
+        class DeadClient:
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 4096) -> str:
+                raise ConnectionError("LLM 服务不可达")
+
+        translator = LLMRuleTranslator(DeadClient(), strict_llm=True, run_engine_validation=False)
+        response = translator.translate(TranslateRequest(rule_text="随机五子棋，9x9，五连获胜"))
+
+        assert response.validation is not None
+        assert not response.validation.valid
+        assert response.rules_json == {}  # 没有模板产物
+        assert any("LLM 服务不可达" in error for error in response.validation.errors)
+
+    def test_translate_rules_json_strict_surfaces_failure_without_fallback(self) -> None:
+        class DeadClient:
+            def complete(self, messages: list[dict[str, str]], max_tokens: int = 4096) -> str:
+                raise TimeoutError("LLM 请求超时")
+
+        response = translate_rules_json(
+            "随机五子棋，9x9，五连获胜",
+            run_engine_validation=False,
+            use_llm=True,
+            strict_llm=True,
+            llm_client=DeadClient(),
+        )
+
+        assert response.validation is not None
+        assert not response.validation.valid
+        assert response.rules_json == {}
+        assert any("超时" in error for error in response.validation.errors)
 
 
 class TestVariantTranslator:

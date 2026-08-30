@@ -276,7 +276,9 @@ class TestMahjong:
     def test_snapshot_hides_ai_hand(self, manager: PlayManager):
         session = manager.start("mahjong_guangdong", "p1", "easy", player_count=4)
         snap = session.snapshot()
-        assert len(snap["my_hand"]) == 13  # AI (dealer) opened with a discard
+        # AI（庄家 p0）已先开一张；无选择 claim 被自动过后轮到 p1 摸牌
+        # （14 张 / action 阶段）；若碰/杠可选则停在 claim（13 张）。
+        assert len(snap["my_hand"]) in (13, 14)
         assert snap["ai_hand"] == []
 
     def test_snapshot_carries_family_for_every_variant(self, manager: PlayManager):
@@ -314,6 +316,42 @@ class TestMahjong:
             manager.move(session.game_id, action)
             guard += 1
         assert session.over or guard >= 300
+
+    def test_no_choice_claims_auto_passed(self, manager: PlayManager):
+        """无选择的 claim 回合由 run_ai 自动「过」掉，只把真实决策交给玩家。
+
+        回归背景：麻将 claim 阶段按 胡→碰/杠→吃 三档轮询每个响应者，
+        旧实现把只剩「过」的回合也浮给玩家——AI 每打一张牌玩家都要连点
+        三次「过」，而且出牌按钮在 claim 阶段仍可点，产生
+        「非法动作: discard {'type': 'discard', 'tile': ...}」。
+        修复后：凡是轮到人类的 claim 阶段，合法动作必有碰/杠/胡/吃之一。
+        """
+        session = manager.start("mahjong_sichuan", "p0", "easy")
+        guard = 0
+        while not session.over and guard < 400:
+            snap = session.snapshot()
+            legal = snap["legal"]
+            if not legal:
+                break
+            if snap["phase"] == "claim":
+                types = {action["type"] for action in legal}
+                assert types != {"claim_pass"}, "只剩「过」的 claim 不应浮给玩家"
+                action = {"type": "claim_pass"}
+            else:
+                tiles = [a["tile"] for a in legal if a["type"] == "discard"]
+                assert tiles, "出牌阶段手牌里的每张牌都应可打"
+                action = {"type": "discard", "tile": tiles[0]}
+            manager.move(session.game_id, action)
+            guard += 1
+        assert session.over or guard >= 400
+
+    def test_snapshot_carries_last_discarder(self, manager: PlayManager):
+        """快照携带 last_discarder（claim 操作条提示「谁打了哪张牌」）。"""
+        session = manager.start("mahjong_sichuan", "p0", "easy")
+        tile = next(action["tile"] for action in session.snapshot()["legal"] if action["type"] == "discard")
+        snap = manager.move(session.game_id, {"type": "discard", "tile": tile})
+        assert snap["last_discard"] is not None
+        assert snap["last_discarder"] in {"p0", "p1", "p2", "p3"}
 
 
 # ── UNO（P1-4/P1-6 平台接入）─────────────────────────────────────────

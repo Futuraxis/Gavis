@@ -68,6 +68,50 @@ export function apiPut<T>(path: string, body: unknown): Promise<T> {
   })
 }
 
+// ── 对话管理与存档 API (与后端 conversations.py 契约对齐) ────────
+
+export function listConversations(): Promise<{ conversations: import('../types').ConversationMeta[] }> {
+  return apiGet<{ conversations: import('../types').ConversationMeta[] }>('/conversations')
+}
+
+export function getConversation(convId: string): Promise<import('../types').Conversation> {
+  return apiGet<{ conversation: import('../types').Conversation }>(
+    `/conversations/${encodeURIComponent(convId)}`,
+  ).then((d) => d.conversation)
+}
+
+export function createConversation(
+  init?: { title?: string; messages?: import('../types').ChatMessage[] },
+): Promise<import('../types').Conversation> {
+  return apiPost<{ conversation: import('../types').Conversation }>('/conversations', init ?? {}).then(
+    (d) => d.conversation,
+  )
+}
+
+export function appendConversationMessages(
+  convId: string,
+  messages: import('../types').ChatMessage[],
+): Promise<import('../types').ConversationMeta> {
+  return apiPost<{ conversation: import('../types').ConversationMeta }>(
+    `/conversations/${encodeURIComponent(convId)}/messages`,
+    { messages },
+  ).then((d) => d.conversation)
+}
+
+export function updateConversation(
+  convId: string,
+  patch: { title?: string; archived?: boolean },
+): Promise<import('../types').ConversationMeta> {
+  return apiPost<{ conversation: import('../types').ConversationMeta }>(
+    `/conversations/${encodeURIComponent(convId)}`,
+    patch,
+  ).then((d) => d.conversation)
+}
+
+export function deleteConversation(convId: string): Promise<{ ok: boolean }> {
+  return request(`/conversations/${encodeURIComponent(convId)}`, { method: 'DELETE' })
+}
+
 // ── 在线学习 API ────────────────────────────────────────────────
 
 export function getLearningStatus(): Promise<{ learning: import('../types').LearningStatus[] }> {

@@ -7,7 +7,8 @@ interface Props {
   onAction?: (action: Record<string, unknown>) => void
 }
 
-/** 卡牌 id 形如 ``r7a``（色 r/b/g/y + 符号 + 副本号）、``wild`` / ``wild4``。 */
+/** 卡牌 id 形如 ``r7a``（色 r/b/g/y + 符号 + 副本号）、``wild_1..wild_4``（万能）、
+ * ``wild4_1..wild4_4``（万能+4）——万能牌每样 4 张，后缀数字是副本编号。 */
 const COLOR_NAMES: Record<string, string> = { r: '红', b: '蓝', g: '绿', y: '黄' }
 const COLOR_HEX: Record<string, string> = { r: '#c0392b', b: '#2471a3', g: '#1e8449', y: '#b7950b' }
 const SYMBOL_NAMES: Record<string, string> = { s: '禁止', r: '反转', d: '+2' }
@@ -35,8 +36,10 @@ interface CardInfo {
 }
 
 function cardInfo(id: string): CardInfo {
-  if (id === 'wild') return { color: null, glyph: '🌟', label: '万能' }
-  if (id === 'wild4') return { color: null, glyph: '+4', label: '+4 万能' }
+  // 注意先判 wild4：``wild4_2`` 同样以 ``wild`` 开头（此前只认裸 ``wild``/``wild4``，
+  // 实际 id 全带副本后缀 → 全部掉进 fallback 显示原始 id）。
+  if (id.startsWith('wild4')) return { color: null, glyph: '+4', label: '+4 万能' }
+  if (id.startsWith('wild')) return { color: null, glyph: '🌟', label: '万能' }
   const c = id[0]
   if (c in COLOR_NAMES) {
     const sym = id[1]
@@ -99,8 +102,10 @@ function payloadOf(l: UnoLegalAction): Record<string, unknown> {
 
 function actionLabel(l: UnoLegalAction): string {
   const info = l.card ? cardInfo(l.card) : null
+  const colorName = COLOR_NAMES[l.color ?? ''] ?? l.color ?? ''
   if (l.type === 'play') return `打出 ${info?.label ?? l.card}`
-  if (l.type === 'play_wild') return `${info?.label ?? '万能'} → ${COLOR_NAMES[l.color ?? ''] ?? l.color ?? ''}`
+  if (l.type === 'play_wild') return `${info?.label ?? '万能'} → ${colorName}`
+  if (l.type === 'play_drawn_wild') return `打出刚摸的 ${info?.label ?? '万能'} → ${colorName}`
   if (l.type === 'play7') return `出 7 与 ${l.target} 换手`
   if (l.type === 'play_drawn') return `打出刚摸的 ${info?.label ?? l.card}`
   if (l.type === 'jump_play') return `抢出 ${info?.label ?? l.card}`

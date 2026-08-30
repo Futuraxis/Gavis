@@ -87,6 +87,12 @@ class LearningManager:
 
     def on_finished(self, session: Any) -> None:
         """Persist the finished match's decisions + terminal record."""
+        if session.recorder is None:
+            # 开局时学习未启用的会话没有装配录制器（B5 门控按开局判定），
+            # 整局从未采集——没有轨迹可落盘，静默返回。回归：旧实现在此
+            # 无条件调 ``session.recorder.finish``，未启用学习的游戏（默认
+            # 配置下的月亮棋）终局最后一手直接 500（NoneType.finish）。
+            return
         session.recorder.finish(session)
 
     # ── Config ────────────────────────────────────────────────────

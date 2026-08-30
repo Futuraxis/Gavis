@@ -54,8 +54,9 @@ def complete_with_retry(
 
     Returns:
         ``(raw, error)``：成功时 ``(reply, None)``；持久传输异常时
-        ``("", 最后一次异常)``；持久空回复时 ``("", None)``（调用方按
-        "LLM 不可用" 处理）。
+        ``("", 最后一次异常)``；持久空回复时 ``("", 客户端 last_error)``
+        （统一客户端 fail-soft 时异常不抛出，真实原因记录在
+        ``client.last_error``，调用方据此定性"LLM 不可用"而非笼统报空）。
     """
     error: Exception | None = None
     for attempt in range(max(1, retries + 1)):
@@ -68,7 +69,9 @@ def complete_with_retry(
             continue
         if raw:
             return raw, None
-        error = None
+        # fail-soft 客户端不抛异常：取它记录的真实失败原因（HTTP 4xx/5xx、
+        # 端点不可达等），None 表示"确实无错误信息"。
+        error = getattr(client, "last_error", None) or None
     return "", error
 
 

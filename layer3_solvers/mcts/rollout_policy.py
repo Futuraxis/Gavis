@@ -19,13 +19,25 @@ from layer2_engine.core.state_graph import ActionInstance, State
 
 
 def root_player(state: State, engine, default_player: Optional[str] = None) -> Optional[str]:
-    """Rollout-start player id，解析失败时可用 default_player 兜底。"""
+    """Rollout-start player id，解析失败时可用 default_player 兜底。
+
+    chance 节点上，若规则声明了 ``env.lastActor`` 且非空，则它是"把
+    局面带进 chance 的那次动作的主人"的显式记录，优先采用；否则回退
+    ``env.turn``（实测现有规则在 chance 节点上 turn 尚未轮转：随机
+    五子棋的 switch_turn 在 chance 结算里，UNO/麻将摸牌 chance 上
+    turn 即摸牌人）。注意不能用 ``env.get("lastActor", turn)``：规则
+    把 lastActor 声明为 ``initial: null`` 时 key 存在而值为 None，
+    ``dict.get`` 的默认值不生效，会把有效的 turn 一并丢弃（UNO 摸牌
+    chance 曾因此视角丢失、整段 rollout 价值归零并告警）。
+    """
     env = state.get("env", {}) if isinstance(state, dict) else {}
     turn = env.get("turn")
     if isinstance(turn, dict):
         turn = turn.get("currentPlayerId", turn)
     if engine is not None and engine.get_node_type(state) == "chance":
-        turn = env.get("lastActor", turn)
+        actor = env.get("lastActor")
+        if actor is not None:
+            turn = actor
         if turn is None:
             warnings.warn("root_player: chance 节点缺少 env.lastActor，视角可能不正确")
     if turn is None and engine is not None:

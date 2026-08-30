@@ -17,6 +17,7 @@ import BattleSetup, { type BattleConfig } from '../components/BattleSetup'
 import ChatPanel from '../components/ChatPanel'
 import ResultOverlay from '../components/ResultOverlay'
 import VanishToast from '../components/VanishToast'
+import { snapshotChatToMessages } from '../chat/snapshotChat'
 import GomokuBoard from '../components/boards/GomokuBoard'
 import MahjongTable from '../components/boards/MahjongTable'
 import MoonBoard from '../components/boards/MoonBoard'
@@ -86,11 +87,15 @@ export default function BattlePage() {
   useEffect(() => {
     if (!activeId || session) return
     apiPost<{ session: Snapshot }>('/match/state', { game_id: activeId })
-      .then((data) => setSession(data.session))
+      .then((data) => {
+        setSession(data.session)
+        drainChat(data.session)
+      })
       .catch(() => {
         setError('对局已失效（服务器可能已重启），请重新开始')
         setSearchParams({})
       })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, session, setSearchParams])
 
   function pushAgent(text: string, mood: Mood) {
@@ -99,6 +104,12 @@ export default function BattlePage() {
 
   function pushPlayer(text: string) {
     setChat((prev) => [...prev, { id: uid(), role: 'player', text, ts: Date.now() }])
+  }
+
+  /** 把后端快照里待投递的陪伴/教练消息（chat 增量）落进对话流。 */
+  function drainChat(snap: Snapshot) {
+    const msgs = snapshotChatToMessages(snap)
+    if (msgs.length > 0) setChat((prev) => [...prev, ...msgs])
   }
 
   function greet(p: PersonaKey) {
@@ -118,6 +129,7 @@ export default function BattlePage() {
         hint_level: config.hintLevel,
         pacing: config.pacing,
         adaptive: config.adaptive,
+        teaching: config.teaching,
       })
       setSession(data.session)
       setPendingCell(null)
@@ -127,6 +139,8 @@ export default function BattlePage() {
       setChat([])
       setSearchParams({ game: data.session.game_id })
       greet(config.persona)
+      // 教练开场（teach_greet / teach_turn）与陪伴消息都在快照 chat 增量里。
+      drainChat(data.session)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -151,6 +165,7 @@ export default function BattlePage() {
         action: action,
       })
       setSession(data.session)
+      drainChat(data.session) // 教练讲评（teach_move）与导读（teach_turn）
       setPendingCell(null)
       setStepKey((k) => k + 1)
     } catch (err) {
@@ -272,6 +287,11 @@ export default function BattlePage() {
         <h1 className="page-title">{game.display_name} · 人机对战</h1>
         <span className="badge accent">{DIFFICULTY_SHORT[session.difficulty] ?? session.difficulty}</span>
         <span className="badge">{SEAT_SHORT[session.player_pid] ?? session.player_pid}</span>
+        {session.teaching && (
+          <span className="badge" title="教练能看到你的牌并推理；看不到 AI/对手的牌">
+            📖 教学对局
+          </span>
+        )}
         {persona && <span className="badge">{PERSONA_NAMES[persona]}</span>}
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <button className="btn" onClick={toggleMute}>

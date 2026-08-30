@@ -307,7 +307,9 @@ def _build_snapshot(session: GameSession) -> dict:
             legal.append({"type": action.template_id, "target": target})
 
     assembly = _assembly_of(session)
-    ai_mode = assembly.mode if assembly is not None else session.last_ai_info.get("ai_mode", "random")
+    # ai_mode 优先读 latest 决策标注（_run_ai 每步写入；LLM 实际失败时如实
+    # 降级为 "random"），未跑过 AI 的新会话回退到探测时的 assembly.mode。
+    ai_mode = session.last_ai_info.get("ai_mode") or (assembly.mode if assembly is not None else "random")
 
     phase = obs_env.get("phase", env.get("phase"))
 
@@ -426,6 +428,11 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
                 solver = session.solver
             state = session.state
             action = solver.select_action(state)
+            # 探测通过但 LLM 调用实际失败（OllamaSolver.last_call_ok=False →
+            # 随机兜底）：如实标注 ai_mode，避免前端继续显示「本地大模型」。
+            # 非 Ollama 求解器（random 等）没有该属性，默认 True 不受影响。
+            if not getattr(solver, "last_call_ok", True):
+                session.last_ai_info["ai_mode"] = "random"
             if action is None:  # solver found nothing — random fallback
                 legal = session.engine.get_legal_actions(session.state)
                 action = random.choice(legal) if legal else None

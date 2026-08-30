@@ -55,6 +55,7 @@ def translate_rules_json(
     external_frontend: dict[str, Any] | None = None,
     run_engine_validation: bool = True,
     use_llm: bool = False,
+    strict_llm: bool = False,
     llm_client: RuleLLMClient | None = None,
     llm_model: str | None = None,
     llm_model_path: str | Path | None = None,
@@ -69,6 +70,14 @@ def translate_rules_json(
     When ``use_llm`` is False, ``llm_client`` / ``llm_model`` / legacy
     ``llm_model_path`` are ignored; a log warning is emitted so callers are
     not silently misled.
+
+    ``strict_llm=True`` (meaningful only with ``use_llm=True``) turns any
+    LLM failure — API 4xx/5xx, unreachable endpoint, timeout, unparseable
+    output — into a failed response with the real error in
+    ``validation.errors``, instead of silently falling back to templates.
+    Callers that explicitly request LLM translation (e.g. the platform
+    custom-game flow) should enable it so an API error cannot produce a
+    silently wrong template game.
     """
     if llm_model_path is not None:
         logger.warning("translate_rules_json: llm_model_path 已废弃，请改用 llm_model（模型名）")
@@ -81,6 +90,7 @@ def translate_rules_json(
                 llm_client,
                 llm_model=llm_model,
                 run_engine_validation=run_engine_validation,
+                strict_llm=strict_llm,
             )
         )
         return translator.translate_text(

@@ -12,6 +12,7 @@ Run::
 from __future__ import annotations
 
 import argparse
+import time
 import urllib.parse
 from dataclasses import asdict
 from http import HTTPStatus
@@ -29,7 +30,9 @@ from ...review import analyze as review_analyze
 from ..common.http_utils import BodyTooLargeError, read_json_body, send_error_json, send_json
 from .benchmark import SOLVER_OPTIONS, BenchmarkRunner
 from .chat import chat_turn
+from .conversations import ConversationError, ConversationStore
 from .custom_games import CustomGameError, CustomGameRegistry, CustomGameStore
+from .game_knowledge import GAME_ALIASES
 from .games import GAMES, PlayError
 from .history import HistoryError, MatchHistory
 from .session import _BUILTIN_FAMILY, PlayManager
@@ -41,6 +44,10 @@ PORT = 8770
 
 #: 聊天编排共享的统一 LLM 客户端（懒加载单例；不可用时自动走正则兜底）。
 _CHAT_LLM: LLMClient | None = None
+#: 未探测到端点时重探测的最小间隔（秒）——避免每个请求都打 /v1/models，
+#: 同时让"平台启动后 ollama 才拉起"的场景能自动接上 LLM。
+_CHAT_LLM_PROBE_INTERVAL_S = 5.0
+_last_chat_probe = 0.0
 
 #: dist 未构建时的浏览器引导页（503）：三步自救，替代裸 JSON 报错。
 _DIST_MISSING_HTML = """<!DOCTYPE html>
@@ -73,9 +80,19 @@ _DIST_MISSING_HTML = """<!DOCTYPE html>
 
 
 def _get_chat_llm() -> LLMClient | None:
-    global _CHAT_LLM
+    """共享聊天 LLM 客户端；未探测到时周期性重探测（见 _CHAT_LLM_PROBE_INTERVAL_S）。
+
+    Fail-soft 客户端：中途 API 错误由 ``chat_turn`` 落到正则兜底并在
+    ``LLMClient`` 内记录 + 告警日志（可观测，不静默）。
+    """
+    global _CHAT_LLM, _last_chat_probe
     if _CHAT_LLM is None:
-        _CHAT_LLM = LLMClient() if LLMClient.available() else None
+        now = time.monotonic()
+        if now - _last_chat_probe < _CHAT_LLM_PROBE_INTERVAL_S:
+            return None
+        _last_chat_probe = now
+        if LLMClient.available():
+            _CHAT_LLM = LLMClient()
     return _CHAT_LLM
 
 
@@ -87,6 +104,7 @@ def make_handler(
     learning: LearningManager | None = None,
     profile_store: ProfileStore | None = None,
     custom: CustomGameRegistry | None = None,
+    conversations: ConversationStore | None = None,
 ) -> type:
     """Build a handler class bound to the given platform services.
 
@@ -143,6 +161,10 @@ def make_handler(
                     self._handle_review_get(path[len("/api/review/") :])
                 elif path == "/api/match/active":
                     self._handle_match_active()
+                elif path == "/api/conversations":
+                    self._handle_conversations_list()
+                elif path.startswith("/api/conversations/"):
+                    self._handle_conversation_get(path[len("/api/conversations/") :])
                 elif path == "/api/benchmark":
                     self._handle_benchmark_list()
                 elif path == "/api/benchmark/status":
@@ -160,7 +182,7 @@ def make_handler(
                         self._send_dist_missing()
                         return
                     super().do_GET()
-            except (PlayError, HistoryError, CustomGameError) as exc:
+            except (PlayError, HistoryError, CustomGameError, ConversationError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
             except (KeyError, TypeError, ValueError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, f"参数错误: {exc}")
@@ -197,6 +219,12 @@ def make_handler(
                     self._handle_agent_say()
                 elif path == "/api/chat":
                     self._handle_chat()
+                elif path == "/api/conversations":
+                    self._handle_conversations_create()
+                elif path.startswith("/api/conversations/") and path.endswith("/messages"):
+                    self._handle_conversation_append(path[len("/api/conversations/") : -len("/messages")])
+                elif path.startswith("/api/conversations/"):
+                    self._handle_conversation_update(path[len("/api/conversations/") :])
                 elif path == "/api/profile":
                     self._handle_profile_save()
                 elif path == "/api/profile/clear":
@@ -205,7 +233,7 @@ def make_handler(
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
             except BodyTooLargeError as exc:
                 send_error_json(self, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
-            except (PlayError, HistoryError, CustomGameError) as exc:
+            except (PlayError, HistoryError, CustomGameError, ConversationError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
             except (KeyError, TypeError, ValueError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, f"参数错误: {exc}")
@@ -218,9 +246,11 @@ def make_handler(
             try:
                 if path.startswith("/api/custom/games/"):
                     self._handle_custom_game_delete(path[len("/api/custom/games/") :])
+                elif path.startswith("/api/conversations/"):
+                    self._handle_conversation_delete(path[len("/api/conversations/") :])
                 else:
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
-            except (PlayError, HistoryError, CustomGameError) as exc:
+            except (PlayError, HistoryError, CustomGameError, ConversationError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
             except (KeyError, TypeError, ValueError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, f"参数错误: {exc}")
@@ -237,7 +267,7 @@ def make_handler(
                     send_error_json(self, HTTPStatus.NOT_FOUND, f"未知接口: {path}")
             except BodyTooLargeError as exc:
                 send_error_json(self, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
-            except (PlayError, HistoryError, CustomGameError) as exc:
+            except (PlayError, HistoryError, CustomGameError, ConversationError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, str(exc))
             except (KeyError, TypeError, ValueError) as exc:
                 send_error_json(self, HTTPStatus.BAD_REQUEST, f"参数错误: {exc}")
@@ -264,6 +294,7 @@ def make_handler(
                         "player_counts": list(spec.player_counts),
                         "difficulties": list(spec.difficulty_budgets),
                         "solver_options": list(SOLVER_OPTIONS.get(spec.game_id, ())),
+                        "aliases": list(GAME_ALIASES.get(spec.game_id, ())),
                     }
                 )
             if custom is not None:
@@ -346,6 +377,9 @@ def make_handler(
             # 未传 player_count → None，由 session 按注册表默认解析（麻将 4 人）。
             raw_count = payload.get("player_count")
             player_count = int(raw_count) if raw_count is not None else None
+            # 教学对局：teaching=true 或 mode="teaching"（教练能看到玩家
+            # 自己的牌并推理；见 session.py / agent/coach.py）。
+            teaching = bool(payload.get("teaching", False)) or str(payload.get("mode", "")) == "teaching"
             session = manager.start(
                 payload["game_id"],
                 str(payload.get("player_pid", "random")),
@@ -355,6 +389,7 @@ def make_handler(
                 hint_level=str(payload.get("hint_level", "off")),
                 pacing=str(payload.get("pacing", "standard")),
                 adaptive_enabled=bool(payload.get("adaptive", False)),
+                teaching=teaching,
             )
             send_json(self, HTTPStatus.OK, {"ok": True, "session": session.snapshot()})
 
@@ -386,21 +421,25 @@ def make_handler(
 
             ``history`` is optional prior ``user``/``assistant`` turns
             (newest last) that the frontend sends for conversation
-            context; ``chat_turn`` sanitizes and bounds it.
+            context; ``chat_turn`` sanitizes and bounds it.  The
+            platform ``MatchHistory`` (closure ``history``) is passed
+            through so the ``get_match_review`` info tool and the
+            “最近一局” prompt line have a data source.
             """
             payload = read_json_body(self)
             text = str(payload.get("text", ""))
             game_id = payload.get("game_id")
             if game_id is not None:
                 game_id = str(game_id)
-            history = payload.get("history")
+            chat_history = payload.get("history")
             result = chat_turn(
                 manager,
                 text,
                 llm=_get_chat_llm(),
                 game_id=game_id,
                 custom=custom,
-                history=history if isinstance(history, list) else None,
+                history=chat_history if isinstance(chat_history, list) else None,
+                match_history=history,
             )
             send_json(
                 self,
@@ -418,6 +457,80 @@ def make_handler(
             payload = read_json_body(self)
             hint = manager.hint(payload["game_id"], str(payload.get("level", "direction")))
             send_json(self, HTTPStatus.OK, {"ok": True, "hint": hint})
+
+        # ── Conversations (对话管理与存档) ────────────────────────
+        # 存档随每回合增量 append（前端懒建会话、批式同步）；/api/chat 本身
+        # 保持无状态——LLM 上下文仍由前端每轮携带，持久化与编排解耦。
+
+        def _handle_conversations_list(self) -> None:
+            """List conversation metadata (archived included, newest first)."""
+            if conversations is None:
+                send_error_json(self, HTTPStatus.NOT_FOUND, "对话存储未启用")
+                return
+            send_json(self, HTTPStatus.OK, {"ok": True, "conversations": conversations.list_conversations()})
+
+        def _handle_conversation_get(self, conv_id: str) -> None:
+            """Full record (messages included) for one conversation."""
+            if conversations is None:
+                send_error_json(self, HTTPStatus.NOT_FOUND, "对话存储未启用")
+                return
+            send_json(
+                self,
+                HTTPStatus.OK,
+                {"ok": True, "conversation": conversations.get(urllib.parse.unquote(conv_id))},
+            )
+
+        def _handle_conversations_create(self) -> None:
+            """Create a conversation (optionally seeded with messages)."""
+            if conversations is None:
+                send_error_json(self, HTTPStatus.NOT_FOUND, "对话存储未启用")
+                return
+            payload = read_json_body(self)
+            messages = payload.get("messages")
+            record = conversations.create(
+                title=str(payload.get("title", "")),
+                messages=messages if isinstance(messages, list) else None,
+            )
+            send_json(self, HTTPStatus.OK, {"ok": True, "conversation": record})
+
+        def _handle_conversation_append(self, conv_id: str) -> None:
+            """Append one batch of rendered messages (incremental sync)."""
+            if conversations is None:
+                send_error_json(self, HTTPStatus.NOT_FOUND, "对话存储未启用")
+                return
+            payload = read_json_body(self)
+            messages = payload.get("messages")
+            if not isinstance(messages, list):
+                raise KeyError("缺少 messages")
+            record = conversations.append_messages(urllib.parse.unquote(conv_id), messages)
+            meta = {k: v for k, v in record.items() if k != "messages"}
+            meta["message_count"] = len(record.get("messages", []))
+            send_json(self, HTTPStatus.OK, {"ok": True, "conversation": meta})
+
+        def _handle_conversation_update(self, conv_id: str) -> None:
+            """Rename and/or (un)archive a conversation."""
+            if conversations is None:
+                send_error_json(self, HTTPStatus.NOT_FOUND, "对话存储未启用")
+                return
+            payload = read_json_body(self)
+            title = payload.get("title")
+            archived = payload.get("archived")
+            record = conversations.update(
+                urllib.parse.unquote(conv_id),
+                title=str(title) if title is not None else None,
+                archived=bool(archived) if archived is not None else None,
+            )
+            meta = {k: v for k, v in record.items() if k != "messages"}
+            meta["message_count"] = len(record.get("messages", []))
+            send_json(self, HTTPStatus.OK, {"ok": True, "conversation": meta})
+
+        def _handle_conversation_delete(self, conv_id: str) -> None:
+            """Delete one conversation record permanently."""
+            if conversations is None:
+                send_error_json(self, HTTPStatus.NOT_FOUND, "对话存储未启用")
+                return
+            conversations.delete(urllib.parse.unquote(conv_id))
+            send_json(self, HTTPStatus.OK, {"ok": True})
 
         def _handle_profile_get(self) -> None:
             if profile_store is None:
@@ -483,13 +596,17 @@ def make_handler(
 
         def _handle_rules_translate(self) -> None:
             payload = read_json_body(self)
+            # use_llm=True → strict_llm=True：显式要求 LLM 翻译时，API 错误/
+            # 传输失败如实上报（validation.errors 带真实原因），不静默模板兜底。
+            use_llm = bool(payload.get("use_llm", False))
             response = translate_rules_json(
                 str(payload.get("rule_text", "")),
                 source_lang=str(payload.get("source_lang", "zh")),
                 game_name=payload.get("game_name"),
                 external_frontend=payload.get("external_frontend"),
                 run_engine_validation=bool(payload.get("run_engine_validation", True)),
-                use_llm=bool(payload.get("use_llm", False)),
+                use_llm=use_llm,
+                strict_llm=use_llm,
                 llm_model=payload.get("llm_model"),
                 llm_model_path=payload.get("llm_model_path"),
             )
@@ -570,6 +687,8 @@ def main() -> None:
     adaptive = AdaptiveController()
     # 自定义游戏注册表（data/custom_games/，与 matches/online_learning 并列）。
     custom_registry = CustomGameRegistry(CustomGameStore(args.data_dir.parent / "custom_games"))
+    # 对话存档（data/conversations/，与 matches/online_learning/custom_games 并列）。
+    conversation_store = ConversationStore(args.data_dir.parent / "conversations")
 
     def _make_agent(persona_key: str) -> DialogueEngine | None:
         persona = PERSONAS.get(persona_key)
@@ -599,6 +718,7 @@ def main() -> None:
         learning=learning,
         profile_store=profiles,
         custom=custom_registry,
+        conversations=conversation_store,
     )
     httpd = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Gavis 平台服务: http://{args.host}:{args.port}  (API 前缀 /api, 静态目录 {DIST_DIR})")

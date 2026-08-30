@@ -52,7 +52,12 @@ class LLMRuleTranslator:
         warnings: list[str] = []
         # P2-22 修复：规则翻译必须确定性 —— 默认客户端固定 temperature=0
         # （统一客户端默认 0.2 会让同一规则文本跨次产出不同 rules.json）。
-        client = self.client or LLMClient(model=self.llm_model, temperature=RULE_LLM_TEMPERATURE)
+        # strict_llm=True 时默认客户端 fail_hard：API 4xx/5xx、端点不可达等
+        # 一律抛 LLMClientError，由 complete_with_retry 捕获并带真实原因
+        # 进入 _fallback_or_error 的 strict 分支（不模板兜底、错误上浮）。
+        client = self.client or LLMClient(
+            model=self.llm_model, temperature=RULE_LLM_TEMPERATURE, fail_hard=self.strict_llm
+        )
         messages = self.prompt_builder.build_initial_messages(request)
         attempts = self.max_repair_attempts + 1
         last_validation = ValidationResult(valid=False, errors=["LLM 未返回可验证的 rules JSON"])

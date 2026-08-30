@@ -213,6 +213,24 @@ class TestDeterministicPath:
         assert response.validation.valid
         assert any("LLM 生成失败" in w for w in response.validation.warnings)
 
+    def test_strict_llm_surfaces_failure_without_deterministic_fallback(self) -> None:
+        """审查（LLM 兜底系统性排查）：``strict_llm=True`` 时 LLM 路径失败
+        直接返回失败响应（真实原因进 ``validation.errors``），绝不静默回退
+        确定性路径产出与变更描述不符的游戏。"""
+
+        class DeadClient:
+            def complete(self, messages, max_tokens=None):  # noqa: ANN001, ANN202
+                raise ConnectionError("LLM API 连接失败")
+
+        response = translate_variant_rules(
+            "stochastic_gomoku", "15x15", use_llm=True, llm_client=DeadClient(), strict_llm=True
+        )
+
+        assert response.validation is not None
+        assert not response.validation.valid
+        assert response.rules_json == {}  # 没有确定性模板产物
+        assert any("LLM API 连接失败" in e for e in response.validation.errors)
+
     def test_werewolf_matching_composition_keeps_template(self) -> None:
         response = translate_variant_rules("werewolf", "狼人杀 9人局，3狼，1预言家，1女巫，1猎人", use_llm=False)
 
@@ -381,7 +399,9 @@ class TestLLMPath:
         assert response.validation is not None
         assert response.validation.valid
         assert response.rules_json["constants"]["board_size"] == 15
-        assert any("LLM 不可用" in w for w in response.validation.warnings)
+        # 修复后：真实失败原因（端点不可达 / HTTP 400/404）上浮，不再笼统
+        # 报「LLM 不可用（未返回内容）」，且仍确定性兜底。
+        assert any("LLM 生成失败" in w for w in response.validation.warnings)
 
     def test_bad_llm_client_falls_back(self) -> None:
         class BrokenClient:

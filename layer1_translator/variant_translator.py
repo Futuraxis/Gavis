@@ -108,6 +108,7 @@ class VariantTranslator:
         engine_validator: EngineValidator | None = None,
         max_repair_attempts: int = 1,
         patch_mode: bool | None = None,
+        strict_llm: bool = False,
     ) -> None:
         self.run_engine_validation = run_engine_validation
         self.rules_dir = rules_dir or _RULES_DIR
@@ -117,6 +118,11 @@ class VariantTranslator:
         #: LLM 增量补丁协议开关：None=自动（模板超出全量改写上限时自动改用
         #: 补丁）、True=强制补丁、False=只用全量改写（旧行为，大模板跳过 LLM）。
         self.patch_mode = patch_mode
+        #: strict 模式：LLM 路径任何失败（API 错误/传输失败/输出不可用）直接
+        #: 返回失败响应（真实错误进 validation.errors），不再回退确定性路径 —
+        #: 显式要求 LLM 翻译的调用方（平台 use_llm=True）用它防止静默产出
+        #: 与描述不符的模板游戏；默认客户端此时也以 fail_hard 构造。
+        self.strict_llm = strict_llm
 
     # ── Public entrypoint ─────────────────────────────────────────
 
@@ -161,6 +167,19 @@ class VariantTranslator:
             if llm_response is not None:
                 return llm_response
             reason = "；".join(VariantTranslator._unique(errors + warnings)) or "LLM 路径未产生有效产物"
+            if self.strict_llm:
+                # strict 模式：LLM 失败即失败，不回退确定性路径 —— 防止
+                # 模板猜测产出与变更描述不符的游戏，真实原因上浮。
+                logger.warning("变体翻译 LLM 路径失败（strict_llm=True，不回退确定性路径）: %s", reason)
+                return TranslateResponse(
+                    rules_json={},
+                    confidence=0.0,
+                    validation=ValidationResult(
+                        valid=False,
+                        errors=VariantTranslator._unique(errors) or ["LLM 变体翻译失败"],
+                        warnings=VariantTranslator._unique(warnings),
+                    ),
+                )
             logger.warning("变体翻译回退确定性路径: %s", reason)
 
         response = self._translate_deterministic(
@@ -527,7 +546,9 @@ class VariantTranslator:
             )
             return None, warnings, errors
         # P2-22 修复：规则翻译必须确定性 —— 默认客户端固定 temperature=0。
-        client = llm_client or LLMClient(model=llm_model, temperature=RULE_LLM_TEMPERATURE)
+        # strict_llm=True 时默认客户端 fail_hard：API 错误/传输失败抛
+        # LLMClientError，由 complete_with_retry 捕获并带真实原因上报。
+        client = llm_client or LLMClient(model=llm_model, temperature=RULE_LLM_TEMPERATURE, fail_hard=self.strict_llm)
         messages = self._build_messages(
             template_id, change_text, template, source_lang=source_lang, game_name=game_name
         )
@@ -605,7 +626,8 @@ class VariantTranslator:
         warnings: list[str] = []
         errors: list[str] = []
         # P2-22 修复：规则翻译必须确定性 —— 默认客户端固定 temperature=0。
-        client = llm_client or LLMClient(model=llm_model, temperature=RULE_LLM_TEMPERATURE)
+        # strict_llm=True → fail_hard（见 _try_llm_rewrite 注释）。
+        client = llm_client or LLMClient(model=llm_model, temperature=RULE_LLM_TEMPERATURE, fail_hard=self.strict_llm)
         messages = self._build_patch_messages(
             template_id, change_text, template, source_lang=source_lang, game_name=game_name
         )
@@ -860,6 +882,7 @@ def translate_variant_rules(
     source_lang: str = "zh",
     game_name: str | None = None,
     use_llm: bool = True,
+    strict_llm: bool = False,
     llm_client: RuleLLMClient | None = None,
     llm_model: str | None = None,
     llm_model_path: str | Path | None = None,
@@ -883,13 +906,19 @@ def translate_variant_rules(
     patch protocol, ``False`` keeps only the full rewrite.  Products are
     repaired against validator feedback and validated with
     ``EngineValidator``; on any LLM failure the deterministic parameter
-    path applies parsed template parameters directly.  Both paths
+    path applies parsed template parameters directly (unless
+    ``strict_llm=True``, which surfaces the LLM failure instead — for
+    callers that explicitly require LLM translation).  Both paths
     validate with ``EngineValidator``; total failure returns
     ``rules_json={}`` with a clear Chinese validation error — an
     unvalidated artifact is never returned.  ``run_engine_validation=False``
     switches the product check to ``SchemaValidator`` only.
     """
-    translator = VariantTranslator(run_engine_validation=run_engine_validation, patch_mode=patch_mode)
+    translator = VariantTranslator(
+        run_engine_validation=run_engine_validation,
+        patch_mode=patch_mode,
+        strict_llm=strict_llm,
+    )
     return translator.translate(
         base_game_id,
         change_text,
