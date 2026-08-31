@@ -48,6 +48,10 @@ class MatchHistory:
             "winner": match.get("winner"),
             "over": match.get("over"),
             "moves": len(match.get("moves", [])),
+            # 玩家视角胜负（layer4_interface/result 解析；阵营胜者正确归边——
+            # 旧记录缺省 None，前端回退 pid 比较）。供战绩/历史/聊天统计复用，
+            # 避免社交阵营胜者在列表页被误标胜负。
+            "won": match.get("won"),
             "started_at": match.get("started_at"),
             "finished_at": match.get("finished_at"),
             # 陪伴感扩展（PRD 4.1.5 / 4.4.4）：性格、是否用过提示、本局 AI 强度档

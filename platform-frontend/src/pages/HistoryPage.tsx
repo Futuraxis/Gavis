@@ -54,7 +54,9 @@ export default function HistoryPage() {
             </thead>
             <tbody>
               {matches.map((m) => {
-                const won = m.winner === m.player_pid
+                // 后端已把阵营胜者解析为玩家视角 won（社交游戏 winner=undercover 等；
+                // 旧记录缺省 → 回退 pid 比较）。
+                const won = m.won ?? (m.winner != null && m.winner === m.player_pid)
                 const badge = m.winner == null ? '' : won ? 'win' : 'lose'
                 const label = m.winner == null ? '平局' : won ? '胜利 🎉' : '失败'
                 return (

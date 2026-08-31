@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..frontend.engine_helpers import canonical_family_text, game_family
+from ..result import player_won
 from ..solver_provider import SolverHandle, SolverProvider
 from .evaluation import evaluate
 from .hidden_guard import assert_no_hidden, infer_game_id
@@ -136,10 +137,19 @@ class Skills:
     @staticmethod
     def summarize_result(ctx: SkillContext, engine: Any, winner: str, player_pid: str) -> dict[str, Any]:
         """赛后胜负机械事实."""
-        won = winner == player_pid
+        # 社交游戏的 winner 是阵营名而非 pid（卧底获胜一局 winner=undercover）：
+        # 直接 winner==player_pid 会把玩家胜误判成本方落败（实测 e7deb84b）——
+        # 走 layer4_interface.result 的统一解析（身份表缺失时用评估效用符号）。
+        score = None
+        if isinstance(ctx.evaluation, dict):
+            try:
+                score = float(ctx.evaluation.get("score"))
+            except (TypeError, ValueError):
+                score = None
+        won = player_won(winner, player_pid, None, ctx.observation, score=score)
         # 不含原始 pid：摘要经对话载荷渗入 LLM 文本时，pid 会被复述成
         # 「p_sb 赢了」（见 evaluation.py 同源修复）。「本方」= 玩家视角。
-        summary = "本方获胜" if won else "本方落败"
+        summary = "本方获胜" if won is True else ("本方落败" if won is False else "平局")
         return {
             "winner": winner,
             "player_pid": player_pid,

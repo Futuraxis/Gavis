@@ -45,11 +45,18 @@ HIDDEN_FIELDS: frozenset[str] = frozenset(
         "drawn",
         "my_hole",
         "ai_hole",
-        # 麻将 —— 各家手牌、未摸牌墙、胡牌手牌
+        # 麻将 / UNO —— 各家手牌、未摸牌墙、胡牌手牌（UNO 六变体最多 10 人，
+        # 2-4 人之外还有 hand_p4…hand_p9 的隐藏数组，一并列入）
         "hand_p0",
         "hand_p1",
         "hand_p2",
         "hand_p3",
+        "hand_p4",
+        "hand_p5",
+        "hand_p6",
+        "hand_p7",
+        "hand_p8",
+        "hand_p9",
         "my_hand",
         "ai_hand",
         "win_hand",
@@ -67,10 +74,36 @@ _GENERIC_REWRITE = "这把牌先不细说。"
 #: 「sA」；不含「一对K」「同花」这类无花色牌力描述（不误伤）。
 _CARD_TOKEN = r"(?:(?:黑桃|红桃|方块|梅花)|[♠♥♦♣]|[SHDC])(?:10|[2-9JQKA])"
 
+#: 无花色前缀的**具体单牌持牌表述**（「我手里有张K」「拿着一张3」「握着
+#: 5」）——只拦“持有一张具体点数”的报牌措辞，不误伤「一对K」「三条」
+#: 「同花」这类牌力描述（它们不带 张/拿着/握着 等单牌持牌框架）。
+_RANK_ONLY_HOLD = (
+    r"(?:手里有张|手上有张|手里有|手上有|有一张|有张|拿着张|拿着一张|"
+    r"攥着|握着|捏着|正好是张?)\s*(?:10|[2-9JQKA])"
+)
+
 _TEXAS_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(rf"(?:{_CARD_TOKEN}\s*){{2,}}", re.IGNORECASE),
+    re.compile(rf"{_RANK_ONLY_HOLD}", re.IGNORECASE),
     re.compile(r"(?:我的|你的|对手的?|AI的?|他的|她的)?\s*底牌", re.IGNORECASE),
     re.compile(r"hole\s*cards?", re.IGNORECASE),
+)
+
+#: UNO —— 六变体 2-10 人。具体牌面：数字牌「红5/蓝0」（色+数）、功能牌
+#: 「绿禁止/红反转/黄+2」、万能「万能/万能四」。顶牌色（「红色」）等公开
+#: 信息不含这些具体牌名记法，不误伤；「手牌」持牌措辞沿用麻将 2+ 张牌力
+#: 表述规则。
+_UNO_COLOR = r"(?:红|蓝|绿|黄)"
+_UNO_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(rf"{_UNO_COLOR}\s*(?:10|[0-9])", re.IGNORECASE),
+    re.compile(rf"{_UNO_COLOR}\s*(?:禁止|反转|\+2)", re.IGNORECASE),
+    # 无颜色前缀的动作牌持牌表述（「我手里有张+2」「打出+2」）——+2 无歧义
+    # （只可能是罚牌名），持牌动词框架（有张/有一张/拿到/摸到/打出…）里报
+    # 具体动作牌同样是明牌；「禁止」「反转」「万能」单独出现可能是普通用语
+    # （「禁止这样做」），不在此列，避免误伤。
+    re.compile(r"(?:有张|有一张|拿到|摸到|打出|甩出|扔出)\s*\+2", re.IGNORECASE),
+    re.compile(r"(?:万能(?:四)?牌?|万能四)", re.IGNORECASE),
+    re.compile(r"(?:我的|你的|对手的?|AI的?|他的|她的)?\s*手牌", re.IGNORECASE),
 )
 
 _MAHJONG_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -93,6 +126,12 @@ _PATTERNS_BY_GAME: dict[str, tuple[re.Pattern[str], ...]] = {
     "mahjong_changsha": _MAHJONG_PATTERNS,
     "mahjong_taiwan": _MAHJONG_PATTERNS,
     "mahjong_international": _MAHJONG_PATTERNS,
+    "uno": _UNO_PATTERNS,
+    "uno_seven_zero": _UNO_PATTERNS,
+    "uno_jump_in": _UNO_PATTERNS,
+    "uno_stacking": _UNO_PATTERNS,
+    "uno_draw_until": _UNO_PATTERNS,
+    "uno_strict_wild4": _UNO_PATTERNS,
     "werewolf": _WEREWOLF_PATTERNS,
 }
 
@@ -126,6 +165,9 @@ _TEACHING_WEREWOLF_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"我是(?:狼人|预言家|女巫|猎人|守卫|村民)"),
     re.compile(rf"{_OPPONENT_POSSESSIVE}\s*身份\s*(?:是|：)"),
 )
+#: 教学对局的 UNO 泄露模式：拦「我的/AI/对手的 + 手牌」（教练不可知对手牌），
+#: 玩家自己的手牌「你的手牌」放行（教练看的正是玩家投影）。
+_TEACHING_UNO_PATTERNS: tuple[re.Pattern[str], ...] = (re.compile(rf"{_OPPONENT_POSSESSIVE}\s*手牌", re.IGNORECASE),)
 
 #: 教学模式按游戏分派的泄露模式（只拦对手/AI 的隐藏信息）。
 _TEACHING_PATTERNS_BY_GAME: dict[str, tuple[re.Pattern[str], ...]] = {
@@ -137,6 +179,12 @@ _TEACHING_PATTERNS_BY_GAME: dict[str, tuple[re.Pattern[str], ...]] = {
     "mahjong_sichuan": _TEACHING_MAHJONG_PATTERNS,
     "mahjong_changsha": _TEACHING_MAHJONG_PATTERNS,
     "mahjong_taiwan": _TEACHING_MAHJONG_PATTERNS,
+    "uno": _TEACHING_UNO_PATTERNS,
+    "uno_seven_zero": _TEACHING_UNO_PATTERNS,
+    "uno_jump_in": _TEACHING_UNO_PATTERNS,
+    "uno_stacking": _TEACHING_UNO_PATTERNS,
+    "uno_draw_until": _TEACHING_UNO_PATTERNS,
+    "uno_strict_wild4": _TEACHING_UNO_PATTERNS,
     "werewolf": _TEACHING_WEREWOLF_PATTERNS,
 }
 
@@ -164,6 +212,21 @@ _ADVERSARIAL_TEXAS_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(rf"{_PLAYER_POSSESSIVE}\s*底牌", re.IGNORECASE),
     re.compile(r"hole\s*cards?", re.IGNORECASE),
     re.compile(rf"{_CARD_TOKEN}", re.IGNORECASE),
+    # 无花色前缀的**具体单牌**表述（「我手里有张K」「拿着一张3」）也拦——
+    # 报具体点数同样是明牌；「一对K」「同花」等牌力措辞不受影响。
+    re.compile(rf"{_RANK_ONLY_HOLD}", re.IGNORECASE),
+)
+#: 对手模式的 UNO 泄露模式：拦「你的/玩家的 + 手牌/牌面」；拦具体牌面记法
+#: （红5 / 蓝禁止 / +2 / 万能）；「我的/AI 的 + 手牌」这类模糊持牌措辞放行。
+_ADVERSARIAL_UNO_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(rf"{_PLAYER_POSSESSIVE}\s*手牌", re.IGNORECASE),
+    re.compile(rf"{_CARD_TOKEN}", re.IGNORECASE),
+    re.compile(rf"{_RANK_ONLY_HOLD}", re.IGNORECASE),
+    re.compile(rf"{_UNO_COLOR}\s*(?:10|[0-9])", re.IGNORECASE),
+    re.compile(rf"{_UNO_COLOR}\s*(?:禁止|反转|\+2)", re.IGNORECASE),
+    # 无颜色前缀的 +2 持牌表述（AI 报「我手里有张+2」同样是明牌）。
+    re.compile(r"(?:有张|有一张|拿到|摸到|打出|甩出|扔出)\s*\+2", re.IGNORECASE),
+    re.compile(r"(?:万能(?:四)?牌?|万能四)", re.IGNORECASE),
 )
 #: 对手模式的麻将泄露模式：拦「你的/玩家的 + 手牌/听牌」，放行「我的/
 #: AI 的手牌/听牌」。
@@ -191,6 +254,12 @@ _ADVERSARIAL_PATTERNS_BY_GAME: dict[str, tuple[re.Pattern[str], ...]] = {
     "mahjong_sichuan": _ADVERSARIAL_MAHJONG_PATTERNS,
     "mahjong_changsha": _ADVERSARIAL_MAHJONG_PATTERNS,
     "mahjong_taiwan": _ADVERSARIAL_MAHJONG_PATTERNS,
+    "uno": _ADVERSARIAL_UNO_PATTERNS,
+    "uno_seven_zero": _ADVERSARIAL_UNO_PATTERNS,
+    "uno_jump_in": _ADVERSARIAL_UNO_PATTERNS,
+    "uno_stacking": _ADVERSARIAL_UNO_PATTERNS,
+    "uno_draw_until": _ADVERSARIAL_UNO_PATTERNS,
+    "uno_strict_wild4": _ADVERSARIAL_UNO_PATTERNS,
     "werewolf": _ADVERSARIAL_WEREWOLF_PATTERNS,
 }
 
@@ -204,6 +273,25 @@ def infer_game_id(observation: dict[str, Any]) -> str:
     if "my_role" in observation or "dead_roles" in observation:
         return "werewolf"
     return "unknown"
+
+
+def resolve_scan_game(game_id: str, observation: dict[str, Any]) -> str:
+    """解析后置扫描的 ``game_id``：显式内置 id 优先，未知回退观测推断.
+
+    观测视图名有歧义（UNO 与麻将都用 ``hand_view_*``，``infer_game_id``
+    会把 UNO 误判成 ``mahjong``）且可能缺失（早期投影/自定义视图名），
+    单靠推断会让扫描静默跳过——对手模式里 AI 报「黑桃K」就漏网。调用方
+    手里通常有注册表 ``game_id``（``session.game_id``），当它在扫描规则
+    表内时直接采用；否则（custom / 未知）退回 :func:`infer_game_id` 按
+    观测形态兜底。
+    """
+    if game_id and (
+        game_id in _PATTERNS_BY_GAME
+        or game_id in _TEACHING_PATTERNS_BY_GAME
+        or game_id in _ADVERSARIAL_PATTERNS_BY_GAME
+    ):
+        return game_id
+    return infer_game_id(observation)
 
 
 def _walk_dict(node: Any, found: set[str]) -> None:

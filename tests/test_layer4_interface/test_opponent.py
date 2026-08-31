@@ -107,7 +107,9 @@ class TestAdversarialScan:
         assert "♥K" not in scan("我的底牌是♥K。", "texas_holdem", adversarial=True)
         assert "s10" not in scan("我摸到 s10。", "texas_holdem", adversarial=True)
         # 模糊牌力措辞照旧放行
-        assert scan("我的底牌还行，这手同花不算大。", "texas_holdem", adversarial=True) == "我的底牌还行，这手同花不算大。"
+        assert (
+            scan("我的底牌还行，这手同花不算大。", "texas_holdem", adversarial=True) == "我的底牌还行，这手同花不算大。"
+        )
 
     def test_adversarial_mahjong_blocks_player_hand(self):
         output = scan("你的手牌已经听牌了。我的手牌是清一色。", "mahjong", adversarial=True)

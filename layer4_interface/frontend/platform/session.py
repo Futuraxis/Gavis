@@ -21,6 +21,7 @@ from ...agent import PERSONAS, Coach, DialogueEngine, Opponent, Skills, TeachCon
 from ...difficulty.adaptive import AdaptiveController, pacing_scale
 from ...online_learning.recorder import LearningHooks, TrajectoryRecorder
 from ...profile.store import ProfileStore
+from ...result import player_won
 from ...solver_provider import SolverHandle, SolverProvider
 from .custom_games import CustomGameRegistry
 from .games import GAMES, GameSpec, PlayError
@@ -598,10 +599,18 @@ class PlayManager:
             self._say_ctx(session, session.pending_teach, "teach_move")
             session.pending_teach = None
         if session.over:
-            winner = session.winner
-            if winner == session.player_pid:
+            # 胜负播报按玩家视角解析（阵营胜者经 final_roles 解析——社交游戏
+            # 的 winner 是阵营名，直接与 player_pid 比较会把卧底胜误判成 AI 胜；
+            # 见 layer4_interface/result.py）。平局（win is None）只播 game_over。
+            snap = None
+            try:
+                snap = session.spec.build_snapshot(session)
+            except Exception:
+                snap = None
+            won = player_won(session.winner, session.player_pid, session.winners, snap)
+            if won is True:
                 self._say(session, "ai_lose")
-            elif winner == session.ai_pid:
+            elif won is False:
                 self._say(session, "ai_win")
             self._say(session, "game_over")
             return
@@ -710,13 +719,29 @@ class PlayManager:
             profile["recent"] = recent
         tally = recent.setdefault(session.spec.game_id, {"wins": 0, "plays": 0})
         tally["plays"] = int(tally.get("plays", 0)) + 1
-        # 多胡局（血战等）无单一 winner：人类在 winners 中即计胜。
-        if session.winner == session.player_pid or session.player_pid in session.winners:
+        # 胜局统计按玩家视角解析（多胡局看 winners；社交阵营胜者经
+        # final_roles 解析——否则卧底获胜不计入胜场）。
+        snap = None
+        try:
+            snap = session.spec.build_snapshot(session)
+        except Exception:
+            snap = None
+        won = player_won(session.winner, session.player_pid, session.winners, snap)
+        if won is True:
             tally["wins"] = int(tally.get("wins", 0)) + 1
         self._profiles.save(profile)
 
     def _build_record(self, session: GameSession) -> dict:
         """Assemble the persisted match record (see history module)."""
+        # 阵营胜者解析为玩家视角的 won（None=平局），写入记录供列表/复盘/战绩
+        # 复用——否则 social 阵营胜者（winner=undercover）在 history/review 页
+        # 会被误标「失败」（实测 e7deb84b）。
+        snap = None
+        try:
+            snap = session.spec.build_snapshot(session)
+        except Exception:
+            snap = None
+        won = player_won(session.winner, session.player_pid, session.winners, snap)
         return {
             "match_id": session.game_id,
             "game_id": session.spec.game_id,
@@ -728,6 +753,7 @@ class PlayManager:
             "finished_at": _now_iso(),
             "winner": session.winner,
             "winners": session.winners,
+            "won": won,
             "over": True,
             "persona": session.persona,
             "hinted": session.hinted,

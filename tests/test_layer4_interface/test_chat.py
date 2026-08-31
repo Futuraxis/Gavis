@@ -21,6 +21,7 @@ from __future__ import annotations
 import pytest
 
 from layer2_engine.core.llm import ChatReply, StreamChunk, ToolCall
+from layer4_interface.agent import PERSONAS, DialogueEngine
 from layer4_interface.frontend.platform.chat import (
     build_tools,
     chat_turn,
@@ -942,3 +943,112 @@ class TestChatTurnStream:
         assert tuples[-2][1]["intent"] == "chat"
         assert tuples[-2][1]["text"] == "你好，我在！"
         assert tuples[-1] == ("done", {})
+
+
+# ── 对手模式聊天泄露修复（2026-08 记录：AI 报玩家底牌 + 自报具体牌面）──
+
+
+@pytest.fixture
+def opp_manager(tmp_path) -> PlayManager:
+    """带 agent 的二人非教练对局管理器（``is_opponent_mode=True``）。"""
+
+    def _factory(persona_key: str) -> DialogueEngine:
+        return DialogueEngine(PERSONAS[persona_key])
+
+    return PlayManager(
+        provider=default_provider,
+        history=MatchHistory(tmp_path),
+        seed=42,
+        agent_factory=_factory,
+    )
+
+
+class TestOpponentModeChatGuard:
+    """对手模式的聊天通道：AI 视角数据 + 红线提示词 + 文本后置扫描。
+
+    ``_system_prompt`` 内置对手身份与两条红线；``get_match_state`` 载荷
+    换成 AI 自己的投影（含 AI 底牌、绝不含玩家底牌）；``chat_turn`` /
+    ``chat_turn_stream`` 出口统一过 adversarial 扫描——从数据入口到成文
+    出口双保险，堵死 2026-08 记录里的两类泄露。
+    """
+
+    def test_get_match_state_payload_is_ai_view(self, opp_manager: PlayManager) -> None:
+        """载荷=AI 投影：含 AI 自己底牌（判断牌力用），绝不含玩家底牌。"""
+        session = opp_manager.start("texas_holdem", "p_sb", "normal")
+        fake = _ScriptedLLM(
+            [
+                ChatReply(text="", tool_calls=[ToolCall("get_match_state", {}, id="c1")]),
+                ChatReply(text="这手我稳一点。"),
+            ]
+        )
+        result = chat_turn(opp_manager, "现在什么局面", llm=fake, game_id=session.game_id)
+        assert result.intent == "chat"
+        tool_msgs = [m for m in fake.seen[1] if m.get("role") == "tool"]
+        assert tool_msgs
+        content = tool_msgs[0]["content"]
+        # AI 自己的底牌可见（seed 42：AI=bb 拿黑桃3/黑桃K）
+        assert "我的底牌" in content
+        assert "黑桃3" in content and "黑桃K" in content
+        # 玩家底牌（方块9/红桃3）绝不出现在载荷里
+        assert "方块9" not in content and "红桃3" not in content
+        assert "玩家底牌" in content  # 明确标注不可见
+
+    def test_chat_final_text_scanned_adversarial(self, opp_manager: PlayManager) -> None:
+        """成文出口扫描：模型报玩家底牌 / AI 自报具体牌面都被改写（双保险）。"""
+        session = opp_manager.start("texas_holdem", "p_sb", "normal")
+        leak = (
+            "哦？牌不小呀，更有底气啦～嗯，你现在手里是方块9和红桃3，翻前阶段，底池3。"
+            "不过我也不差，我手里拿着黑桃K和黑桃3。先跟注2看看翻牌。"
+        )
+        fake = _ScriptedLLM(
+            [ChatReply(text="", tool_calls=[ToolCall("get_match_state", {}, id="c1")]), ChatReply(text=leak)]
+        )
+        result = chat_turn(opp_manager, "我手上牌可不小", llm=fake, game_id=session.game_id)
+        assert result.intent == "chat"
+        assert "方块9" not in result.text and "红桃3" not in result.text
+        assert "黑桃K" not in result.text and "黑桃3" not in result.text
+        assert "不细说" in result.text
+
+    def test_system_prompt_opponent_identity_and_red_lines(self, opp_manager: PlayManager) -> None:
+        """对手身份 + 两条红线（不报玩家隐藏牌 / 不报 AI 自己具体牌面）入 system prompt。"""
+        session = opp_manager.start("texas_holdem", "p_sb", "normal")
+        fake = _RecordingLLM(text="嗯")
+        chat_turn(opp_manager, "在吗", llm=fake, game_id=session.game_id)
+        system = fake.seen[0]["content"]
+        assert "座内对手" in system
+        assert "红线一" in system and "红线二" in system
+        assert "你(AI)自己可见的投影" in system
+
+    def test_get_match_state_tool_description_ai_view(self, opp_manager: PlayManager) -> None:
+        """工具描述随对手模式切换为 AI 视角（含「玩家底牌不可见」提示）。"""
+        session = opp_manager.start("texas_holdem", "p_sb", "normal")
+        descs = {
+            t["function"]["name"]: t["function"]["description"]
+            for t in build_tools(games=_games(opp_manager), session=session, active=[])
+        }
+        assert "你(AI)自己可见的投影" in descs["get_match_state"]
+        assert "玩家的底牌" in descs["get_match_state"]
+
+    def test_teaching_chat_keeps_player_cards(self, manager: PlayManager) -> None:
+        """教学聊天放行玩家自己的牌（教练看玩家投影）；teaching 扫描不误伤。"""
+        session = manager.start("texas_holdem", "p_sb", "easy", teaching=True)
+        fake = _ScriptedLLM([ChatReply(text="你现在手里是方块9和红桃3，先跟注2看看翻牌。")])
+        result = chat_turn(manager, "我手上是什么牌", llm=fake, game_id=session.game_id)
+        assert result.intent == "chat"
+        assert "方块9" in result.text and "红桃3" in result.text
+
+    def test_stream_intent_text_scanned(self, opp_manager: PlayManager) -> None:
+        """流式出口：``intent`` 事件的最终正文同样过 adversarial 扫描。"""
+        session = opp_manager.start("texas_holdem", "p_sb", "normal")
+        fake = _StreamFakeLLM(
+            [
+                StreamChunk(text="你现在手里是"),
+                StreamChunk(text="方块9和红桃3。", done=True),
+            ]
+        )
+        events = list(chat_turn_stream(opp_manager, "我手上是什么牌", llm=fake, game_id=session.game_id))
+        tuples = _event_tuples(events)
+        intent = tuples[-2][1]
+        assert intent["intent"] == "chat"
+        assert "方块9" not in intent["text"] and "红桃3" not in intent["text"]
+        assert "不细说" in intent["text"]

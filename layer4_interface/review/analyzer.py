@@ -30,6 +30,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from ..result import faction_matches, player_won
+
 #: Single-step evaluation drop (player perspective) that flags a blunder.
 _BLUNDER_DROP = 0.3
 #: Corner weight in the generic board neighborhood heuristic.
@@ -126,18 +128,28 @@ def analyze(match: dict) -> ReviewReport:
     if not isinstance(moves, list):
         moves = []
 
+    # 终局快照（最后一手）：社交游戏的 final_roles 只在终局快照里揭晓，
+    # 供阵营胜者（undercover/werewolf）解析玩家胜负。
+    final_snap = None
+    if moves and isinstance(moves[-1], dict):
+        snap = moves[-1].get("snapshot")
+        if isinstance(snap, dict):
+            final_snap = snap
+    raw_winners = match.get("winners") or (meta.get("winners") if isinstance(meta, dict) else None)
+    won = player_won(winner, player_pid, raw_winners, final_snap)
+
     c2_evaluate = _try_import_c2_evaluate()
     scores = [_score_step(move, player_pid, ai_pid, c2_evaluate) for move in moves]
 
     turning_point = _find_turning_point(moves, scores)
-    winning_move = _find_winning_move(moves, winner, player_pid, ai_pid)
-    blunder = _find_blunder(moves, scores, winner, player_pid, ai_pid)
+    winning_move = _find_winning_move(moves, won, player_pid, ai_pid)
+    blunder = _find_blunder(moves, scores, won, player_pid, ai_pid)
 
     key_nodes = [node for node in (turning_point, winning_move, blunder) if node is not None]
     return ReviewReport(
         key_nodes=key_nodes,
         improvement=_improvement_text(blunder, turning_point),
-        summary=_summary_text(game_id, winner, player_pid, len(moves)),
+        summary=_summary_text(game_id, won, len(moves)),
     )
 
 
@@ -220,10 +232,12 @@ def _local_score(snapshot: dict, player_pid: str, ai_pid: str | None) -> float |
         payoff = snapshot.get("payoff")
         if isinstance(payoff, (int, float)) and not isinstance(payoff, bool):
             return float(payoff)
-        if winner == player_pid:
-            return 1.0
-        if winner is not None and winner != "":
-            return -1.0
+        # 阵营胜者（社交游戏 winner 是阵营名而非 pid）：按终局身份表
+        # final_roles 解析玩家所属阵营（卧底获胜一局若直接 winner==pid
+        # 会比较成 -1，把玩家胜误判成落败——见 layer4_interface/result.py）。
+        won = player_won(winner, player_pid, snapshot.get("winners"), snapshot)
+        if won is not None:
+            return 1.0 if won else -1.0
         return 0.0
     board = snapshot.get("board")
     if isinstance(board, list) and board:
@@ -325,18 +339,48 @@ def _actor_pid(actor: str, player_pid: str, ai_pid: str | None) -> str | None:
 
 def _find_winning_move(
     moves: list[dict],
-    winner: str | None,
+    won: bool | None,
     player_pid: str,
     ai_pid: str | None,
 ) -> KeyNode | None:
-    """Return the winner's last move, or ``None`` when no winner is known."""
+    """Return the winner's last move, or ``None`` when the player won / draw.
+
+    ``won`` 为玩家视角解析结果（``layer4_interface.result.player_won``）：
+    玩家获胜或平局时无「胜方最后一手」节点。阵营胜者（社交游戏）的
+    ``winner`` 不是 pid，无法直接与 actor 比较——此时整个胜利阵营的成员
+    都是候选，取其中最后一手。
+    """
+    if won is None or won is True or not moves:
+        return None
+    # 玩家落败 → 胜方是 AI / 其他玩家 / 胜者阵营。阵营成员从终局身份表解析
+    # （final_roles 在最后一手快照里公开）。
+    winner = None
+    snap = None
+    last = moves[-1] if isinstance(moves[-1], dict) else None
+    if isinstance(last, dict):
+        snap = last.get("snapshot") if isinstance(last.get("snapshot"), dict) else None
+    if snap is not None:
+        winner = snap.get("winner")
+    if winner is None:
+        winner = str(moves[-1].get("winner") or "") if isinstance(moves[-1], dict) else None
     if not winner:
         return None
+    if snap is not None and isinstance(snap.get("final_roles"), list):
+        # 阵营侧匹配（社交族）：狼人杀 winner=good 时非狼身份全属胜方，不能只比
+        # role == winner（否则好人方获胜的最后一手落不到村民/预言家身上）。
+        winner_pids = {
+            row.get("pid")
+            for row in snap["final_roles"]
+            if isinstance(row, dict) and faction_matches(str(row.get("role") or ""), winner)
+        }
+    else:
+        winner_pids = {winner}
     step: int | None = None
     for i, move in enumerate(moves):
         if not isinstance(move, dict):
             continue
-        if _actor_pid(str(move.get("actor", "")), player_pid, ai_pid) == winner:
+        actor = _actor_pid(str(move.get("actor", "")), player_pid, ai_pid)
+        if actor is not None and actor in winner_pids:
             step = i
     if step is None:
         return None
@@ -346,19 +390,21 @@ def _find_winning_move(
 def _find_blunder(
     moves: list[dict],
     scores: list[float | None],
-    winner: str | None,
+    won: bool | None,
     player_pid: str,
     ai_pid: str | None,
 ) -> KeyNode | None:
     """Return the player's own step with the largest evaluation drop.
 
     Only reported when the player ultimately lost and the single-step drop
-    exceeds ``_BLUNDER_DROP``.  The drop needs two consecutive *known*
-    scores — without a mid-game signal there is no blunder node (the old
-    version fabricated 0.0 mid-hand scores, which mechanically pinned the
-    blunder on whatever the player did last).
+    exceeds ``_BLUNDER_DROP``.  ``won`` 是玩家视角终局胜负（阵营胜者已由
+    :func:`layer4_interface.result.player_won` 解析）——平局/获胜都没有昏招
+    节点。The drop needs two consecutive *known* scores — without a
+    mid-game signal there is no blunder node (the old version fabricated
+    0.0 mid-hand scores, which mechanically pinned the blunder on whatever
+    the player did last).
     """
-    if winner is None or winner == player_pid:
+    if won is None or won is True:
         return None
     best_step: int | None = None
     best_drop = 0.0
@@ -390,12 +436,17 @@ def _improvement_text(blunder: KeyNode | None, turning_point: KeyNode | None) ->
     return "继续巩固优势，稳扎稳打"
 
 
-def _summary_text(game_id: str, winner: str | None, player_pid: str, move_count: int) -> str:
-    """Return the win/loss + move-count summary."""
+def _summary_text(game_id: str, won: bool | None, move_count: int) -> str:
+    """Return the win/loss + move-count summary.
+
+    ``won`` 是玩家视角终局胜负（:func:`layer4_interface.result.player_won`
+    解析，社交阵营胜者已正确归边）——``True`` 玩家获胜 / ``False`` AI 获胜
+    / ``None`` 平局。
+    """
     name = _GAME_NAMES.get(game_id, game_id or "对局")
-    if winner == player_pid:
+    if won is True:
         result = "玩家获胜"
-    elif winner:
+    elif won is False:
         result = "AI 获胜"
     else:
         result = "平局"

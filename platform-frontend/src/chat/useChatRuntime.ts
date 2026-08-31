@@ -378,7 +378,9 @@ export function useChatRuntime(): ChatRuntime {
   const fetchStats = useCallback(async (): Promise<StatsData> => {
     const d = await apiGet<{ matches: MatchMeta[] }>('/history?limit=10')
     const matches = d.matches ?? []
-    const wins = matches.filter((m) => m.winner === m.player_pid).length
+    // 阵营胜者由后端解析进 meta.won（社交游戏 winner=undercover 等；旧记录缺省
+    // 时回退 pid 比较），否则卧底获胜的胜场不计入战绩（实测对局 e7deb84b）。
+    const wins = matches.filter((m) => (m.won ?? m.winner === m.player_pid) === true).length
     return { matches, wins, plays: matches.length }
   }, [])
 

@@ -9,7 +9,7 @@
 // data/conversations/，刷新/重开页面自动恢复当前会话。
 
 import { useEffect, useRef, useState } from 'react'
-import type { ChatMessage, ConversationMeta, GameInfo } from '../types'
+import type { ChatMessage, ConversationMeta, GameInfo, SocialSnapshot } from '../types'
 import type { BattleConfig } from '../components/BattleSetup'
 import { getConversation } from '../api/client'
 import { useChatRuntime } from './useChatRuntime'
@@ -179,7 +179,14 @@ export default function ChatPage() {
   function bgMatchStatus(): string {
     if (!activeSession) return ''
     if (activeSession.over) {
-      if (activeSession.winner === activeSession.player_pid) return '你赢了 🎉'
+      // 社交阵营胜者（winner=undercover 等）按终局身份表归边，否则卧底获胜会
+      // 误报「这一局输了」（实测 e7deb84b）；其余回退 pid 比较。
+      const myRole =
+        (activeSession as SocialSnapshot).final_roles?.find((r) => r.pid === activeSession.player_pid)?.role ?? null
+      const won =
+        activeSession.winner != null &&
+        (activeSession.winner === activeSession.player_pid || (myRole != null && myRole === activeSession.winner))
+      if (won) return '你赢了 🎉'
       return activeSession.winner ? '这一局输了' : '平局'
     }
     if (busy) return 'AI 思考中…'

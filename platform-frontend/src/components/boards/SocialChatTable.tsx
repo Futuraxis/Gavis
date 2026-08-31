@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { SocialSnapshot } from '../../types'
+import { humanWon as resolveHumanWon } from '../../matchResult'
 
 interface Props {
   snapshot: SocialSnapshot
@@ -31,6 +32,7 @@ const ROLE_LABELS: Record<string, string> = {
   witch: '女巫',
   hunter: '猎人',
   guard: '守卫',
+  good: '好人',
   civilian: '平民',
   undercover: '卧底',
   blank: '白板',
@@ -201,6 +203,12 @@ export default function SocialChatTable({ snapshot, interactive, onMove }: Props
   const canSpeak = snapshot.legal.some((a) => a.type === 'speak')
   const votes = snapshot.votes ?? []
   const myTurn = interactive && snapshot.turn === snapshot.player_pid
+  // 终局胜负（阵营制）：winner 是阵营名，用公开身份表 final_roles 判玩家所属
+  // 阵营（统一走 matchResult.humanWon——狼人杀 winner=good 时非狼身份全胜，
+  // 不能只比身份名等于胜者；实测对局 e7deb84b 卧底获胜曾被显示成“AI 获胜”）。
+  const finalRoles = snapshot.final_roles ?? []
+  const myFinalRole = finalRoles.find((r) => r.pid === snapshot.player_pid)?.role ?? null
+  const humanWon = resolveHumanWon(snapshot.winner, snapshot.player_pid, finalRoles)
 
   return (
     <div className="social-table">
@@ -210,7 +218,8 @@ export default function SocialChatTable({ snapshot, interactive, onMove }: Props
         </span>
         {snapshot.over ? (
           <span className="social-winner">
-            胜方：{ROLE_LABELS[snapshot.winner ?? ''] ?? snapshot.winner ?? '未知'}
+            {humanWon ? '🎉 你赢了！' : snapshot.winner != null && myFinalRole != null ? '😢 你输了' : ''}
+            {snapshot.winner != null && <>　胜方：{ROLE_LABELS[snapshot.winner ?? ''] ?? snapshot.winner}</>}
             {snapshot.winners.length > 0 && <>（{snapshot.winners.join('、')}）</>}
           </span>
         ) : (

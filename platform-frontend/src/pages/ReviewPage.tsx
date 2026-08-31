@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, getReview } from '../api/client'
 import { MOCK_MATCH_LOG, MOCK_REVIEW } from '../mock'
-import type { BoardSnapshot, KeyNode, MahjongSnapshot, MatchLog, PokerSnapshot, ReviewReport } from '../types'
+import type { BoardSnapshot, KeyNode, MahjongSnapshot, MatchLog, PokerSnapshot, ReviewReport, SocialSnapshot } from '../types'
 import GomokuBoard from '../components/boards/GomokuBoard'
 import MahjongTable from '../components/boards/MahjongTable'
 import MoonBoard from '../components/boards/MoonBoard'
@@ -65,7 +65,15 @@ export default function ReviewPage() {
   const entry = entries[idx]
   const snapshot = entry?.snapshot
   const lastIdx = entries.length - 1
-  const won = match.winner === match.player_pid
+  // 玩家视角胜负：优先后端已解析的 match.won；缺省时回退 pid 比较（旧记录），
+  // 再用终局快照 final_roles 做阵营比对——社交游戏 winner=undercover 等阵营
+  // 胜者必须归到对应身份，否则卧底获胜被误标「失败」（实测 e7deb84b）。
+  const finalSnap = entries.length > 0 ? (entries[entries.length - 1].snapshot as SocialSnapshot | undefined) : undefined
+  const myFinalRole = finalSnap?.final_roles?.find((r) => r.pid === match.player_pid)?.role ?? null
+  const won =
+    match.won ??
+    (match.winner != null &&
+      (match.winner === match.player_pid || (myFinalRole != null && myFinalRole === match.winner)))
   const title = match.winner == null ? '🤝 平局' : won ? '🎉 胜利' : '😢 失败'
   const currentKey = entry ? keyNodesByStep.get(entry.step) : undefined
   // 复盘快照渲染: 优先按 match.family 经 FAMILY_BOARDS（带 stepKey 的组件传 idx），

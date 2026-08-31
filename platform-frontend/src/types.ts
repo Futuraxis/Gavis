@@ -270,6 +270,8 @@ export interface MatchMeta {
   ai_pid: string
   difficulty: string
   winner: string | null
+  /** 玩家视角胜负（后端 layer4_interface/result 解析；阵营胜者正确归边——旧记录缺省 → 前端回退 pid 比较）。 */
+  won?: boolean | null
   over: boolean
   moves: number
   started_at: string
@@ -302,6 +304,8 @@ export interface MatchLog {
   started_at: string
   finished_at: string
   winner: string | null
+  /** 玩家视角胜负（后端 layer4_interface/result 解析；阵营胜者正确归边——旧记录缺省）。 */
+  won?: boolean | null
   over: boolean
   moves: MoveEntry[]
   persona?: PersonaKey | null

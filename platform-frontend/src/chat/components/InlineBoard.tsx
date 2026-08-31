@@ -2,7 +2,7 @@
 // 棋盘/牌面点击走快速路径（/match/move，不经 LLM）；文本动作走聊天。
 
 import type { ReactNode } from 'react'
-import type { BoardSnapshot, GameInfo, MahjongSnapshot, PokerSnapshot, Snapshot } from '../../types'
+import type { BoardSnapshot, GameInfo, MahjongSnapshot, PokerSnapshot, Snapshot, SocialSnapshot } from '../../types'
 import { FAMILY_BOARDS } from '../../components/boards/familyBoards'
 import GenericGridBoard from '../../components/boards/GenericGridBoard'
 import MahjongTable from '../../components/boards/MahjongTable'
@@ -17,6 +17,16 @@ interface Props {
   onRestart: () => void
 }
 
+/** 社交阵营胜者的中文标签（无匹配 → null，回退 pid 座位称呼）。 */
+function factionLabel(winner: string): string | null {
+  if (winner === 'undercover') return '卧底'
+  if (winner === 'civilian') return '平民'
+  if (winner === 'blank') return '白板'
+  if (winner === 'wolf') return '狼人'
+  if (winner === 'good') return '好人'
+  return null
+}
+
 export default function InlineBoard({ snapshot, game, busy, onMove, onRestart }: Props) {
   // 渲染分发对齐 BattlePage: 优先按 family（快照自描述 / game.family，见
   // boardFamily.resolveBoardFamily）经 FAMILY_BOARDS 查表；**未知 family 绝不
@@ -27,6 +37,12 @@ export default function InlineBoard({ snapshot, game, busy, onMove, onRestart }:
   const family = resolveBoardFamily(snapshot, game)
   const Board = FAMILY_BOARDS[family]
   const myTurn = !snapshot.over && snapshot.turn === snapshot.player_pid && !busy
+  // 终局胜负（头部口径）：社交阵营胜者（winner=undercover 等）按终局身份表
+  // 归边——否则卧底获胜被误标「AI 赢了」（实测 e7deb84b）；其余回退 pid 比较。
+  const myFinalRole = (snapshot as SocialSnapshot).final_roles?.find((r) => r.pid === snapshot.player_pid)?.role ?? null
+  const won =
+    snapshot.winner != null &&
+    (snapshot.winner === snapshot.player_pid || (myFinalRole != null && myFinalRole === snapshot.winner))
 
   let board: ReactNode
   if (Board) {
@@ -69,12 +85,12 @@ export default function InlineBoard({ snapshot, game, busy, onMove, onRestart }:
         <span className="chat-board-title">{game?.display_name ?? snapshot.game_id}</span>
         <span className="chat-board-meta">
           {snapshot.over
-            ? snapshot.winner === snapshot.player_pid
+            ? won
               ? '🎉 你赢了'
               : snapshot.winner
                 // 目录未加载 / 未命中时不能回退原始 pid（会泄漏 'p_white'），
                 // 退到关系称呼 "AI"（本面板对手恒为 AI）。
-                ? `${game?.seat_names?.[snapshot.winner] ?? 'AI'} 赢了`
+                ? `${factionLabel(snapshot.winner) ?? game?.seat_names?.[snapshot.winner] ?? 'AI'} 赢了`
                 : '平局'
             : busy
               ? 'AI 思考中…'

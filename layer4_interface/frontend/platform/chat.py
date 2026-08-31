@@ -73,6 +73,10 @@ from typing import Any, Iterator
 
 from layer2_engine.core.llm import LLMClient
 
+from ...agent.coach import extract_hand
+from ...agent.hidden_guard import resolve_scan_game, scan
+from ...agent.persona import PERSONAS, Persona, persona_identity_block
+from ...result import player_won
 from ...review import ReviewReport
 from ...review import analyze as review_analyze
 from ..engine_helpers import (
@@ -94,8 +98,6 @@ from .platform_knowledge import (
     platform_help_text,
 )
 from .session import _BUILTIN_FAMILY, PlayManager
-
-from ...agent.persona import PERSONAS, Persona, persona_identity_block
 
 logger = logging.getLogger(__name__)
 
@@ -476,13 +478,17 @@ def _humanize_snap(snap: dict, family: str) -> dict:
 def _result_label(snap: dict) -> str:
     """终局结果称呼（绝不泄漏内部 pid 如 ``p_white``）。
 
-    你 / AI 获胜 / 平局——与 ``_render_board`` 的"你/AI"口径一致；
-    ``snap`` 取 ``winner`` 与 ``player_pid`` 比较。
+    你 / AI 获胜 / 平局——与 ``_render_board`` 的"你/AI"口径一致。判定交给
+    :func:`layer4_interface.result.player_won`：社交游戏的 ``winner`` 是**阵营名**
+    ——直接 ``winner == player_pid`` 会把卧底获胜判成「AI 获胜」（实测 bug
+    e7deb84b），先按 ``final_roles`` 身份表做阵营匹配（终局揭晓，公开信息）。
+    ``snap`` 取 ``winner`` / ``player_pid`` / ``winners`` / ``final_roles``。
     """
     w = snap.get("winner")
-    if w is None:
+    won = player_won(w, snap.get("player_pid"), snap.get("winners"), snap)
+    if won is None:
         return "平局"
-    return "你获胜" if w == snap.get("player_pid") else "AI 获胜"
+    return "你获胜" if won else "AI 获胜"
 
 
 def _legal_context(session: Any) -> str:
@@ -541,12 +547,25 @@ def _render_board(board: list, player_pid: Any) -> str:
 
 
 def _match_state_text(session: Any) -> str:
-    """The player-projected live state — the ``get_match_state`` payload.
+    """当前对局的实时状态文案（``get_match_state`` 载荷）——按陪伴身份分派.
 
-    ``spec.build_snapshot`` 正是发给玩家浏览器的那份投影（各族
-    reveal-gate 已挡掉隐藏信息），红线天然满足；不调用
-    ``session.snapshot()``——那会 drain 掉待投递的陪伴消息。
+    - **玩家视角**（默认/教学/自定义）：``spec.build_snapshot`` 就是发给
+      玩家浏览器的那份投影（各族 reveal-gate 已挡掉隐藏信息），AI/对手的
+      底牌/手牌不可见，红线天然满足。
+    - **AI 视角**（二人非教练对手模式）：换成 AI 自己的投影——只含 AI 自己
+      的牌 + 公开盘面，**绝不含玩家底牌/手牌**（对手本来就看不到玩家的牌）。
+      —— 修 2026-08 对局记录泄露：对手模式聊天里 AI 报出「你现在手里是方块9
+      和红桃3」，根因就是聊天通道把玩家投影直接喂给了扮演对手的模型。
+
+    都不调用 ``session.snapshot()``——那会 drain 掉待投递的陪伴消息。
     """
+    if bool(getattr(session, "is_opponent_mode", False)):
+        return _ai_state_text(session)
+    return _player_state_text(session)
+
+
+def _player_state_text(session: Any) -> str:
+    """玩家视角快照渲染（默认/教学/自定义共用；公开信息到玩家本人都可见）。"""
     try:
         snap = session.spec.build_snapshot(session)
     except Exception:
@@ -584,15 +603,155 @@ def _match_state_text(session: Any) -> str:
     return text
 
 
+def _ai_state_text(session: Any) -> str:
+    """AI 视角快照渲染（二人非教练对手模式）——绝不包含玩家底牌/手牌.
+
+    公开盘面（阶段/底池/公共牌/筹码/已投入/弃牌/合法动作）与玩家快照
+    同源；隐藏字段按 AI 视角重写：「我的底牌/手牌」= AI 自己的牌（AI 本
+    就看得到，仅供判断牌力），玩家底牌/手牌一律不出现（visibility 规则
+    本就不给 AI）。网格等公开盘面族玩家的快照全是公开信息，直接复用玩家
+    视角渲染。
+    """
+    try:
+        snap = session.spec.build_snapshot(session)
+    except Exception:
+        return ""
+    family = getattr(session, "family", None) or game_family(getattr(session, "game_id", ""))
+    if family not in ("poker", "uno"):
+        # 网格 / 社交等公开盘面族：玩家快照即公开信息（社交族无二人局）。
+        return _player_state_text(session)
+    parts: list[str] = []
+    ai_pid = str(getattr(session, "ai_pid", "") or "")
+    if snap.get("over"):
+        parts.append(f"本局已结束，{_result_label(snap)}")
+    else:
+        turn = snap.get("turn")
+        if turn is not None:
+            parts.append("当前轮到: " + ("你（AI）" if turn == ai_pid else "玩家"))
+    for key, label in (
+        ("street_name", "阶段"),
+        ("pot", "底池"),
+        ("my_stack", "玩家筹码"),
+        ("ai_stack", "你(AI)筹码"),
+        ("my_committed", "玩家已投入"),
+        ("ai_committed", "你(AI)已投入"),
+        ("my_folded", "玩家已弃牌"),
+        ("ai_folded", "你(AI)已弃牌"),
+        ("call_to", "跟注额"),
+    ):
+        val = snap.get(key)
+        if val is None:
+            continue
+        if isinstance(val, bool):
+            parts.append(f"{label}: {'是' if val else '否'}")
+        elif val != "" and val != []:
+            parts.append(f"{label}: {val}")
+    community = snap.get("community")
+    if isinstance(community, list) and community:
+        parts.append("公共牌: " + "、".join(piece_names("poker", community)))
+    # AI 自己的牌（AI 投影视图提取；玩家底牌不出现在任何字段里）。
+    try:
+        obs = session.engine.project_observation(session.state, ai_pid)
+        ai_hand = extract_hand(obs, ai_pid) if obs else []
+    except Exception:
+        ai_hand = []
+    if family == "poker":
+        own = "、".join(piece_names("poker", ai_hand)) if ai_hand else "（未发牌）"
+        parts.append(f"我的底牌（AI 自己可见）: {own}")
+        parts.append("玩家底牌: 不可见（隐藏）")
+    elif family == "uno":
+        own = "、".join(piece_names("uno", ai_hand)) if ai_hand else "（无）"
+        parts.append(f"我的手牌（AI 自己可见）: {own}")
+        parts.append("玩家手牌: 不可见（隐藏）")
+        for key, label in (
+            ("top_color", "顶牌颜色"),
+            ("top_symbol", "顶牌符号"),
+            ("discard_top", "顶牌名称"),
+            ("deck_count", "牌堆余量"),
+        ):
+            val = snap.get(key)
+            if val not in (None, "", []):
+                parts.append(f"{label}: {val}")
+    legal = snap.get("legal")
+    if isinstance(legal, list) and legal:
+        parts.append("玩家合法动作: " + "；".join(_legal_payload_text(family, x) for x in legal))
+    raise_amts = snap.get("raise_amounts")
+    if isinstance(raise_amts, list) and raise_amts:
+        parts.append("加注档位: " + "、".join(str(a) for a in raise_amts))
+    text = "\n".join(parts)
+    if len(text) > _STATE_MAX_CHARS:
+        text = text[:_STATE_MAX_CHARS] + "…（已截断）"
+    return text
+
+
+def _guard_text(text: str, session: Any) -> str:
+    """聊天最终文本的隐藏信息后置扫描（按陪伴身份选态）.
+
+    - **对手模式**（二人非教练）：adversarial——拦「玩家的隐藏牌」与
+      「AI 自己的具体花色点数」（黑桃4 / ♠A / 红5…），放行 AI 模糊牌力
+      （「这手还行」「一对K」）。**不向玩家的牌做任何具体表述**。
+    - **教学**：teaching——放行玩家自己的牌（教练看的就是玩家投影），拦
+      对手/AI 的隐藏牌。
+    - **默认**（啦啦队/多人）：玩家自己可见的信息本就可被陪玩复述（
+      get_match_state 给的就是玩家投影），不额外拦截；模型拿不到其它隐藏
+      信息，扫描不改变既有默认行为。
+    - custom / 无扫描规则的 id：原样返回（fail-soft）。
+    """
+    if not text or session is None:
+        return text
+    opponent = bool(getattr(session, "is_opponent_mode", False))
+    teaching = bool(getattr(session, "teaching", False))
+    if not opponent and not teaching:
+        return text
+    # session.game_id 是会话 uuid（如 b63c941e），扫描规则按**规则 JSON 的
+    # builtin id**（session.spec.game_id，如 texas_holdem）分派——不要拿 uuid
+    # 去查规则表。自定义局（custom_games 注册表）的 spec.game_id 不在表内时
+    # 走 infer → unknown → 原样返回（fail-soft）。
+    spec = getattr(session, "spec", None)
+    spec_game = str(getattr(spec, "game_id", "") or "")
+    scan_game = resolve_scan_game(spec_game, {})
+    if scan_game == "unknown":
+        return text
+    return scan(text, scan_game, teaching=teaching, adversarial=opponent)
+
+
+def _finalize_chat_result(result: ChatTurnResult, session: Any) -> ChatTurnResult:
+    """对最终回复文本做模式感知隐藏信息扫描（对手/教学两态）."""
+    if result.text:
+        result.text = _guard_text(result.text, session)
+    return result
+
+
 def _latest_match(match_history: Any) -> dict | None:
-    """Newest finished match meta (``None`` when history is off/empty)."""
+    """Newest finished match meta (``None`` when history is off/empty).
+
+    阵营胜者（undercover/werewolf 的 ``winner`` 是阵营名）无法从 meta 直接
+    判定玩家胜负——补读完整记录最后一手的 ``snapshot.final_roles`` 并解析出
+    ``_won``（``None`` = 平局/无法判定），供 ``_system_prompt`` 的
+    「最近一局」行使用（否则卧底获胜的一局会被写成「AI 获胜」）。
+    """
     if match_history is None:
         return None
     try:
         matches = match_history.list_matches(limit=1)
     except Exception:
         return None
-    return matches[0] if matches else None
+    if not matches:
+        return None
+    meta = matches[0]
+    out = dict(meta)
+    try:
+        full = match_history.get(str(meta.get("match_id") or ""))
+        moves = full.get("moves") if isinstance(full, dict) else None
+        if isinstance(moves, list) and moves and isinstance(moves[-1], dict):
+            snap = moves[-1].get("snapshot")
+            if isinstance(snap, dict):
+                won = player_won(meta.get("winner"), meta.get("player_pid"), meta.get("winners"), snap)
+                if won is not None:
+                    out["_won"] = won
+    except Exception:
+        pass
+    return out
 
 
 def _review_text(match: dict, report: ReviewReport) -> str:
@@ -630,21 +789,48 @@ def _system_prompt(
     # 描述——用户在 profile 选一次人设后，两层身份连贯。persona=None
     # 时退回无性格的工具型助手（兼容旧调用方 / 测试）。
     head = persona_identity_block(persona) + "\n" if persona is not None else ""
-    lines = [
-        head + "你是 Gavis 平台的对话助手（agent 聊天模式）。用户一句话 → 你选一个工具。",
-        "规则：",
-        "1. 用户没指明玩哪个游戏时，不要调用 play_game，直接回复询问（intent clarify）。",
-        "2. 对局中的落子/发言只能用描述里给出的合法动作；含糊的话不调用动作工具，直接聊天。",
-        "3. 隐藏信息红线：不得编造任何对手/其他玩家的未公开信息"
-        "（手牌、身份、底牌、未翻开的牌、棋局评估等）——依据用户输入和给出的合法动作行事；"
-        "需要局面细节时调用 get_match_state（它返回玩家自己可见的投影）。",
-        "4. 知识红线：用户问游戏/平台知识（“X是什么/怎么玩/规则/有哪些游戏”）时，先调用 "
-        "describe_game / list_games 取权威资料，只依据资料回答；资料里没有的细节不要编造，"
-        "直接说不知道或建议开一局体验。",
-        "5. 平台功能提问：用户问**某功能怎么用/在哪**（“怎么创建游戏”“在线学习怎么用”“评测中心"
-        "在哪”“教学对局是什么”“视觉识别”“LLM配置”）时，先调用 get_platform_help 取该主题的"
-        "权威说明，再依据资料回答；不要泛泛而谈或编造功能细节。",
-    ]
+    opponent = session is not None and bool(getattr(session, "is_opponent_mode", False))
+    if opponent:
+        # 二人非教练 = 座内对手：聊天模型就是牌桌对面的 AI 对手。它只能看
+        # 自己的投影（get_match_state 返回 AI 视角），红线镜像 teaching——
+        # 拦「玩家的隐藏牌」与「AI 自己的具体花色点数」，放行 AI 模糊牌力。
+        # 修复 2026-08 对局记录：对手模式聊天把玩家投影直接喂给模型，AI 报出
+        # 「你现在手里是方块9和红桃3」；且提示词无红线，AI 自报「黑桃K」。
+        lines = [
+            head + "你是玩家在本局牌桌对面的**座内对手**（二人非教练对局）。用户一句话 → 你选一个工具。",
+            "规则：",
+            "1. 用户没指明玩哪个游戏时，不要调用 play_game，直接回复询问（intent clarify）。",
+            "2. 对局中的替玩家落子/发言只能用描述里给出的合法动作；含糊的话不调用动作工具，直接聊天。",
+            "3. 你能看到**自己**的底牌/手牌（仅供判断牌力、决定下注与虚张），"
+            "但**看不到玩家的底牌/手牌/身份**——那是玩家的隐藏信息。"
+            "需要局面细节时调用 get_match_state（它返回**你(AI)自己可见的投影**："
+            "你的底牌 + 公共牌 + 公开下注；绝不含玩家底牌——也不要猜测玩家底牌）。",
+            "4. 红线一：绝不提及或猜测玩家的未公开信息（底牌、手牌、身份等）——只能基于玩家"
+            "公开的下注/弃牌/摸打序列推断意图（读人），绝不报玩家未公开牌面。",
+            "5. 红线二：绝不报出**你自己**底牌的具体花色与点数（如「黑桃4」「♠A」「s10」"
+            "「红5」），只能说「这手还行」「牌不大」「一对K」这类模糊牌力——报出具体牌面"
+            "等于明牌，会直接毁掉这局；终局 showdown 揭底后双方牌公开，可做完整复盘式点评。",
+            "6. 知识红线：用户问游戏/平台知识（“X是什么/怎么玩/规则/有哪些游戏”）时，先调用 "
+            "describe_game / list_games 取权威资料，只依据资料回答；资料里没有的细节不要编造。",
+            "7. 平台功能提问：用户问**某功能怎么用/在哪**时，先调用 get_platform_help 取该主题的"
+            "权威说明，再依据资料回答；不要泛泛而谈或编造功能细节。",
+        ]
+    else:
+        lines = [
+            head + "你是 Gavis 平台的对话助手（agent 聊天模式）。用户一句话 → 你选一个工具。",
+            "规则：",
+            "1. 用户没指明玩哪个游戏时，不要调用 play_game，直接回复询问（intent clarify）。",
+            "2. 对局中的落子/发言只能用描述里给出的合法动作；含糊的话不调用动作工具，直接聊天。",
+            "3. 隐藏信息红线：不得编造任何对手/其他玩家的未公开信息"
+            "（手牌、身份、底牌、未翻开的牌、棋局评估等）——依据用户输入和给出的合法动作行事；"
+            "需要局面细节时调用 get_match_state（它返回玩家自己可见的投影）。",
+            "4. 知识红线：用户问游戏/平台知识（“X是什么/怎么玩/规则/有哪些游戏”）时，先调用 "
+            "describe_game / list_games 取权威资料，只依据资料回答；资料里没有的细节不要编造，"
+            "直接说不知道或建议开一局体验。",
+            "5. 平台功能提问：用户问**某功能怎么用/在哪**（“怎么创建游戏”“在线学习怎么用”“评测中心"
+            "在哪”“教学对局是什么”“视觉识别”“LLM配置”）时，先调用 get_platform_help 取该主题的"
+            "权威说明，再依据资料回答；不要泛泛而谈或编造功能细节。",
+        ]
     if games:
         catalog = "\n".join("- " + _game_brief(g) for g in games[:24])
         lines.append("可用游戏:\n" + catalog)
@@ -661,13 +847,19 @@ def _system_prompt(
         # “复盘一下”不必从零开始（get_match_review 从历史取数）。
         display = next((g["display_name"] for g in games if g.get("game_id") == latest.get("game_id")), None)
         label = display or str(latest.get("game_id") or "对局")
-        winner = str(latest.get("winner") or "")
-        if winner and winner == latest.get("player_pid"):
-            result = "你获胜"
-        elif winner:
-            result = "AI 获胜"
+        # 阵营胜者已由 _latest_match 解析为 _won（玩家视角）；无 _won 时退回
+        # pid 比较（常规对局）与"平局"（无胜者）。
+        won = latest.get("_won")
+        if won is not None:
+            result = "你获胜" if won else "AI 获胜"
         else:
-            result = "平局"
+            winner = str(latest.get("winner") or "")
+            if winner and winner == latest.get("player_pid"):
+                result = "你获胜"
+            elif winner:
+                result = "AI 获胜"
+            else:
+                result = "平局"
         lines.append(
             f"最近一局: {label}（{latest.get('moves', '?')} 手，{result}）"
             "——用户想复盘/回顾上一局时调用 get_match_review"
@@ -809,9 +1001,16 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
                 "function": {
                     "name": "get_match_state",
                     "description": (
-                        "获取当前对局的实时状态（棋盘布局/你的手牌/公共牌/牌河/各家张数等"
-                        "——都是玩家自己能看到的公开信息）。用户问“现在什么局面/我有什么牌/"
-                        "这步怎么走”或需要局面细节时调用，依据返回内容回答，不要凭空猜测。"
+                        "获取当前对局的实时状态"
+                        + (
+                            "（**你(AI)自己可见的投影**：你的底牌/手牌 + 公共牌/牌河 + "
+                            "公开下注与筹码。玩家的底牌/手牌不可见——不要猜测玩家的隐藏牌，"
+                            "也不要向玩家报出你自己底牌的具体花色点数）。"
+                            if bool(getattr(session, "is_opponent_mode", False))
+                            else "（棋盘布局/你的手牌/公共牌/牌河/各家张数等——都是玩家自己能看到的公开信息）。"
+                        )
+                        + "用户问“现在什么局面/我有什么牌/这步怎么走”或需要局面细节时调用，"
+                        "依据返回内容回答，不要凭空猜测。"
                     ),
                     "parameters": {"type": "object", "properties": {}, "required": []},
                 },
@@ -903,8 +1102,7 @@ def _find_game(text: str, games: list[dict]) -> dict | None:
                 continue
             lname = name.lower()
             if lname in lowered and (
-                len(lname) > best_len
-                or (len(lname) == best_len and is_custom and not best_is_custom)
+                len(lname) > best_len or (len(lname) == best_len and is_custom and not best_is_custom)
             ):
                 best = g
                 best_len = len(lname)
@@ -1342,7 +1540,7 @@ def _stream_events(result: ChatTurnResult) -> list[dict[str, Any]]:
     ]
 
 
-def chat_turn(
+def _chat_turn_core(
     manager: PlayManager,
     text: str,
     *,
@@ -1467,7 +1665,42 @@ def chat_turn(
     return fallback_intent(text, games, session)
 
 
-def chat_turn_stream(
+def chat_turn(
+    manager: PlayManager,
+    text: str,
+    *,
+    llm: LLMClient | None = None,
+    game_id: str | None = None,
+    custom: CustomGameRegistry | None = None,
+    history: list[dict[str, Any]] | None = None,
+    match_history: Any = None,
+) -> ChatTurnResult:
+    """Turn one user message into a validated platform intent (fail-soft).
+
+    ``_chat_turn_core`` 之上包一层**隐藏信息后置扫描**（:func:`_guard_text`）：
+    对手/教学模式的聊天正文不得泄露玩家隐藏牌或 AI 自己的具体牌面——
+    2026-08 对局记录里对手模式聊天直接报「你现在手里是方块9和红桃3」、
+    「我手里拿着黑桃K和黑桃3」，这次在出口统一收口。
+    """
+    result = _chat_turn_core(
+        manager,
+        text,
+        llm=llm,
+        game_id=game_id,
+        custom=custom,
+        history=history,
+        match_history=match_history,
+    )
+    session = None
+    if game_id:
+        try:
+            session = manager.get(str(game_id))
+        except Exception:
+            session = None
+    return _finalize_chat_result(result, session)
+
+
+def _chat_turn_stream_core(
     manager: PlayManager,
     text: str,
     *,
@@ -1615,3 +1848,42 @@ def chat_turn_stream(
         )
         return
     yield from _stream_events(fallback_intent(text, games, session))
+
+
+def chat_turn_stream(
+    manager: PlayManager,
+    text: str,
+    *,
+    llm: LLMClient | None = None,
+    game_id: str | None = None,
+    custom: CustomGameRegistry | None = None,
+    history: list[dict[str, Any]] | None = None,
+    match_history: Any = None,
+) -> Iterator[dict[str, Any]]:
+    """SSE 事件生成器 — ``chat_turn`` 的流式出口（``/api/chat`` 流式模式）.
+
+    ``_chat_turn_stream_core`` 之上包一层**隐藏信息后置扫描**：``intent``
+    事件的最终正文按陪伴身份过 :func:`_guard_text`（对手/教学两态收口），
+    增量 ``text``/``reasoning`` 事件原样上浮——前端以 ``intent`` 事件的全量
+    文本为最终回复，泄露句在收口时被改写。
+    """
+    session = None
+    if game_id:
+        try:
+            session = manager.get(str(game_id))
+        except Exception:
+            session = None
+    for event in _chat_turn_stream_core(
+        manager,
+        text,
+        llm=llm,
+        game_id=game_id,
+        custom=custom,
+        history=history,
+        match_history=match_history,
+    ):
+        if event["event"] == "intent" and isinstance(event.get("data"), dict):
+            data = dict(event["data"])
+            data["text"] = _guard_text(str(data.get("text", "")), session)
+            event = {"event": "intent", "data": data}
+        yield event

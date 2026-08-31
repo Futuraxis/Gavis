@@ -25,7 +25,8 @@ from layer2_engine.core.llm import LLMClient, sanitize_text
 
 from ..frontend.engine_helpers import canonical_family_text, game_family, piece_names
 from ..frontend.platform.game_knowledge import game_knowledge_text
-from .hidden_guard import infer_game_id, scan
+from ..result import player_won
+from .hidden_guard import infer_game_id, resolve_scan_game, scan
 from .persona import Persona, persona_identity_block
 from .skills import SkillContext
 
@@ -160,9 +161,10 @@ class DialogueEngine:
         text, reasoning = self._generate(ctx, scenario, game_id, teaching=teaching, adversarial=adversarial)
         text = self._clean(text)
         reasoning = self._clean_reasoning(reasoning)
-        # 泄露扫描按观测形态自行推断游戏（不变更红线语义）；
-        # game_id 参数只服务于知识注入。
-        scan_game = infer_game_id(ctx.observation)
+        # 泄露扫描游戏 id：显式内置 ``game_id`` 优先（UNO/麻将视图名撞前缀、
+        # 观测缺视图名时推断会错/落空，扫描会静默跳过）；custom/未知回退观测
+        # 形态推断（不变更红线语义）。``game_id`` 同时服务知识注入。
+        scan_game = resolve_scan_game(game_id, ctx.observation)
         text = scan(text, scan_game, teaching=teaching, adversarial=adversarial, revealed=revealed)
 
         key = (scenario, self.persona.key, _state_hash(ctx))
@@ -316,6 +318,13 @@ def _endgame_outcome(ctx: SkillContext) -> dict[str, Any]:
       AI；玩家 id = ``ctx.human_pid``，玩家未胜即「AI 获胜（玩家落败）」。
     - 多胡局（``winners`` 列表）：玩家在 ``winners`` 中即计玩家胜，避免血
       战等多胡局误判玩家落败。
+    - 阵营胜者（社交游戏）：``winner`` 是阵营名（``undercover`` /
+      ``civilian`` / ``blank`` / ``wolf`` / ``good``）而非 pid——直接把
+      ``winner`` 与 ``ctx.human_pid`` 比会把这个阵营判给「AI」（实测 bug：
+      e7deb84b 卧底获胜一局被误报「AI 获胜（玩家落败）」）。胜负解析交给
+      :func:`layer4_interface.result.player_won`：先 pid / ``winners`` 判定，
+      再按身份表（``final_roles``）做阵营匹配；身份表缺失时用引擎
+      per-viewer 终局效用（``ctx.evaluation.score`` 的符号，±1/0）兜底。
 
     终局事实取自公开 ``env``（``project_observation`` 投影 env 不被 visibility
     过滤），不触碰任何隐藏数组。
@@ -327,23 +336,21 @@ def _endgame_outcome(ctx: SkillContext) -> dict[str, Any]:
     raw_winners = env.get("winners")
     winners = list(raw_winners) if isinstance(raw_winners, list) else []
 
-    if bool(getattr(ctx, "adversarial", False)):
-        ai_pid = getattr(ctx, "ai_pid", "") or ctx.human_pid
-        if winner == ai_pid:
-            outcome = "你（AI）获胜"
-        elif winner is None and not winners:
-            outcome = "平局"
-        else:
-            outcome = "你（AI）落败，玩家获胜"
+    score = 0.0
+    if isinstance(ctx.evaluation, dict):
+        try:
+            score = float(ctx.evaluation.get("score") or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+    won = player_won(winner, ctx.human_pid, winners, ctx.observation, score=score)
+
+    adversarial = bool(getattr(ctx, "adversarial", False))
+    if won is True:
+        outcome = "你（AI）获胜" if adversarial else "AI 落败（玩家获胜）"
+    elif won is None:
+        outcome = "平局"
     else:
-        player_pid = ctx.human_pid
-        player_won = winner == player_pid or player_pid in winners
-        if player_won:
-            outcome = "AI 落败（玩家获胜）"
-        elif winner is None and not winners:
-            outcome = "平局"
-        else:
-            outcome = "AI 获胜（玩家落败）"
+        outcome = "你（AI）落败，玩家获胜" if adversarial else "AI 获胜（玩家落败）"
     return {"winner": winner, "winners": winners, "outcome": outcome}
 
 

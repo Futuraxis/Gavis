@@ -27,6 +27,7 @@ from ...agent import PERSONAS, DialogueEngine
 from ...difficulty.adaptive import AdaptiveController
 from ...online_learning import LearningManager, LearningStore, OnlineModelStore
 from ...profile.store import ProfileStore
+from ...result import player_won
 from ...review import analyze as review_analyze
 from ..common.http_utils import (
     BodyTooLargeError,
@@ -679,6 +680,24 @@ def make_handler(
             for meta in matches:
                 if isinstance(meta, dict):
                     meta["seat_names"] = self._seat_names_for(meta.get("game_id") or "")
+                    # 阵营胜者补齐 won：旧记录 meta 没有 won / final_roles，读全量记录
+                    # 最后一手快照解析（社交阵营胜者才能正确标注胜负，见
+                    # layer4_interface/result.py）；有 won（含 False）则跳过。
+                    if meta.get("won") is None and meta.get("winner"):
+                        try:
+                            full = history.get(str(meta.get("match_id") or ""))
+                            moves = full.get("moves") if isinstance(full, dict) else None
+                            snap = (
+                                moves[-1].get("snapshot")
+                                if isinstance(moves, list) and moves and isinstance(moves[-1], dict)
+                                else None
+                            )
+                            if isinstance(snap, dict):
+                                meta["won"] = player_won(
+                                    meta.get("winner"), meta.get("player_pid"), snap.get("winners"), snap
+                                )
+                        except Exception:
+                            pass
             send_json(self, HTTPStatus.OK, {"ok": True, "matches": matches})
 
         def _handle_history_get(self, match_id: str) -> None:
