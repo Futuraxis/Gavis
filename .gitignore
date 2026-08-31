@@ -11,3 +11,5 @@ platform-frontend/dist/
 .docs
 # 临时实验/探针脚本与产物
 .scratch
+# Mac 存储文件
+.DS_Store
