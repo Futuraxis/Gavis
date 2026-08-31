@@ -211,3 +211,40 @@ class TestLLMClient:
     def test_complete_fails_soft_when_unreachable(self):
         client = LLMClient(base_url="http://127.0.0.1:59999", timeout_s=0.5)
         assert client.complete_chat("sys", "usr", 8) == ""
+
+
+class TestEvaluationPidFree:
+    """evaluate 的 summary/mechanical_text 不得含原始 pid。
+
+    pid（如 ``p_sb``）会经 ``_scenario_payload`` 的 ``summary`` 字段渗入对话
+    LLM 的「机械事实」，被角色扮演的 AI 复述成「p_sb 赢了」（用户实测）。
+    摘要须为 viewer 相对、pid 无关的措辞（「本方获胜」等）。
+    """
+
+    class _TermEngine:
+        """Stub：恒终局，viewer=p_sb 时 utility=+1（本方获胜），否则 -1。"""
+
+        def is_terminal(self, state):
+            return True
+
+        def get_utility(self, state, viewer):
+            return 1.0 if viewer == "p_sb" else -1.0
+
+    def test_terminal_summary_has_no_pid(self):
+        from layer4_interface.agent.evaluation import evaluate
+
+        eng = self._TermEngine()
+        for viewer in ("p_sb", "p_bb", "p0"):
+            res = evaluate({}, viewer, eng)
+            assert viewer not in res["summary"], res
+            assert viewer not in res["mechanical_text"], res
+            assert res["summary"] in ("本方获胜", "本方落败", "平局"), res
+
+    def test_nonterminal_summary_has_no_pid(self, moon_engine):
+        from layer4_interface.agent.evaluation import evaluate
+
+        state = moon_engine.create_initial_state()
+        for viewer in ("p_black", "p_white"):
+            res = evaluate(state, viewer, moon_engine)
+            assert viewer not in res["summary"], res
+            assert viewer not in res["mechanical_text"], res

@@ -26,7 +26,12 @@ Tool classes (function-calling audit 2026-09 + 对局/复盘信息源修复):
     in params; the model sees the hint and can explain it;
   - ``get_match_review`` — the latest (or given) match's timeline + key
     nodes + improvement, narrated by the model as the ``review``
-    intent (the report travels in params — no more canned-only 复盘).
+    intent (the report travels in params — no more canned-only 复盘);
+  - ``get_platform_help`` — per-feature platform help docs
+    (``platform_knowledge`` 单一事实来源)：用户问**具体功能怎么用**时
+    （“怎么创建游戏/在线学习怎么用/评测中心在哪/教学对局是什么/LLM
+    配置/视觉识别…”）先取该主题的权威说明再回答——旧 ``help`` 工具只
+    回一段泛泛总览，面对具体功能提问只能泛泛而谈或编造。
 
   The deterministic fallback answers the same classes from the same
   data when no LLM is available.
@@ -82,7 +87,15 @@ from ..engine_helpers import (
 from .custom_games import CustomGameRegistry
 from .game_knowledge import GAME_ALIASES, game_knowledge_text, game_rules_text
 from .games import GAMES
+from .platform_knowledge import (
+    PLATFORM_TOPIC_KEYS,
+    match_platform_topic,
+    platform_help_index,
+    platform_help_text,
+)
 from .session import _BUILTIN_FAMILY, PlayManager
+
+from ...agent.persona import PERSONAS, Persona, persona_identity_block
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +122,14 @@ _REASONING_MAX_CHARS = 8000
 #: 资料组织最终回答。动作类工具仍走 intent 映射（fail-soft 校验）。
 #: 其中 ``ask_hint`` 例外地非纯只读：会标记 ``session.hinted``（语义上
 #: 用户确实要了提示——与 ``/match/hint`` 路由是同一调用）。
-_INFO_TOOLS = ("describe_game", "list_games", "get_match_state", "ask_hint", "get_match_review")
+_INFO_TOOLS = (
+    "describe_game",
+    "list_games",
+    "get_match_state",
+    "ask_hint",
+    "get_match_review",
+    "get_platform_help",
+)
 
 #: get_match_state 的载荷预算（字符）。玩家投影快照除头部/棋盘/噪音
 #: 字段外逐 key 序列化，超预算截断（fail-soft，宁缺毋滥）。
@@ -264,6 +284,7 @@ def _collect_games(custom: CustomGameRegistry | None) -> list[dict]:
                     "description": str(entry.get("description") or ""),
                     "kind": "board",
                     "family": entry.get("family"),
+                    "custom": True,
                 }
             )
     # 去重（自定义游戏可能覆盖内置 id）
@@ -452,6 +473,18 @@ def _humanize_snap(snap: dict, family: str) -> dict:
     return out
 
 
+def _result_label(snap: dict) -> str:
+    """终局结果称呼（绝不泄漏内部 pid 如 ``p_white``）。
+
+    你 / AI 获胜 / 平局——与 ``_render_board`` 的"你/AI"口径一致；
+    ``snap`` 取 ``winner`` 与 ``player_pid`` 比较。
+    """
+    w = snap.get("winner")
+    if w is None:
+        return "平局"
+    return "你获胜" if w == snap.get("player_pid") else "AI 获胜"
+
+
 def _legal_context(session: Any) -> str:
     """Condensed, *already-projected* legal context for the model (hidden info red line).
 
@@ -465,7 +498,7 @@ def _legal_context(session: Any) -> str:
         return ""
     parts: list[str] = []
     if snap.get("over"):
-        parts.append(f"本局已结束，胜方: {snap.get('winner') or '未知'}")
+        parts.append(f"本局已结束，{_result_label(snap)}")
         return "；".join(parts)
     family = getattr(session, "family", None) or game_family(getattr(session, "game_id", ""))
     for key in ("legal", "legal_options", "legal_actions", "choices"):
@@ -523,7 +556,7 @@ def _match_state_text(session: Any) -> str:
     snap = _humanize_snap(snap, family)
     player_pid = snap.get("player_pid")
     if snap.get("over"):
-        parts.append(f"本局已结束，胜方: {snap.get('winner') or '未知'}")
+        parts.append(f"本局已结束，{_result_label(snap)}")
     else:
         turn = snap.get("turn")
         if turn is not None and player_pid is not None:
@@ -590,17 +623,27 @@ def _system_prompt(
     session: Any,
     active: list[dict],
     latest: dict | None = None,
+    *,
+    persona: Persona | None = None,
 ) -> str:
+    # 身份块（方向 C 人设统一）：平台助手与对局陪玩共用同一份 persona
+    # 描述——用户在 profile 选一次人设后，两层身份连贯。persona=None
+    # 时退回无性格的工具型助手（兼容旧调用方 / 测试）。
+    head = persona_identity_block(persona) + "\n" if persona is not None else ""
     lines = [
-        "你是 Gavis 平台的对话助手（agent 聊天模式）。用户一句话 → 你选一个工具。",
+        head + "你是 Gavis 平台的对话助手（agent 聊天模式）。用户一句话 → 你选一个工具。",
         "规则：",
         "1. 用户没指明玩哪个游戏时，不要调用 play_game，直接回复询问（intent clarify）。",
         "2. 对局中的落子/发言只能用描述里给出的合法动作；含糊的话不调用动作工具，直接聊天。",
-        "3. 隐藏信息红线：绝不编造其他玩家手牌/身份/棋局评估——依据用户输入和给出的合法动作行事；"
+        "3. 隐藏信息红线：不得编造任何对手/其他玩家的未公开信息"
+        "（手牌、身份、底牌、未翻开的牌、棋局评估等）——依据用户输入和给出的合法动作行事；"
         "需要局面细节时调用 get_match_state（它返回玩家自己可见的投影）。",
         "4. 知识红线：用户问游戏/平台知识（“X是什么/怎么玩/规则/有哪些游戏”）时，先调用 "
         "describe_game / list_games 取权威资料，只依据资料回答；资料里没有的细节不要编造，"
         "直接说不知道或建议开一局体验。",
+        "5. 平台功能提问：用户问**某功能怎么用/在哪**（“怎么创建游戏”“在线学习怎么用”“评测中心"
+        "在哪”“教学对局是什么”“视觉识别”“LLM配置”）时，先调用 get_platform_help 取该主题的"
+        "权威说明，再依据资料回答；不要泛泛而谈或编造功能细节。",
     ]
     if games:
         catalog = "\n".join("- " + _game_brief(g) for g in games[:24])
@@ -641,9 +684,11 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
     Besides the action tools this always exposes the *info* tools —
     read-only queries the backend executes in-loop and feeds back as
     ``role: "tool"`` messages: ``describe_game`` / ``list_games`` (the
-    registry + play docs), ``get_match_review`` (latest match timeline
-    + key nodes) and, mid-match, ``get_match_state`` (the player-
-    projected live snapshot) + ``ask_hint`` (the mechanical hint).
+    registry + play docs), ``get_platform_help`` (per-feature platform
+    help docs — answers “具体功能怎么用” from authoritative data),
+    ``get_match_review`` (latest match timeline + key nodes) and,
+    mid-match, ``get_match_state`` (the player-projected live snapshot)
+    + ``ask_hint`` (the mechanical hint).
     """
     game_enum = [g["game_id"] for g in games if g["game_id"]]
     tools: list[dict] = [
@@ -680,6 +725,29 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
                 "name": "list_games",
                 "description": "列出平台全部游戏（按棋盘/扑克/麻将/UNO/自定义分组）。用户问“有哪些游戏/目录”时调用。",
                 "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_platform_help",
+                "description": (
+                    "查询平台某项功能的权威帮助文档（是什么/怎么说一句话触发/入口在哪/注意点）。"
+                    "用户问**具体功能**怎么用时调用——如“怎么开局/继续对局/落子/要提示/看战绩/复盘/"
+                    "创建游戏/改设置/评测中心/在线学习/教学对局/LLM配置/视觉识别”。"
+                    "topic 拿不准时可省略以获取主题总览。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {
+                            "type": "string",
+                            "enum": list(PLATFORM_TOPIC_KEYS),
+                            "description": "要查询的功能主题 key；省略则返回全部主题总览。",
+                        }
+                    },
+                    "required": [],
+                },
             },
         },
         {
@@ -789,7 +857,11 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
         ("open_platform", "用户想回到完整平台界面时调用"),
         ("run_benchmark", "用户想看评测/求解器对比时调用"),
         ("show_learning", "用户想看在线学习状态时调用"),
-        ("help", "用户问你能做什么/怎么用/帮助时调用"),
+        (
+            "help",
+            "用户**泛泛**问你能做什么/怎么用（未指向具体功能）时调用；"
+            "指向具体功能（如“怎么创建游戏”“在线学习怎么用”）时改用 get_platform_help。",
+        ),
     ]:
         tools.append(
             {
@@ -813,21 +885,30 @@ def _find_game(text: str, games: list[dict]) -> dict | None:
     匹配大小写不敏感（拉丁短名 "uno"/"UNO" 等价），并纳入每款游戏的
     别名表（``GAME_ALIASES``）——display_name 带括注（「UNO（经典）」）
     或空格（「UNO 抢牌」）时，用户口语短名（"UNO"/"UNO抢牌"）也能命中。
-    同一句命中多款时最长匹配胜出（"UNO 7-0" 优先于裸 "UNO"）。
+    同一句命中多款时最长匹配胜出（"UNO 7-0" 优先于裸 "UNO"）；**等长
+    平局时自定义游戏优先**——内置先入表、``>`` 严格大于曾让内置永久
+    遮蔽同名自定义游戏（用户刚创建一款 display_name 与内置 game_id 撞串
+    的游戏后，"玩X" 总是开内置而非他创建的那款）。
     """
     lowered = text.lower()
     best: dict | None = None
     best_len = 0
+    best_is_custom = False
     for g in games:
         candidates = [str(g.get(key, "")) for key in ("display_name", "game_id")]
         candidates.extend(GAME_ALIASES.get(str(g.get("game_id", "")), ()))
+        is_custom = bool(g.get("custom"))
         for name in candidates:
             if not name:
                 continue
             lname = name.lower()
-            if lname in lowered and len(lname) > best_len:
+            if lname in lowered and (
+                len(lname) > best_len
+                or (len(lname) == best_len and is_custom and not best_is_custom)
+            ):
                 best = g
                 best_len = len(lname)
+                best_is_custom = is_custom
     return best
 
 
@@ -885,6 +966,19 @@ def _execute_info_tool(
     if name == "get_match_state":
         body = _match_state_text(session)
         return ChatTurnResult(intent="chat", text=body, mood="thinking", params={})
+    if name == "get_platform_help":
+        # 具体功能帮助：topic key → 权威文档；topic 缺省/未知 → 主题总览
+        # （fail-soft：拿不准时给目录，模型可再指定主题或直接据此作答）。
+        topic = str(arguments.get("topic") or "").strip().lower()
+        body = platform_help_text(topic) if topic else platform_help_index()
+        if not body:
+            body = platform_help_index()
+        return ChatTurnResult(
+            intent="chat",
+            text=body,
+            mood="thinking",
+            params={"topic": topic} if topic else {},
+        )
     if name == "ask_hint":
         return _ask_hint_result(arguments, session, manager)
     if name == "get_match_review":
@@ -1126,6 +1220,20 @@ def fallback_intent(text: str, games: list[dict], session: Any) -> ChatTurnResul
                 params={"game_id": session.game_id},
             )
         return ChatTurnResult(intent="chat", text="当前没有进行中的对局，想玩点什么？", params={})
+    # 具体平台功能提问（未命中上面任一动作意图）→ 主题文档确定性回答。
+    # “怎么改难度”“教学对局是什么”“视觉识别怎么用”：旧逻辑落到泛泛
+    # 默认 chat，现在给对应主题的权威帮助（与 get_platform_help 同源，
+    # 单一事实来源）。“你能做什么”这类泛泛问不命中主题，走原 _HELP_TEXT。
+    topic = match_platform_topic(text)
+    if topic is not None:
+        body = platform_help_text(topic)
+        if body:
+            return ChatTurnResult(
+                intent="help",
+                text=body,
+                mood="thinking",
+                params={"topic": topic},
+            )
     if _HELP_RE.search(text):
         return ChatTurnResult(intent="help", text=_HELP_TEXT, params={})
     if _PLAY_RE.search(text):
@@ -1183,12 +1291,14 @@ def _prepare(
     game_id: str | None = None,
     custom: CustomGameRegistry | None = None,
     match_history: Any = None,
-) -> tuple[str, Any, list[dict], list[dict], dict | None]:
-    """聊天回合共享前置：清洗文本、定位 session、收集目录/活跃会话/最近对局.
+) -> tuple[str, Any, list[dict], list[dict], dict | None, Persona]:
+    """聊天回合共享前置：清洗文本、定位 session、收集目录/活跃会话/最近对局、
+    解析全局人设.
 
     Returns:
-        ``(text, session, games, active, latest)`` —— ``chat_turn`` 与
-        ``chat_turn_stream`` 共用，保证两个出口的上下文一致。
+        ``(text, session, games, active, latest, persona)`` —— ``chat_turn``
+        与 ``chat_turn_stream`` 共用，保证两个出口的上下文与人设一致。
+        persona 取全局默认（profile → gentle 兜底），平台助手据此注入身份块。
     """
     text = (text or "").strip()
     session = None
@@ -1201,7 +1311,8 @@ def _prepare(
     active = manager.active_sessions()[:16]
     # 终局后 session 已移除 → 用最近一局补 system prompt 上下文。
     latest = _latest_match(match_history) if session is None or session.over else None
-    return text, session, games, active, latest
+    persona = PERSONAS.get(manager.default_persona()) or PERSONAS["gentle"]
+    return text, session, games, active, latest, persona
 
 
 def _assemble_llm_prompt(
@@ -1211,10 +1322,12 @@ def _assemble_llm_prompt(
     latest: dict | None,
     history: list[dict[str, Any]] | None,
     text: str,
+    *,
+    persona: Persona | None = None,
 ) -> tuple[list[dict], list[dict[str, Any]]]:
     """拼 LLM 一回合的 ``(tools, messages)``（system 每轮现构，客户端 history 白名单清洗）。"""
     tools = build_tools(games=games, session=session, active=active)
-    system = _system_prompt(games, session, active, latest=latest)
+    system = _system_prompt(games, session, active, latest=latest, persona=persona)
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     messages.extend(_sanitize_history(history))
     messages.append({"role": "user", "content": text})
@@ -1251,14 +1364,14 @@ def chat_turn(
     (post-match context instead of a blank slate once the session is
     removed from the registry).
     """
-    text, session, games, active, latest = _prepare(
+    text, session, games, active, latest, persona = _prepare(
         manager, text, game_id=game_id, custom=custom, match_history=match_history
     )
     if not text:
         return ChatTurnResult(intent="chat", text=_HELP_TEXT, params={})
 
     if llm is not None:
-        tools, messages = _assemble_llm_prompt(games, session, active, latest, history, text)
+        tools, messages = _assemble_llm_prompt(games, session, active, latest, history, text, persona=persona)
         # Bounded tool loop: info tools are executed locally and their
         # result is fed back as a ``role: "tool"`` message so the model
         # can answer from authoritative data; action tools map to an
@@ -1382,7 +1495,7 @@ def chat_turn_stream(
     的 ``intent`` 事件（已流出的增量由前端决定去留）；``llm=None`` /
     无 LLM 直接产出兜底 ``intent``（不产生任何增量）。
     """
-    text, session, games, active, latest = _prepare(
+    text, session, games, active, latest, persona = _prepare(
         manager, text, game_id=game_id, custom=custom, match_history=match_history
     )
     if not text:
@@ -1391,7 +1504,7 @@ def chat_turn_stream(
     if llm is None:
         yield from _stream_events(fallback_intent(text, games, session))
         return
-    tools, messages = _assemble_llm_prompt(games, session, active, latest, history, text)
+    tools, messages = _assemble_llm_prompt(games, session, active, latest, history, text, persona=persona)
     last_tool_result = ""
     carried: ChatTurnResult | None = None
     call_seq = 0  # 端点未给 id 时的合成 tool_call_id 计数

@@ -21,17 +21,6 @@ const GAME_LABELS: Record<string, string> = {
   mahjong_taiwan: '台湾麻将（16张）',
 }
 
-const SEAT_LABELS: Record<string, string> = {
-  p_black: '黑棋',
-  p_white: '白棋',
-  p_sb: '小盲位',
-  p_bb: '大盲位',
-  p0: '庄家',
-  p1: '下家',
-  p2: '对家',
-  p3: '上家',
-}
-
 const KIND_LABELS: Record<KeyNode['kind'], string> = {
   turning_point: '转折点',
   winning_move: '胜负手',
@@ -117,7 +106,9 @@ export default function ReviewPage() {
         <span className={`badge ${match.winner == null ? '' : won ? 'win' : 'lose'}`}>{title}</span>
       </div>
       <p className="page-sub">
-        你执 {SEAT_LABELS[match.player_pid] ?? match.player_pid} · 难度 {match.difficulty} · 共 {entries.length} 步
+        你执 {match.seat_names?.[match.player_pid] ?? match.player_pid} ·{' '}
+        {match.adaptive ? `自适应难度 ⚙ 强度 ${match.ai_strength ?? '—'}` : `难度 ${match.difficulty}`} · 共{' '}
+        {entries.length} 步
       </p>
 
       <div className="review-layout">

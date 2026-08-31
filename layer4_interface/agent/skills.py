@@ -137,13 +137,15 @@ class Skills:
     def summarize_result(ctx: SkillContext, engine: Any, winner: str, player_pid: str) -> dict[str, Any]:
         """赛后胜负机械事实."""
         won = winner == player_pid
-        summary = f"{player_pid} 获胜" if won else f"{player_pid} 落败，胜者 {winner}"
+        # 不含原始 pid：摘要经对话载荷渗入 LLM 文本时，pid 会被复述成
+        # 「p_sb 赢了」（见 evaluation.py 同源修复）。「本方」= 玩家视角。
+        summary = "本方获胜" if won else "本方落败"
         return {
             "winner": winner,
             "player_pid": player_pid,
             "won": won,
             "summary": summary,
-            "mechanical_text": f"对局结束，胜者 {winner}",
+            "mechanical_text": "对局结束",
         }
 
     @staticmethod

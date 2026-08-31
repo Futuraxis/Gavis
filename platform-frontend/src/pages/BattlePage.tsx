@@ -24,10 +24,6 @@ import MoonBoard from '../components/boards/MoonBoard'
 import PokerTable from '../components/boards/PokerTable'
 import { FAMILY_BOARDS } from '../components/boards/familyBoards'
 
-const SEAT_SHORT: Record<string, string> = {
-  p_black: '黑棋', p_white: '白棋', p_sb: '小盲位', p_bb: '大盲位',
-  p0: '庄家', p1: '下家', p2: '对家', p3: '上家',
-}
 const DIFFICULTY_SHORT: Record<string, string> = { easy: '简单', normal: '普通', hard: '困难' }
 const PERSONA_NAMES: Record<PersonaKey, string> = {
   gentle: '温柔陪伴', teacher: '认真教学', banter: '轻松吐槽', cold: '高冷竞技',
@@ -124,6 +120,7 @@ export default function BattlePage() {
         game_id: gameId,
         player_pid: config.playerPid,
         difficulty: config.difficulty,
+        theme: config.theme,
         player_count: config.playerCount,
         persona: config.persona,
         hint_level: config.hintLevel,
@@ -285,8 +282,15 @@ export default function BattlePage() {
     <div>
       <div className="battle-header">
         <h1 className="page-title">{game.display_name} · 人机对战</h1>
-        <span className="badge accent">{DIFFICULTY_SHORT[session.difficulty] ?? session.difficulty}</span>
-        <span className="badge">{SEAT_SHORT[session.player_pid] ?? session.player_pid}</span>
+        <span
+          className="badge accent"
+          title={session.adaptive ? `自适应难度：AI 强度按你近 10 局胜率自动升降（本局实际强度 ${session.ai_strength ?? '—'}）` : undefined}
+        >
+          {session.adaptive
+            ? `自适应 ⚙ 强度 ${session.ai_strength ?? '—'}`
+            : DIFFICULTY_SHORT[session.difficulty] ?? session.difficulty}
+        </span>
+        <span className="badge">{game.seat_names[session.player_pid] ?? session.player_pid}</span>
         {session.teaching && (
           <span className="badge" title="教练能看到你的牌并推理；看不到 AI/对手的牌">
             📖 教学对局
@@ -318,7 +322,7 @@ export default function BattlePage() {
                     ? (session as MahjongSnapshot).phase === 'claim'
                       ? // claim 是响应别人打出的牌，不是你的出牌回合（四人轮转里
                         // 三家 AI 先被问碰/杠/胡，轮到你就是响应这张牌）。
-                        `响应 ${SEAT_SHORT[(session as MahjongSnapshot).last_discarder ?? ''] ?? '对方'} 的牌`
+                        `响应 ${game.seat_names[(session as MahjongSnapshot).last_discarder ?? ''] ?? '对方'} 的牌`
                       : '轮到你了'
                     : 'AI 回合'}
                 </span>

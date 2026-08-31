@@ -366,11 +366,18 @@ class LLMClient:
         """Return the assistant reply text, or ``""`` on transport failure."""
         return self._chat(messages, max_tokens=max_tokens, temperature=temperature).text
 
-    def complete_chat(self, system: str, user: str, max_tokens: int | None = None) -> str:
-        """Convenience wrapper for ``[system, user]`` callers (Layer 4 dialogue)."""
+    def complete_chat(
+        self, system: str, user: str, max_tokens: int | None = None, temperature: float | None = None
+    ) -> str:
+        """Convenience wrapper for ``[system, user]`` callers (Layer 4 dialogue).
+
+        ``temperature`` overrides the client default when given (e.g. pacing
+        presets for social games: fast=发散, slow=精准)。
+        """
         return self.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             max_tokens=max_tokens,
+            temperature=temperature,
         )
 
     def complete_chat_reply(self, system: str, user: str, max_tokens: int | None = None) -> ChatReply:
@@ -588,13 +595,18 @@ class LLMClient:
         """Probe whether an LLM endpoint answers; never raises.
 
         ``base_url`` falls back to ``LLM_BASE_URL`` env then
-        ``DEFAULT_BASE_URL``; a non-empty ``api_key`` is sent as a Bearer
-        header so authenticated (cloud) endpoints probe correctly.
+        ``DEFAULT_BASE_URL``; ``api_key`` falls back to ``LLM_API_KEY`` env
+        when not explicitly passed, so the no-arg ``available()`` call used
+        by the social-family solver probe authenticates against a configured
+        cloud endpoint (DeepSeek / GLM / OpenAI) — otherwise ``/v1/models``
+        401s and the session silently degrades to the random solver, which
+        is exactly "AI 不跟着平台配置走 API".
         """
         url = (base_url or _env_or("LLM_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+        key = api_key or _env_or("LLM_API_KEY") or ""
         headers = {}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
         req = urllib.request.Request(f"{url}/v1/models", method="GET", headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout_s or _PROBE_TIMEOUT_S) as resp:

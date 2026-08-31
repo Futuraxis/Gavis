@@ -181,11 +181,11 @@ class TestTexasHoldem:
 
 class TestGameSpecRegistry:
     def test_all_games_present(self):
-        # 16 款 = 月亮棋/随机五子棋/德州 + 麻将六变种 + UNO 六变体
-        # + 谁是卧底（undercover，social 族）
+        # 17 款 = 月亮棋/随机五子棋/德州 + 麻将六变种 + UNO 六变体
+        # + 谁是卧底（undercover，social 族）+ 狼人杀（werewolf，social 族）
         # （uno 基类 + seven_zero/jump_in/stacking/draw_until/strict_wild4）。
         # UNO/social 前端棋盘均已接入 FAMILY_BOARDS（旧「置灰标注」说明已过时）
-        # 后端契约按 16 款锁定（与
+        # 后端契约按 17 款锁定（与
         # test_platform_server.py::TestGames::test_list_games 同步维护）。
         assert set(GAMES) == {
             "moon_chess",
@@ -205,6 +205,7 @@ class TestGameSpecRegistry:
             "uno_draw_until",
             "uno_strict_wild4",
             "undercover",
+            "werewolf",
         }
 
     def test_seat_options_consistent(self):
@@ -507,8 +508,11 @@ class TestUndercover:
         assert snap["over"] is False
         assert snap["phase"] == "describe"
         assert snap["turn"] == "p0"  # 首座先发言（describe 从第一个存活者开始）
-        assert snap["my_role"] in ("civilian", "undercover", "blank")
-        assert snap["my_word"] in ("苹果", "香蕉", "白板")
+        # 身份隐藏(谁是卧底)：my_role 不投影(平民/卧底/白板都不知标签),只看 my_word。
+        assert snap["my_role"] is None
+        # difficulty=easy 选 fruit_easy 档词对池(苹果/香蕉、西瓜/葡萄、橘子/榴莲),
+        # 局内随机抽一对；my_word 是该局抽到的平民/卧底词,或白板常量「白板」。
+        assert snap["my_word"] in {"苹果", "香蕉", "西瓜", "葡萄", "橘子", "榴莲", "白板"}
         assert len(snap["alive"]) == 8
         assert snap["legal"] == [{"type": "speak", "text": ""}]
         # 隐藏信息红线：快照只由投影构建——他人身份/词语数组与 AI 词语不得泄露。
@@ -520,7 +524,7 @@ class TestUndercover:
         session = manager.start("undercover", "p0", "easy", player_count=6)
         snap = session.snapshot()
         assert len(snap["alive"]) == 6
-        assert snap["my_role"] in ("civilian", "undercover", "blank")
+        assert snap["my_role"] is None  # 身份隐藏
 
     def test_unknown_player_count_raises(self, manager: PlayManager, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(LLMClient, "available", staticmethod(lambda *args, **kwargs: False))

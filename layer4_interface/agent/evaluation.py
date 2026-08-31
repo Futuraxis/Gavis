@@ -34,17 +34,20 @@ def evaluate(state: dict[str, Any], viewer: str, engine: Any) -> dict[str, Any]:
     if engine.is_terminal(state):
         utility = engine.get_utility(state, viewer)
         score = float(utility)
+        # 摘要为 viewer 相对、不含原始 pid（pid 如 p_sb 会经对话载荷渗入 LLM
+        # 文本，被复述成「p_sb 赢了」——见 audit B 修复）。「本方」= 评估视角
+        # （companion/teaching 取玩家、opponent 取 AI），LLM 据人设自然成文。
         if score > 0:
-            summary = f"{viewer} 获胜"
+            summary = "本方获胜"
         elif score < 0:
-            summary = f"{viewer} 落败"
+            summary = "本方落败"
         else:
             summary = "平局"
-        mechanical_text = f"终局，{viewer} 效用 {score:+.1f}"
+        mechanical_text = f"终局，本方效用 {score:+.1f}"
         return {"score": score, "summary": summary, "mechanical_text": mechanical_text}
 
     score, summary = _board_heuristic(state, viewer)
-    mechanical_text = f"{viewer} 当前评估 {score:+.2f}，{summary}"
+    mechanical_text = f"本方当前评估 {score:+.2f}，{summary}"
     return {"score": score, "summary": summary, "mechanical_text": mechanical_text}
 
 
@@ -71,9 +74,9 @@ def _board_heuristic(state: dict[str, Any], viewer: str) -> tuple[float, str]:
     score = float(viewer_count - others) + line_bonus
 
     if score > _ADVANTAGE:
-        summary = f"{viewer} 略占上风"
+        summary = "本方略占上风"
     elif score < -_ADVANTAGE:
-        summary = f"{viewer} 稍处下风"
+        summary = "本方稍处下风"
     else:
         summary = "局面胶着"
     return score, summary

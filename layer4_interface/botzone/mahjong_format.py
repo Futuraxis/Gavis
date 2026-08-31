@@ -166,11 +166,22 @@ def _apply_own_public_action(state: MahjongFormatState, op: str, req: list[str])
 
 def _decide_with_layer3(state: MahjongFormatState, current: list[str]) -> tuple[str, str] | None:
     engine = _international_engine()
-    gavis_state = _to_gavis_state(engine, state, current)
+    gavis_state = _to_gavis_state(engine, state, current, claim_mode="meld")
     if gavis_state is None:
         return None
     legal = engine.get_legal_actions(gavis_state)
-    if not legal:
+    # rules 的 claim 合法性按互斥的 claim_mode 区分：peng/gang 走
+    # claim_mode="meld"，chi 走 claim_mode="chi"。手拼的适配器状态只覆盖
+    # meld 窗口（杠/碰）——摸不到杠/碰就返回 None 落到格式层判定吃/过
+    # （``_decide_public_request`` 的 CHI 走左邻闸门 + 形状启发，与参考
+    # 实现 mahjong_format_py36 一致）。BUGANG 分支故意不设 claim_mode →
+    # 仅 claim_pass 合法，维持「抢杠需要完整番计算、不做不安全的 HU」。
+    # 只有 claim 阶段做这个回落（吃/过交给格式层）；action 阶段（摸牌/
+    # 出牌）的判决策略必须仍走 layer3。
+    phase = (gavis_state.get("env") or {}).get("phase")
+    if phase == "claim" and not any(
+        a.template_id in {"claim_gang", "claim_peng", "claim_win"} for a in legal
+    ):
         return None
     solver = MahjongHeuristicAI(engine, SolverConfig(seed=0))
     action = solver.select_action(gavis_state)
@@ -190,7 +201,9 @@ def _international_engine() -> GameEngine:
     return GameEngine(rules, seed=0, variant="international", player_count=4, allow_codegen=False)
 
 
-def _to_gavis_state(engine: GameEngine, state: MahjongFormatState, current: list[str]) -> dict[str, Any] | None:
+def _to_gavis_state(
+    engine: GameEngine, state: MahjongFormatState, current: list[str], claim_mode: str = "meld"
+) -> dict[str, Any] | None:
     pid = _gavis_player(state.player_id)
     arrays: dict[str, Any] = {
         f"hand_{pid}": [_to_gavis_tile(tile) for tile in state.hand],
@@ -219,6 +232,13 @@ def _to_gavis_state(engine: GameEngine, state: MahjongFormatState, current: list
                 "last_discarder": discarder,
                 "claim_queue": [pid],
                 "claim_index": 0,
+                # claim_mode 是 rules 里 claim 合法性的必要字段（peng/gang/chi
+                # 要求 ``meld``、claim_win 要求 ``win``）。引擎正常对局由
+                # do_discard 等 effector 写入；本适配器手拼状态时必须补上，
+                # 否则 claim_gang/claim_peng/claim_chi 全部不合法、只剩
+                # claim_pass —— 杠/碰/吃优先级测试（test_botzone_adapter
+                # 的 claim_priority）会全部错误地回 PASS。
+                "claim_mode": "meld",
             }
         )
     elif current[0] == "3" and len(current) >= 4 and current[2] == "BUGANG":

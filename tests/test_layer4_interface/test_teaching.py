@@ -233,7 +233,7 @@ class TestDialogueTeach:
         assert message.text == "这手先把孤张打掉。"
         assert message.mood == "thinking"
         assert "教练" in llm.system
-        assert "AI/对手" in llm.system
+        assert "未公开信息" in llm.system  # 泛化红线（方向 C）
         assert "player_hand" in llm.user  # 机械事实含玩家手牌
 
     def test_normal_system_prompt_without_teaching_ctx(self):

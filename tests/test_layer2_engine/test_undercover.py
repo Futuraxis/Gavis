@@ -3,8 +3,11 @@
 Covers:
 - variants：场景(词对 fruit/food) 与人数 (4..12) 纯数据选择；未知 variant → ValueError
 - 发牌：1卧底 + 1白板 + N平民，词与身份一一对应
-- 部分可观测：``my_role`` / ``my_word`` 只留 viewer 自己的行；死后身份/词语公开
+- 身份隐藏：不开 my_role 视图（玩家不知自己是平民/卧底），只看 my_word；
+  白板看到「白板」自知是白板；死后身份/词语公开
 - 轮转：describe/vote 由规则层推进（speechLog[i].speaker == living[i]）
+- 自爆（self_destruct，投票阶段替代投票）：平民/猜错淘汰、卧底猜对平民词胜、
+  白板猜对胜；自爆失败中断本轮投票，跳过 resolve 进入下一轮
 - 平票无人出局、不能投自己
 - 胜负：卧底/白板被投出 → 平民胜；白板活到剩三人 → 白板胜；
   卧底活到剩两人 → 卧底胜
@@ -32,6 +35,11 @@ def _engine(seed: int = 7, player_count: int = 8, variant: str | None = None) ->
     """Engine over the shipped JSON (variants are resolved as declared data)."""
     with open(RULES_PATH, "r", encoding="utf-8") as f:
         return GameEngine(json.load(f), seed=seed, player_count=player_count, variant=variant)
+
+
+# 测试固定词对(匹配自爆测试里的 guess「苹果/香蕉/白板」);词对现由开局
+# pick_word_pair chance 随机抽写入 env.word_of,手构状态需显式注入。
+_WORD_OF = {"civilian": "苹果", "undercover": "香蕉", "blank": "白板"}
 
 
 def _play_until(adapter: GameEngine, rng: random.Random, phase_target: str, max_steps: int = 300) -> dict | None:
@@ -103,7 +111,7 @@ def _craft(
     """Hand-built resolve state (votes are data; the engine only counts them)."""
     st = adapter.create_initial_state()
     st["_arrays"]["roles"] = list(roles)
-    st["_arrays"]["words"] = [adapter._constants["word_of"][r] for r in roles]
+    st["_arrays"]["words"] = [_WORD_OF[r] for r in roles]
     st["_arrays"]["alive"] = list(alive)
     st["_arrays"]["speechLog"] = []
     st["_arrays"]["voteLog"] = list(votes)
@@ -116,10 +124,57 @@ def _craft(
             "voteIdx": 0,
             "eliminated": eliminated,
             "winner": None,
+            "civ_word": _WORD_OF["civilian"],
+            "und_word": _WORD_OF["undercover"],
             "turn": adapter._constants["player_ids"][0],
         }
     )
     return st
+
+
+def _craft_vote(
+    adapter: GameEngine,
+    roles: list[str],
+    alive: list[int],
+    voter_idx: int = 0,
+    round_: int = 1,
+) -> dict:
+    """Hand-built vote-phase state（voter = 第 voter_idx 个存活玩家）。"""
+    st = adapter.create_initial_state()
+    st["_arrays"]["roles"] = list(roles)
+    st["_arrays"]["words"] = [_WORD_OF[r] for r in roles]
+    st["_arrays"]["alive"] = list(alive)
+    st["_arrays"]["speechLog"] = []
+    st["_arrays"]["voteLog"] = []
+    st["_arrays"]["deathsArr"] = []
+    pids = adapter._constants["player_ids"]
+    living = [pids[i] for i, a in enumerate(alive) if a == 1]
+    st["env"].update(
+        {
+            "phase": "vote",
+            "round": round_,
+            "speechIdx": 0,
+            "voteIdx": 0,
+            "eliminated": None,
+            "winner": None,
+            "civ_word": _WORD_OF["civilian"],
+            "und_word": _WORD_OF["undercover"],
+            "turn": living[voter_idx],
+        }
+    )
+    return st
+
+
+def _self_destruct(adapter: GameEngine, state: dict, target_id: str, guess: str) -> dict:
+    """Apply self_destruct against ``target_id`` with the given guessed word."""
+    for a in adapter.get_legal_actions(state):
+        if a.template_id != "self_destruct":
+            continue
+        t = a.params.get("target")
+        t_id = t.get("id") if isinstance(t, dict) else t
+        if t_id == target_id:
+            return adapter.apply_action(state, replace(a, params={**a.params, "guess": guess}))
+    raise AssertionError(f"self_destruct target {target_id} not legal at {state['env']['phase']}")
 
 
 # ── L1 / variants ──────────────────────────────────────────────────
@@ -149,12 +204,17 @@ def test_variants_pick_player_count_and_scenario() -> None:
         assert pool.count("blank") == 1
         assert pool.count("civilian") == count - 2
         assert pids[0] == "p0" and pids[-1] == f"p{count - 1}"
-    # 场景词对：food 补丁生效（word_of 经 options[scenario].constants 补丁）
-    food = _engine(seed=7, variant="food")
-    assert food._constants["word_of"]["civilian"] == "汉堡"  # noqa: SLF001
-    assert food._constants["word_of"]["undercover"] == "肉夹馍"
-    fruit = _engine(seed=7, variant="fruit")
-    assert fruit._constants["word_of"]["civilian"] == "苹果"  # noqa: SLF001
+    # 主题×难度档词对池:options[<theme>_<diff>].constants.word_pairs 补丁生效
+    food_hard = _engine(seed=7, variant="food_hard")
+    pairs = food_hard._constants["word_pairs"]
+    assert isinstance(pairs, list) and len(pairs) >= 3
+    assert ["肉夹馍", "驴肉火烧"] in pairs  # hard 档含高混淆词对
+    fruit_normal = _engine(seed=7, variant="fruit_normal")
+    fn_pairs = fruit_normal._constants["word_pairs"]
+    assert ["苹果", "梨"] in fn_pairs  # normal 档含同类相近词对
+    # 旧 variant 名(fruit/food 单主题)已废弃 → 现需 theme_diff
+    with pytest.raises(ValueError, match="unknown variant"):
+        _engine(seed=7, variant="food")
 
 
 def test_unknown_variant_raises() -> None:
@@ -176,9 +236,9 @@ def test_deal_assigns_roles_and_words() -> None:
     assert roles.count("undercover") == 1
     assert roles.count("blank") == 1
     assert roles.count("civilian") == 4
-    word_of = adapter._constants["word_of"]
+    expected = {"civilian": st["env"]["civ_word"], "undercover": st["env"]["und_word"], "blank": "白板"}
     for role, word in zip(roles, words):
-        assert word == word_of[role], f"word {word} != {word_of[role]} for {role}"
+        assert word == expected[role], f"word {word} != {expected[role]} for {role}"
     assert st["env"]["phase"] == "describe"
     assert st["env"]["turn"] == "p0"
 
@@ -186,19 +246,32 @@ def test_deal_assigns_roles_and_words() -> None:
 # ── 部分可观测 ────────────────────────────────────────────────────
 
 
-def test_observation_filters_my_role_and_my_word() -> None:
+def test_observation_hides_role_shows_word() -> None:
+    """身份隐藏：不开 my_role 视图；每个玩家只看自己的词（my_word）。
+
+    平民/卧底看不到自己的身份标签（要靠发言推断阵营）；白板看到「白板」
+    （无词）自知是白板——靠词而非靠 my_role。死后身份/词语仍经 dead_roles/
+    dead_words 公开。
+    """
     adapter = _engine(seed=7, player_count=6)
     rng = random.Random(7)
     st = _play_until(adapter, rng, "describe")
     assert st is not None
     pids = adapter._constants["player_ids"]
+    roles = st["_arrays"]["roles"]
     for pid in pids:
         obs = adapter.project_observation(st, pid)
         idx = pids.index(pid)
-        # 每个玩家只看到自己的身份与词（单行视图）
-        assert [e.get("role") for e in obs["my_role"]] == [st["_arrays"]["roles"][idx]]
+        # 身份隐藏：my_role 视图不存在（玩家不知自己的身份标签）
+        assert "my_role" not in obs
+        # 但自己的词可见（单行视图）——平民/卧底看真词，白板看「白板」
         assert [e.get("word") for e in obs["my_word"]] == [st["_arrays"]["words"][idx]]
-        assert [e.get("_index") for e in obs["my_role"]] == [idx]
+        assert [e.get("_index") for e in obs["my_word"]] == [idx]
+    # 白板的词就是「白板」→ 白板靠词自知是白板
+    blank_idx = roles.index("blank")
+    blank_pid = pids[blank_idx]
+    assert st["_arrays"]["words"][blank_idx] == "白板"
+    assert adapter.project_observation(st, blank_pid)["my_word"][0]["word"] == "白板"
     # 公共信息（发言/存活/收场日志）完整可见
     obs0 = adapter.project_observation(st, "p0")
     assert isinstance(obs0["speech_log"], list)
@@ -213,7 +286,7 @@ def test_dead_roles_and_words_public_after_elimination() -> None:
     alive = [1, 1, 1, 0, 0, 0]  # p3-p5 已死
     st = adapter.create_initial_state()
     st["_arrays"]["roles"] = roles
-    st["_arrays"]["words"] = [adapter._constants["word_of"][r] for r in roles]
+    st["_arrays"]["words"] = [_WORD_OF[r] for r in roles]
     st["_arrays"]["alive"] = alive
     st["env"].update({"phase": "describe", "turn": "p0", "round": 1, "speechIdx": 0, "voteIdx": 0})
     for pid in adapter._constants["player_ids"]:
@@ -395,6 +468,108 @@ def test_eliminating_civilian_continues_game() -> None:
     assert st["env"]["phase"] == "describe"
     assert st["env"]["round"] == 2
     assert st["_arrays"]["alive"] == [1, 1, 0, 1, 1, 1]
+
+
+# ── 自爆（self_destruct）─────────────────────────────────────────────
+
+
+def test_self_destruct_legal_alongside_vote() -> None:
+    """投票阶段：当前玩家既可 vote 也可 self_destruct（同一阶段两动作共存）。"""
+    adapter = _engine(seed=203, player_count=6)
+    rng = random.Random(203)
+    st = _play_until(adapter, rng, "vote")
+    assert st is not None and st["env"]["phase"] == "vote"
+    legal = adapter.get_legal_actions(state=st)
+    assert any(a.template_id == "vote" for a in legal)
+    assert any(a.template_id == "self_destruct" for a in legal)
+    # self_destruct 不能点自己（target 域 = alive_others，与 vote 同）
+    voter = st["env"]["turn"]
+    for a in legal:
+        if a.template_id != "self_destruct":
+            continue
+        t = a.params.get("target")
+        t_id = t.get("id") if isinstance(t, dict) else t
+        assert t_id != voter
+
+
+def test_undercover_self_destruct_correct_wins() -> None:
+    """卧底自爆、猜对平民词（target 是平民且 guess==其词）→ 卧底直接获胜。"""
+    adapter = _engine(seed=7, player_count=6)
+    roles = ["undercover", "blank", "civilian", "civilian", "civilian", "civilian"]
+    st = _craft_vote(adapter, roles, [1] * 6, voter_idx=0)  # voter = p0(卧底)
+    st = _self_destruct(adapter, st, target_id="p2", guess="苹果")  # 苹果=平民词
+    assert st["env"]["winner"] == "undercover"
+    assert st["env"]["phase"] == "game_over"
+    # 赢家不被淘汰（自爆成功=获胜，非出局）；eliminated 保持 None
+    assert st["env"].get("eliminated") is None
+
+
+def test_undercover_self_destruct_wrong_eliminated_continues() -> None:
+    """卧底自爆猜错 → 卧底淘汰、游戏继续（不触发平民胜，自爆非投票）。"""
+    adapter = _engine(seed=7, player_count=6)
+    roles = ["undercover", "blank", "civilian", "civilian", "civilian", "civilian"]
+    st = _craft_vote(adapter, roles, [1] * 6, voter_idx=0)
+    st = _self_destruct(adapter, st, target_id="p2", guess="香蕉")  # 香蕉=卧底词，对平民是错的
+    assert st["env"].get("winner") is None  # 不是平民胜
+    assert st["env"]["phase"] == "describe"  # 中断本轮投票 → 下一轮
+    assert st["env"]["round"] == 2
+    assert st["_arrays"]["alive"] == [0, 1, 1, 1, 1, 1]  # p0(卧底) 出局
+    assert st["env"]["eliminated"] == "p0"
+
+
+def test_undercover_self_destruct_blank_word_does_not_win() -> None:
+    """卧底猜对白板的词（白板）不算赢——必须猜对平民词。"""
+    adapter = _engine(seed=7, player_count=6)
+    roles = ["undercover", "blank", "civilian", "civilian", "civilian", "civilian"]
+    st = _craft_vote(adapter, roles, [1] * 6, voter_idx=0)
+    st = _self_destruct(adapter, st, target_id="p1", guess="白板")  # p1=白板，词白板，猜对但非平民
+    assert st["env"].get("winner") is None  # 不算卧底胜
+    assert st["env"]["phase"] == "describe"
+    assert st["_arrays"]["alive"] == [0, 1, 1, 1, 1, 1]  # 卧底淘汰
+
+
+def test_civilian_self_destruct_always_eliminated() -> None:
+    """平民自爆（即便猜对）→ 直接淘汰，游戏继续。"""
+    adapter = _engine(seed=7, player_count=6)
+    roles = ["civilian", "blank", "undercover", "civilian", "civilian", "civilian"]
+    st = _craft_vote(adapter, roles, [1] * 6, voter_idx=0)  # voter = p0(平民)
+    st = _self_destruct(adapter, st, target_id="p2", guess="香蕉")  # 猜对卧底词，但平民→淘汰
+    assert st["env"].get("winner") is None
+    assert st["env"]["phase"] == "describe"
+    assert st["_arrays"]["alive"] == [0, 1, 1, 1, 1, 1]
+
+
+def test_blank_self_destruct_correct_wins() -> None:
+    """白板自爆、猜对目标词 → 白板直接获胜。"""
+    adapter = _engine(seed=7, player_count=6)
+    roles = ["blank", "undercover", "civilian", "civilian", "civilian", "civilian"]
+    st = _craft_vote(adapter, roles, [1] * 6, voter_idx=0)  # voter = p0(白板)
+    st = _self_destruct(adapter, st, target_id="p2", guess="苹果")  # 猜对平民词
+    assert st["env"]["winner"] == "blank"
+    assert st["env"]["phase"] == "game_over"
+
+
+def test_blank_self_destruct_wrong_eliminated() -> None:
+    """白板自爆猜错 → 白板淘汰、游戏继续。"""
+    adapter = _engine(seed=7, player_count=6)
+    roles = ["blank", "undercover", "civilian", "civilian", "civilian", "civilian"]
+    st = _craft_vote(adapter, roles, [1] * 6, voter_idx=0)
+    st = _self_destruct(adapter, st, target_id="p2", guess="香蕉")  # 猜错
+    assert st["env"].get("winner") is None
+    assert st["env"]["phase"] == "describe"
+    assert st["_arrays"]["alive"] == [0, 1, 1, 1, 1, 1]
+
+
+def test_self_destruct_failure_triggers_survival_win() -> None:
+    """自爆失败淘汰后，若剩余存活触发生存胜利条件仍会结算（白板剩三人）。"""
+    adapter = _engine(seed=7, player_count=6)
+    roles = ["civilian", "blank", "undercover", "civilian", "civilian", "civilian"]
+    # 4 存活：p0(平民)、p1(白板)、p2(卧底)、p3(平民)；p0 自爆失败淘汰 → 剩3人且白板存活
+    st = _craft_vote(adapter, roles, [1, 1, 1, 1, 0, 0], voter_idx=0)
+    st = _self_destruct(adapter, st, target_id="p2", guess="苹果")  # 平民自爆→淘汰
+    assert st["env"]["winner"] == "blank"  # 剩3人(p1,p2,p3) 且白板存活 → 白板胜
+    assert st["env"]["phase"] == "game_over"
+    assert st["_arrays"]["alive"] == [0, 1, 1, 1, 0, 0]
 
 
 # ── 收益 ──────────────────────────────────────────────────────────

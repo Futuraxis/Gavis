@@ -35,7 +35,7 @@ from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.session import PlayManager
 from train_cli import default_provider
 
-#: 后端 SocialSnapshot 契约键（session.snapshot() 还会追加 chat/evaluation）。
+#: 后端 SocialSnapshot 契约键（session.snapshot() 还会追加 chat/evaluation/teaching/adaptive/ai_strength）。
 SOCIAL_CONTRACT_KEYS = frozenset(
     {
         "family",
@@ -46,14 +46,19 @@ SOCIAL_CONTRACT_KEYS = frozenset(
         "winner",
         "turn",
         "phase",
+        "round",
         "my_role",
         "my_word",
         "alive",
         "discourse",
+        "votes",
+        "deaths",
+        "eliminated",
         "last_action",
         "winners",
         "legal",
         "ai_mode",
+        "final_roles",
     }
 )
 
@@ -243,20 +248,25 @@ class TestUndercoverSession:
         # "chat"/"evaluation"/"teaching" 是 session.snapshot() 统一注入的
         # 会话级键（聊天增量 / 局势评估 / 教学对局标记），不属于 social 族
         # 快照本体契约。
-        assert set(snap) - {"chat", "evaluation", "teaching"} == SOCIAL_CONTRACT_KEYS
-        assert snap["my_role"] == roles[index]
+        assert set(snap) - {"chat", "evaluation", "teaching", "adaptive", "ai_strength"} == SOCIAL_CONTRACT_KEYS
+        # 身份隐藏（谁是卧底）：不开 my_role 视图——平民/卧底/白板都看不到
+        # 自己的身份标签，只看 my_word（白板看到「白板」自知是白板）。
+        assert snap["my_role"] is None
         assert snap["ai_mode"] in {"ollama", "random"}
-        strings = _collect_strings(snap)
-        # 公开标签（自己的角色 / 终局胜方标签）可合法出现——其余他人角色值不得进入快照。
-        public = {snap["my_role"], snap["winner"]}
-        for i, role in enumerate(roles):
-            if i == index or role == snap["my_role"]:
-                continue  # 同角色字符串以 my_role 合法出现
-            assert role not in strings or role in public, f"他人角色泄露: {role}"
-        for i, word in enumerate(words):
-            if i == index or word == snap.get("my_word"):
-                continue  # 同词玩家（同队）与自己的词不构成泄露
-            assert word not in strings, f"他人词卡泄露: {word}"
+        # 隐藏信息红线只在进行中对局校验：终局亮全场身份（final_roles）
+        # 是合法的复盘展示，不构成「泄露」。
+        if not snap["over"]:
+            strings = _collect_strings(snap)
+            # 身份隐藏后，任何他人角色值都不该进入快照（自己的也不出现）。
+            public = {snap["winner"]}
+            for i, role in enumerate(roles):
+                if i == index:
+                    continue
+                assert role not in strings or role in public, f"他人角色泄露: {role}"
+            for i, word in enumerate(words):
+                if i == index or word == snap.get("my_word"):
+                    continue  # 同词玩家（同队）与自己的词不构成泄露
+                assert word not in strings, f"他人词卡泄露: {word}"
 
     def test_my_word_projected(self, manager):
         """审计 B12：卧底玩家必须能看到自己的词——没有词无从描述。"""
@@ -267,7 +277,11 @@ class TestUndercoverSession:
 
     def test_play_to_terminal_and_no_role_leak(self, manager):
         session = manager.start("undercover", "p0", "easy", player_count=8)
-        assert session.custom is True
+        # undercover 已升级为平台内置游戏（platform GAMES 注册表，见
+        # games.py 的 _undercover_spec）→ start 走内置 spec，custom=False
+        # 是正确的；自定义注册表注入的会话路径由 TestWerewolfSmoke 覆盖
+        # （werewolf 未内置，只能经 custom registry 重建 spec_for）。
+        assert session.custom is False
         assert session.family == "social"
         roles = list(session.state["_arrays"]["roles"])
         words = list(session.state["_arrays"]["words"])
@@ -281,12 +295,14 @@ class TestUndercoverSession:
             self._check_snapshot(snap, roles, words, "p0", 0)
             legal = snap["legal"]
             assert legal, f"人类回合无合法动作: phase={snap['phase']}"
-            first = legal[0]
-            if first["type"] == "speak":
+            speak_action = next((a for a in legal if a["type"] == "speak"), None)
+            if speak_action is not None:
                 manager.move(session.game_id, {"type": "speak", "text": f"测试发言{guard}"})
             else:
-                assert first["target"] is not None
-                manager.move(session.game_id, {"type": first["type"], "target": first["target"]})
+                # 投票阶段优先 vote（self_destruct 会让人类自爆出局打断循环）。
+                vote_action = next((a for a in legal if a["type"] == "vote"), None)
+                assert vote_action is not None, f"投票阶段无 vote 合法动作: {legal}"
+                manager.move(session.game_id, {"type": "vote", "target": vote_action["target"]})
             guard += 1
 
         assert session.over, f"未能终局（{guard} 步）"
@@ -303,6 +319,44 @@ class TestUndercoverSession:
         assert any(
             entry.get("speaker") == "p0" and entry.get("text") == "我很喜欢这种水果" for entry in result["discourse"]
         ), "人类发言未进入公开发言记录"
+
+    def test_ai_speeches_nonempty_and_votes_surface(self, manager):
+        """审计回归（用户反馈三连）：1) AI 座位不得「未发言」——随机/降级
+        (及 LLM 失败) 模式下 speak 也要有非空文本；2) 投票后快照必须给出
+        ``votes``（谁投了谁）与 ``deaths``/``eliminated``（谁被投出）。"""
+        session = manager.start("undercover", "p0", "easy", player_count=8)
+        seen_votes = False
+        seen_death = False
+        guard = 0
+        while not session.over and guard < 60:
+            snap = session.snapshot()
+            # 任何 AI 座位（speaker != p0）的发言都不得为空文本。
+            # self_destruct 事件（带 event 字段，无 text）不算发言，跳过。
+            for entry in snap["discourse"]:
+                if entry.get("speaker") != "p0" and not entry.get("event"):
+                    assert str(entry.get("text") or "").strip(), f"AI 未发言: {entry}"
+            if snap.get("votes"):
+                seen_votes = True
+                for vote in snap["votes"]:
+                    assert "voter" in vote and "target" in vote, f"投票记录缺字段: {vote}"
+            if snap.get("deaths") or snap.get("eliminated"):
+                seen_death = True
+            legal = snap["legal"]
+            assert legal, f"人类回合无合法动作: phase={snap['phase']}"
+            speak_action = next((a for a in legal if a["type"] == "speak"), None)
+            if speak_action is not None:
+                manager.move(session.game_id, {"type": "speak", "text": f"测试发言{guard}"})
+            else:
+                # 投票阶段 vote 与 self_destruct 并存——优先 vote，避免人类自爆
+                # 出局打断循环（自爆失败会淘汰自爆者，使下一拍非人类回合无 legal）。
+                vote_action = next((a for a in legal if a["type"] == "vote"), None)
+                assert vote_action is not None, f"投票阶段无 vote 合法动作: {legal}"
+                manager.move(session.game_id, {"type": "vote", "target": vote_action["target"]})
+            guard += 1
+
+        assert session.over, f"未能终局（{guard} 步）"
+        assert seen_votes, "整局未出现投票记录（votes 快照字段缺失或一直为空）"
+        assert seen_death, "整局未出现出局信息（deaths/eliminated 一直为空）"
 
     def test_illegal_action_raises(self, manager):
         session = manager.start("undercover", "p0", "easy", player_count=8)
@@ -399,21 +453,26 @@ class TestWerewolfSmoke:
         )
         session = manager.start("werewolf", "p0", "easy", player_count=9)
         assert session.family == "social"
+        # 狼人杀已升级为平台内置游戏（GAMES / _BUILTIN_FAMILY）：
+        # custom=False（registry 注入的 werewolf 条目为冗余，spec_for 优先内置）。
+        assert session.custom is False
         roles = list(session.state["_arrays"]["roles"])
         snap = session.snapshot()
         # "chat"/"evaluation"/"teaching" 是 session.snapshot() 统一注入的
         # 会话级键（聊天增量 / 局势评估 / 教学对局标记），不属于 social 族
         # 快照本体契约。
-        assert set(snap) - {"chat", "evaluation", "teaching"} == SOCIAL_CONTRACT_KEYS
+        assert set(snap) - {"chat", "evaluation", "teaching", "adaptive", "ai_strength"} == SOCIAL_CONTRACT_KEYS
         assert snap["my_role"] == roles[0]
         if not snap["over"]:
             assert len(snap["alive"]) >= 1  # 存活列表为公开投影
-        strings = _collect_strings(snap)
-        public = {snap["my_role"], snap["winner"]}
-        for i, role in enumerate(roles):
-            if i == 0 or role == snap["my_role"]:
-                continue
-            assert role not in strings or role in public, f"他人角色泄露: {role}"
+        # 隐藏信息红线只在进行中校验：终局亮全场身份（final_roles）合法。
+        if not snap["over"]:
+            strings = _collect_strings(snap)
+            public = {snap["my_role"], snap["winner"]}
+            for i, role in enumerate(roles):
+                if i == 0 or role == snap["my_role"]:
+                    continue
+                assert role not in strings or role in public, f"他人角色泄露: {role}"
 
         # 本测试 seed 下人类（p0 村民）首夜出局 → 全部座位都是 AI，开局
         # ai_opens 直接驱动到终局；若人类已轮到（人类是狼/神职）则走一步。

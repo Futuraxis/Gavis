@@ -66,6 +66,7 @@ _DISCOURSE_MAX = 12
 _ACTION_LABELS = {
     "speak": "发言",
     "vote": "投票",
+    "self_destruct": "自爆",
     "kill": "击杀",
     "check": "查验",
     "shoot": "开枪",
@@ -81,6 +82,12 @@ _ACTION_LABELS = {
 #: （audit 3.6 prompt 注入修复）。
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
 _SPEECH_MAX = 200
+
+#: AI 座位在**随机/降级模式**下的非空兜底发言（LLM 不可用或调用失败时）。
+#: 刻意不含词本身、不含任何身份标签——卧底红线（不能说破自己的词）与快照
+#: 红线（他人身份/词不得出现在前端字符串）同时满足，保证「其他玩家发言」
+#: 不是空话。被 ``_run_ai`` 在 speak 占位 text 为空时补上。
+_FALLBACK_SPEECH = "我先简单描述一下，大家听听像不像。"
 
 
 def _sanitize_speech(text: object) -> str:
@@ -166,6 +173,8 @@ class _SocialSolverAssembly:
         budget: int,
         mode: str,
         seats: tuple[str, ...],
+        difficulty: str = "normal",
+        pacing: str = "standard",
     ) -> None:
         self.provider = provider
         self.game_id = game_id
@@ -174,6 +183,11 @@ class _SocialSolverAssembly:
         self.budget = budget
         self.mode = mode
         self.seats = seats
+        # 难度两维(与平台 difficulty×pacing 3×3 契约对齐):透传给每个 AI 座位
+        # 的 OllamaConfig——difficulty 选 ROLE_GUIDE 策略档 + 卧底词对档,
+        # pacing 调发言温度。random 模式忽略(solvent stateless)。
+        self.difficulty = difficulty
+        self.pacing = pacing
 
     def solver_for(self, seat: str) -> SolverHandle:
         """One solver instance grounded on ``seat`` (only its own view)."""
@@ -185,6 +199,8 @@ class _SocialSolverAssembly:
             self.budget,
             allow_unknown=True,
             player_id=seat,
+            difficulty=self.difficulty,
+            pacing=self.pacing,
         )
 
 
@@ -286,8 +302,30 @@ def _build_snapshot(session: GameSession) -> dict:
         if isinstance(entry, dict):
             discourse.append(entry)
 
+    # votes: 投影 ``vote_log`` 视图（v5.2 公开数组）→ 每轮投票记录
+    # （voter → target + round）。社交桌前端据此渲染「投票记录」，否则
+    # 玩家只能看到发言、看不到谁投了谁（投出局结果也只在 env 里）。
+    votes: list[dict] = []
+    for row in _view_rows(obs, "vote_log"):
+        entry = row.get("entry") if isinstance(row, dict) else None
+        if isinstance(entry, dict):
+            votes.append(entry)
+
+    # deaths: 投影 ``deaths_arr``（公开）→ 出局玩家 id 列表（按发生顺序）。
+    deaths: list[str] = []
+    for row in _view_rows(obs, "deaths_arr"):
+        entry = row.get("entry") if isinstance(row, dict) else None
+        if entry:
+            deaths.append(str(entry))
+
+    # eliminated: env 当前轮出局者 id（平票时为 None）；round 为当前轮次。
+    eliminated = env.get("eliminated")
+    round_no = env.get("round")
+
     # legal: 仅人类行动时给出；speak 折叠为一条 ``text: ""`` 占位，
     # 目标类动作给 ``target`` id（含 ``pass`` 等特殊值）。
+    # self_destruct 既有 target 又有 guess(text)——给 ``{target, guess:""}``
+    # 占位，前端据此收集要猜的词。
     legal: list[dict] = []
     if not over and session.current_player == session.player_pid:
         seen_types: set[str] = set()
@@ -305,7 +343,10 @@ def _build_snapshot(session: GameSession) -> dict:
             if key in seen_targets:
                 continue
             seen_targets.add(key)
-            legal.append({"type": action.template_id, "target": target})
+            if action.template_id == "self_destruct":
+                legal.append({"type": "self_destruct", "target": target, "guess": ""})
+            else:
+                legal.append({"type": action.template_id, "target": target})
 
     assembly = _assembly_of(session)
     # ai_mode 优先读 latest 决策标注（_run_ai 每步写入；LLM 实际失败时如实
@@ -325,6 +366,26 @@ def _build_snapshot(session: GameSession) -> dict:
     if turn is not None and turn != session.player_pid and secret_phase:
         turn = None
 
+    # 终局亮全场身份（社交推理游戏的复盘惯例：对局已结束，存活者身份不再是
+    # 秘密）。这是 project_observation 红线的终局例外——进行中对局他人身份
+    # 仍只经 dead_roles 投影（死者公开），此处仅在 over=True 时直接读
+    # _arrays 的 roles/words 公开全部（werewolf 无 words 数组，只给 role）。
+    # 按在场玩家数（roles 数组长度）迭代：seat_options 可能声明全量人数档
+    # （undercover 4..12 → seats 长度 12）而对局只取 player_count 人。
+    final_roles: list[dict] = []
+    if over:
+        arrs = session.state.get("_arrays", {})
+        roles_arr = arrs.get("roles") or []
+        words_arr = arrs.get("words") or []
+        for i in range(len(roles_arr)):
+            pid = seats[i] if i < len(seats) else f"p{i}"
+            role = roles_arr[i]
+            entry: dict = {"pid": pid, "role": str(role) if role is not None else None}
+            if words_arr:  # undercover 有 words;werewolf 无此数组
+                word = words_arr[i] if i < len(words_arr) else None
+                entry["word"] = str(word) if word is not None else None
+            final_roles.append(entry)
+
     return {
         "family": "social",
         "game_id": session.game_id,
@@ -334,14 +395,19 @@ def _build_snapshot(session: GameSession) -> dict:
         "winner": session.winner,
         "turn": turn,
         "phase": phase,
+        "round": round_no,
         "my_role": my_role,
         "my_word": my_word,
         "alive": alive,
         "discourse": discourse,
+        "votes": votes,
+        "deaths": deaths,
+        "eliminated": eliminated,
         "last_action": obs_env.get("last_action"),
         "winners": list(obs_env.get("winners") or []),
         "legal": legal,
         "ai_mode": ai_mode,
+        "final_roles": final_roles,
     }
 
 
@@ -360,12 +426,30 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
     meta = rules.get("meta", {}) if isinstance(rules.get("meta", {}), dict) else {}
     seats = normalize_players(rules) or ("p0",)
 
-    def _create_engine(seed: int, player_count: int = 2) -> GameEngine:
-        return engine_from_rules_dict(rules, seed, player_count=player_count)
+    def _create_engine(
+        seed: int, player_count: int = 2, variant: str | None = None, difficulty: str = "normal", **_: object
+    ) -> GameEngine:
+        # undercover 默认 variant=fruit_normal：未显式传 variant(主题)时,按
+        # difficulty 选词对相似度档(easy/normal/hard,adaptive→normal),拼
+        # f"{默认主题}_{tier}"。werewolf 的 variants.variant="default" 不含
+        # "_" → 不拼(用规则默认),difficulty 只影响 AI 发言强度(create_solver)。
+        if variant is None:
+            rv = rules.get("variants", {}).get("variant", "")
+            if "_" in rv:
+                theme = rv.rsplit("_", 1)[0]
+                tier = difficulty if difficulty in ("easy", "normal", "hard") else "normal"
+                variant = f"{theme}_{tier}"
+        return engine_from_rules_dict(rules, seed, player_count=player_count, variant=variant)
 
-    def _create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
+    def _create_solver(
+        provider: SolverProvider, engine: GameEngine, seed: int, budget: int, **kw: object
+    ) -> SolverHandle:
         mode = "ollama" if LLMClient.available() else "random"
-        assembly = _SocialSolverAssembly(provider, game_id, engine, seed, budget, mode, seats)
+        assembly = _SocialSolverAssembly(
+            provider, game_id, engine, seed, budget, mode, seats,
+            difficulty=str(kw.get("difficulty") or "normal"),
+            pacing=str(kw.get("pacing") or "standard"),
+        )
         return _SocialSolverHandle(assembly)
 
     def _resolve_start(session: GameSession) -> None:
@@ -401,6 +485,14 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
                     if _intent_id_of(action.params) == intent:
                         return replace(action, params={**action.params, "text": text})
             return replace(matches[0], params={**matches[0].params, "text": text})
+        if action_type == "self_destruct":
+            # 自爆：按 target 匹配合法动作，再填 guess 文本（v5.1 text 预制能力）。
+            guess = _sanitize_speech(payload.get("guess"))
+            target = payload.get("target")
+            for action in matches:
+                if _target_id_of(action.params) == target:
+                    return replace(action, params={**action.params, "guess": guess})
+            raise PlayError(f"非法自爆目标: {target} {payload}")
         target = payload.get("target")
         for action in matches:
             if _target_id_of(action.params) == target:
@@ -439,6 +531,13 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
                 action = random.choice(legal) if legal else None
             if action is None:
                 break
+            # 发言兜底（卧底红线保护）：随机/降级模式 / LLM 失败随机兜底选中的
+            # speak 其 text 是占位 ``""``（text 参数不参与合法枚举），直接记录会
+            # 让 AI 座位全程「未发言」。补一句不含词本身、不含任何身份标签的
+            # 通稿发言——快照红线（他人身份/词不得出现在前端字符串）与游戏红线
+            # （不能说破自己的词）同时满足。
+            if action.template_id == "speak" and not str(action.params.get("text") or "").strip():
+                action = replace(action, params={**action.params, "text": _FALLBACK_SPEECH})
             if session.recorder is not None:
                 session.recorder.record_ai(session, state, action)
             session.state = session.engine.apply_action(session.state, action)
@@ -454,6 +553,12 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
         target = _target_id_of(action.params)
         if target == "pass":
             return "过"
+        if action.template_id == "self_destruct":
+            guess = str(action.params.get("guess") or "")
+            suffix = f"（猜：{guess}）" if guess else ""
+            if target:
+                return f"{label} {seat_label(target)}{suffix}"
+            return f"{label}{suffix}"
         if target:
             return f"{label} {seat_label(target)}"
         return label

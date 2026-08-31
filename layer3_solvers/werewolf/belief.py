@@ -56,12 +56,15 @@ def belief_obs(obs: dict, viewer: str | None = None) -> dict:
     env = obs.get("env") or {}
     rows = obs.get("my_role") or []
     my_role = str(rows[0].get(ROLE_KEY)) if rows else ""
+    word_rows = obs.get("my_word") or []
+    my_word = str(word_rows[0].get("word")) if word_rows else ""
     alive = [r.get("alive") for r in (obs.get("alive") or [])]
     dead_roles = {
         f"p{r.get('_index')}": r.get(ROLE_KEY) for r in (obs.get("dead_roles") or []) if r.get("_index") is not None
     }
     return {
         "my_role": my_role,
+        "my_word": my_word,
         "alive": alive,
         "dead_roles": dead_roles,
         "speech_log": [r.get("entry") for r in (obs.get("speech_log") or [])],

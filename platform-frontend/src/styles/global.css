@@ -1554,6 +1554,57 @@ input[type='checkbox'] {
   font-weight: 600;
 }
 
+.social-reveal {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--board);
+  border: 1px solid var(--border);
+}
+
+.social-reveal-title {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+  letter-spacing: 1px;
+}
+
+.social-reveal-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.social-reveal-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.05);
+  font-size: 13px;
+}
+
+.social-reveal-item.mine {
+  background: rgba(46, 204, 113, 0.16);
+  border: 1px solid var(--accent);
+  font-weight: 600;
+}
+
+.social-reveal-pid {
+  color: var(--muted);
+}
+
+.social-reveal-role {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.social-reveal-word {
+  color: var(--accent);
+  font-size: 12px;
+}
+
 .social-players {
   display: flex;
   align-items: center;
@@ -1689,4 +1740,54 @@ input[type='checkbox'] {
   text-align: center;
   color: var(--muted);
   font-size: 13px;
+}
+
+/* 投票记录/出局区（social 快照 votes/deaths/eliminated 投影公开字段） */
+.social-votes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.social-votes-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.social-vote-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.social-voter,
+.social-vote-target {
+  font-weight: 600;
+}
+
+.social-vote-arrow {
+  color: var(--muted);
+}
+
+.social-vote-round {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.social-death-note {
+  padding: 8px 12px;
+  border-left: 3px solid var(--danger, #e11d48);
+  background: var(--bg);
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text);
 }

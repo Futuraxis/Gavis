@@ -62,7 +62,11 @@ export default function HistoryPage() {
                     <td>{new Date(m.started_at).toLocaleString('zh-CN')}</td>
                     <td>{GAME_LABELS[m.game_id] ?? m.game_id}</td>
                     <td>{SEAT_LABELS[m.player_pid] ?? m.player_pid}</td>
-                    <td>{DIFFICULTY_LABELS[m.difficulty] ?? m.difficulty}</td>
+                    <td>
+                      {m.adaptive
+                        ? `自适应 ⚙ 强度 ${m.ai_strength ?? '—'}`
+                        : DIFFICULTY_LABELS[m.difficulty] ?? m.difficulty}
+                    </td>
                     <td>{m.moves}</td>
                     <td>
                       <span className={`badge ${badge}`}>{label}</span>

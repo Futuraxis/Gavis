@@ -59,8 +59,8 @@ class GameSpec:
     seat_options: tuple[str, ...]
     seat_label: str  # '颜色' for board games, '座位' for poker
     difficulty_budgets: dict[Difficulty, int]
-    create_engine: Callable[..., GameEngine]  # (seed, player_count=<spec default>)
-    create_solver: Callable[[SolverProvider, GameEngine, int, int], SolverHandle]  # (provider, engine, seed, budget)
+    create_engine: Callable[..., GameEngine]  # (seed, player_count=<spec default>, variant=<optional: undercover theme_diff>)
+    create_solver: Callable[..., SolverHandle]  # (provider, engine, seed, budget, *, difficulty=, pacing=)
     resolve_start: Callable[[GameSession], None]  # start chance nodes (dealing)
     ai_opens: Callable[[GameSession], bool]  # AI moves before the human's first move
     parse_human_action: Callable[[GameSession, dict], ActionInstance]
@@ -69,16 +69,18 @@ class GameSpec:
     build_snapshot: Callable[[GameSession], dict]
     describe_action: Callable[[ActionInstance], str]  # history log caption
     player_counts: tuple[int, ...] = (2,)  # seat count options (mahjong specs override with (4,))
+    #: variant 主题选项(仅 undercover 等多 variant 游戏填;None → 无主题选择 UI)。
+    variant_themes: tuple[str, ...] | None = None
 
 
 # ── Moon Chess ────────────────────────────────────────────────────
 
 
-def _moon_create_engine(seed: int) -> GameEngine:
+def _moon_create_engine(seed: int, **_: object) -> GameEngine:
     return engine_from_rules("moon_chess", seed)
 
 
-def _moon_create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
+def _moon_create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int, **_: object) -> SolverHandle:
     return provider.create_solver("moon_chess", "mcts", engine, seed, budget)
 
 
@@ -151,11 +153,11 @@ def _moon_describe_action(action: ActionInstance) -> str:
 # ── Stochastic Gomoku ─────────────────────────────────────────────
 
 
-def _gomoku_create_engine(seed: int) -> GameEngine:
+def _gomoku_create_engine(seed: int, **_: object) -> GameEngine:
     return engine_from_rules("stochastic_gomoku", seed)
 
 
-def _gomoku_create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
+def _gomoku_create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int, **_: object) -> SolverHandle:
     return provider.create_solver("stochastic_gomoku", "mcts", engine, seed, budget)
 
 
@@ -263,11 +265,11 @@ def _gomoku_describe_action(action: ActionInstance) -> str:
 # (hand-name display helper lives in ``..engine_helpers``)
 
 
-def _poker_create_engine(seed: int) -> GameEngine:
+def _poker_create_engine(seed: int, **_: object) -> GameEngine:
     return engine_from_rules("texas_holdem", seed)
 
 
-def _poker_create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
+def _poker_create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int, **_: object) -> SolverHandle:
     return provider.create_solver("texas_holdem", "hybrid", engine, seed, budget)
 
 
@@ -380,7 +382,7 @@ def _poker_describe_action(action: ActionInstance) -> str:
 
 
 def _make_mahjong_engine(variant: str) -> Callable[..., GameEngine]:
-    def _create(seed: int, player_count: int = 4) -> GameEngine:
+    def _create(seed: int, player_count: int = 4, **_: object) -> GameEngine:
         # Variants and player counts are declared in the JSON's
         # ``variants`` section (v5.2); the engine selects them as pure data.
         # 麻将默认 4 人（rules/mahjong.json 的 variants.player_count 亦为 4）。
@@ -394,7 +396,8 @@ def _make_mahjong_solver(game_id: str) -> Callable[[SolverProvider, GameEngine, 
     ``models/train/<game_id>/maac.pt``），产物缺失时工厂回退到启发式，
     平台永不因缺模型而崩溃。
     """
-    def _create(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
+
+    def _create(provider: SolverProvider, engine: GameEngine, seed: int, budget: int, **_: object) -> SolverHandle:
         return provider.create_solver(game_id, "maac", engine, seed, budget)
 
     return _create
@@ -519,6 +522,9 @@ def _mahjong_snapshot(session: GameSession) -> dict:
         "phase": env.get("phase"),
         "my_hand": _hand(session.player_pid),
         "ai_hand": _hand(session.ai_pid) if over else [],
+        # 终局亮所有座位手牌（前端 Seat 据此渲染全场亮牌；ai_hand 字段保留
+        # 仅为兼容旧契约，新逻辑以 final_hands 为准）。
+        "final_hands": {pid: _hand(pid) for pid in seats} if over else {},
         "hand_counts": {pid: len(_hand(pid)) for pid in seats},
         "melds": {pid: _melds(pid) for pid in seats},
         "discards": {pid: _discards(pid) for pid in seats},
@@ -594,7 +600,7 @@ def _make_uno_engine(variant: str) -> Callable[..., GameEngine]:
     故平台同样固定解释器（正确性优先；见该测试文件头部说明）。
     """
 
-    def _create(seed: int, player_count: int = 4) -> GameEngine:
+    def _create(seed: int, player_count: int = 4, **_: object) -> GameEngine:
         return engine_from_rules("uno", seed, variant=variant, player_count=player_count, allow_codegen=False)
 
     return _create
@@ -609,9 +615,15 @@ def _make_uno_solver(game_id: str) -> Callable[[SolverProvider, GameEngine, int,
     平台运行时默认的 CFR 1000×depth8 + 大预算会让单次决策达 ~3.5s、
     三 AI 座位轮转不可交互。此处显式传入轻量搜索参数（kwargs 覆盖
     runtime 默认）：budget 25/50/100 实测 ≈0.5s/1.3s/2.6s 每次决策。
+
+    ``rollout_policy="uno"``：注入 ``UnoRolloutPolicy`` 作为 MCTS rollout
+    先验（反击/特殊牌/大点数优先 + 30% 随机回退），替代裸随机 rollout——
+    UNO 4 人局随机走难以在 rollout_depth 内到终局，统计信号弱、leaf_value
+    恒 0；启发式先验让 rollout 估值有方向性。装配指令经 create_solver
+    弹出后注入 hybrid 内部 MCTS，L4 不 import L3（只传字符串名）。
     """
 
-    def _create(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
+    def _create(provider: SolverProvider, engine: GameEngine, seed: int, budget: int, **_: object) -> SolverHandle:
         return provider.create_solver(
             game_id,
             "hybrid",
@@ -620,6 +632,7 @@ def _make_uno_solver(game_id: str) -> Callable[[SolverProvider, GameEngine, int,
             budget,
             cfr_iterations=100,
             cfr_depth_limit=4,
+            rollout_policy="uno",
         )
 
     return _create
@@ -721,13 +734,18 @@ def _uno_snapshot(session: GameSession) -> dict:
         "top_symbol": env.get("topSymbol"),
         "my_hand": _hand(session.player_pid),
         "ai_hand": _hand(session.ai_pid) if over else [],
+        # 终局亮所有座位手牌（前端每个 AI 座位都渲染，不止 ai_pid）。
+        "final_hands": {pid: _hand(pid) for pid in seats} if over else {},
         "hand_counts": {pid: len(_hand(pid)) for pid in seats},
         "discard_top": discard[-1] if discard else None,
         "discard_recent": discard[-5:],
         "deck_count": deck_count,
         "pending_draw": int(env.get("pendingDraw", 0)),
         "penalty_target": env.get("penaltyTarget"),
-        "last_action": env.get("lastActor"),
+        # UNO env 未声明 last_action（动作类型），只存 lastActor（最后行动者）；
+        # 暴露 last_actor 与德州快照对齐，last_action 字段不硬凑（动作内容见
+        # last_ai_action）。曾误把 lastActor 塞进 last_action 键，语义错配。
+        "last_actor": env.get("lastActor"),
         "last_ai_action": session.last_ai_info.get("action"),
         "legal": legal,
         "payoff": session.engine.get_utility(session.state, session.player_pid) if over else None,
@@ -768,6 +786,8 @@ def _undercover_spec() -> GameSpec:
 
     rules = json.loads((RULES_DIR / "undercover.json").read_text(encoding="utf-8"))
     spec = build_spec("undercover", rules)
+    # 主题列表(从 variants.options 的 theme_diff 名提取),供前端选主题。
+    themes = tuple(sorted({opt.rsplit("_", 1)[0] for opt in rules["variants"]["options"]}))
     return replace(
         spec,
         display_name="谁是卧底",
@@ -775,22 +795,60 @@ def _undercover_spec() -> GameSpec:
             "经典派对语言游戏：平民拿到同一个词、卧底拿到相似词、白板无词；"
             "轮流一句话描述后投票，票数最多者出局（平票无人出局）。"
             "默认 8 人（1 卧底 + 1 白板 + 6 平民），人数 4..12；"
+            "6 主题×3 难度档词库，开局随机抽一对词（难度越高词对越易混淆）；"
             "AI 座位各自独立推理（本地大模型可用时发言，否则随机策略）。"
         ),
         player_counts=(8, 4, 5, 6, 7, 9, 10, 11, 12),
+        variant_themes=themes,
     )
 
 
-# 注意：平台注册表共 16 款 = 月亮棋/随机五子棋/德州 + 麻将六变种
+# ── Werewolf（狼人杀）──────────────────────────────────────────────
+
+
+def _werewolf_spec() -> GameSpec:
+    """狼人杀 spec（social 族）：固定 9 人（3 狼/3 民/预言家/女巫/猎人）。
+
+    与 ``_undercover_spec`` 同构：直接复用 ``families.social.build_spec``
+    的社交装配（每 AI 座位独立求解器、快照只从 ``project_observation``
+    投影构建——他人身份/查验结果永不进快照、夜晚行动者脱敏）。此处仅覆盖
+    展示元数据：中文名/简介/人数档。人数固定 9（rules/werewolf.json 的
+    variants 只声明这一个档位），与 docs/user/play_werewolf.md 一致。
+    """
+    import json
+    from dataclasses import replace
+
+    from ..engine_helpers import RULES_DIR
+    from .families.social import build_spec
+
+    rules = json.loads((RULES_DIR / "werewolf.json").read_text(encoding="utf-8"))
+    spec = build_spec("werewolf", rules)
+    return replace(
+        spec,
+        display_name="狼人杀",
+        description=(
+            "9 人社交推理：3 狼人 / 3 村民 / 预言家 / 女巫 / 猎人。夜晚狼人"
+            "刀人、女巫救人/毒人、预言家验人、猎人开枪；白天轮流发言后投票"
+            "放逐。屠边结算——狼人全灭好人胜、狼人数不少于好人方时狼胜；"
+            "AI 座位各自独立推理（本地大模型可用时发言，否则随机策略）。"
+        ),
+        player_counts=(9,),
+    )
+
+
+# 注意：平台注册表共 17 款 = 月亮棋/随机五子棋/德州 + 麻将六变种
 # （guangdong / hongzhong / blood / sichuan / changsha / taiwan，v5.2
-# variants）+ UNO 六变体 + 谁是卧底（undercover，social 族）。三个消费
-# 注册点必须同步，否则各自漂移（曾漏挂四川/长沙/台湾，导致文档承诺六
-# 变种但大厅只有三个）：
+# variants）+ UNO 六变体 + 谁是卧底（undercover，social 族）+ 狼人杀
+# （werewolf，social 族）。三个消费注册点必须同步，否则各自漂移（曾漏挂
+# 四川/长沙/台湾，导致文档承诺六变种但大厅只有三个）：
 #   - 平台：本文件（平台 /api/games → 大厅）+ session.py `_BUILTIN_FAMILY`
-#     （undercover → "social"，缺项会让快照 family 为 None、前端误路由）
+#     （undercover/werewolf → "social"，缺项会让快照 family 为 None、前端误路由）
 #   - 训练：train-cli/games.py（undercover 条目已登记：rules/undercover.json
-#     × variant=fruit × player_count=8，runtime_solvers=ollama/random）
-#   - 文档：docs/user/play_undercover.md（4..12 人 × 场景词对）
+#     × variant=fruit × player_count=8，runtime_solvers=ollama/random；
+#     werewolf 条目已登记：rules/werewolf.json × player_count=9，
+#     runtime_solvers=ollama/random）
+#   - 文档：docs/user/play_undercover.md（4..12 人 × 场景词对）、
+#     docs/user/play_werewolf.md（9 人固定 × 夜晚/白天流程）
 GAMES: dict[str, GameSpec] = {
     "moon_chess": GameSpec(
         game_id="moon_chess",
@@ -1126,4 +1184,7 @@ GAMES: dict[str, GameSpec] = {
     # 谁是卧底（social 族，v5.2 声明式 variants：1 卧底 + 1 白板 + N 平民）；
     # 与 train-cli/games.py 的 undercover 条目同源（同一 undercover.json）。
     "undercover": _undercover_spec(),
+    # 狼人杀（social 族，v5.2 声明式 variants：9 人 3 狼/3 民/预言家/女巫/猎人）
+    # 与 train-cli/games.py 的 werewolf 条目同源（同一 werewolf.json）。
+    "werewolf": _werewolf_spec(),
 }

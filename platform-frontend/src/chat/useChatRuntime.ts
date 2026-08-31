@@ -323,6 +323,7 @@ export function useChatRuntime(): ChatRuntime {
           game_id: gameId,
           player_pid: config.playerPid,
           difficulty: config.difficulty,
+          theme: config.theme,
           player_count: config.playerCount,
           persona: config.persona,
           hint_level: config.hintLevel,

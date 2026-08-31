@@ -83,8 +83,9 @@ interface SeatProps {
 
 /** 一家座位的展示：手牌（自己可见）/ 副露 / 河。 */
 function Seat({ pid, label, snapshot, interactive, onAction, isHuman, isTurn }: SeatProps) {
-  const { my_hand, ai_hand, melds, discards, over, ai_pid } = snapshot
-  const hand = isHuman ? my_hand : pid === ai_pid && over ? ai_hand : []
+  const { my_hand, melds, discards, over } = snapshot
+  // 终局亮所有座位手牌（final_hands）；进行中人类读 my_hand、AI 显示牌背。
+  const hand = isHuman ? my_hand : over ? (snapshot.final_hands?.[pid] ?? []) : []
   const hiddenCount = isHuman ? 0 : snapshot.hand_counts[pid] ?? 0
   const [selected, setSelected] = useState<string | null>(null)
 
@@ -210,7 +211,7 @@ export default function MahjongTable({ snapshot, interactive, onAction }: Props)
             {over && (
               <div className="hand-names">
                 <span>番/分: {snapshot.payoffs.map((p, i) => `${seats[i]}: ${p}`).join(' · ')}</span>
-                {snapshot.winner && <span>胜者 {snapshot.winner}</span>}
+                {snapshot.winner && <span>胜者 {snapshot.winner === player_pid ? '你' : 'AI'}</span>}
               </div>
             )}
           </div>

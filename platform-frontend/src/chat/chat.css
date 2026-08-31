@@ -193,6 +193,15 @@
   overflow-wrap: break-word;
 }
 
+/* 说话人标签（多座位群聊 / 对手模式区分头像与名字；啦啦队单气泡也带 persona 名） */
+.chat-msg-speaker {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+  letter-spacing: 0.02em;
+}
+
 /* clarify 选项 chips 内嵌在气泡里：去掉输入区那套居中与下外边距 */
 .chat-msg-bubble .chat-chips {
   margin: 10px 0 0;

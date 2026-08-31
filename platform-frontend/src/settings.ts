@@ -1,11 +1,14 @@
-// 本地 UI 偏好 — 主题 / 语音 / 对话静音。独立于后端 profile，存 localStorage。
+// 本地 UI 偏好 — 主题 / 语音 / 对话静音 / 调试模式。独立于后端 profile，存 localStorage。
 // 主题与「浅/深色切换」对齐 PRD 5.6；语音为 P2 占位；静音即 PRD 4.2.3 的一键静音。
+// 调试模式：仅在此开关打开时前端才展示思维链（reasoning）折叠块；
+// 后端照常产出 / 透传 / 存档 reasoning，默认隐藏避免把模型思考过程暴露给玩家。
 
 export type ThemeMode = 'light' | 'dark'
 
 const THEME_KEY = 'gavis.theme'
 const VOICE_KEY = 'gavis.voice'
 const MUTED_KEY = 'gavis.muted'
+const DEBUG_KEY = 'gavis.debug'
 
 export function getStoredTheme(): ThemeMode {
   const v = localStorage.getItem(THEME_KEY)
@@ -35,4 +38,12 @@ export function getStoredMuted(): boolean {
 
 export function setStoredMuted(on: boolean): void {
   localStorage.setItem(MUTED_KEY, on ? 'on' : 'off')
+}
+
+export function getStoredDebug(): boolean {
+  return localStorage.getItem(DEBUG_KEY) === 'on'
+}
+
+export function setStoredDebug(on: boolean): void {
+  localStorage.setItem(DEBUG_KEY, on ? 'on' : 'off')
 }

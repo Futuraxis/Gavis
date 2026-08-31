@@ -101,7 +101,18 @@ def _make_ollama(engine: GameEngine, cfg: dict[str, Any]) -> SolverBase:
     # 同优先级）——平台 LLM 配置页保存后经 env 桥让社交族求解器即时生效。
     model = cfg.get("model") or os.environ.get("LLM_MODEL", "").strip() or "qwen3:8b"
     base_url = cfg.get("base_url") or os.environ.get("LLM_BASE_URL", "").strip() or "http://localhost:11434"
-    return OllamaSolver(engine, OllamaConfig(model=model, base_url=base_url), player_id=cfg.get("player_id"))
+    # 难度两维(平台 difficulty×pacing 3×3)透传给 OllamaConfig——
+    # difficulty 选 ROLE_GUIDE 策略档 + 卧底词对档;pacing 调发言温度。
+    return OllamaSolver(
+        engine,
+        OllamaConfig(
+            model=model,
+            base_url=base_url,
+            difficulty=str(cfg.get("difficulty") or "normal"),
+            pacing=str(cfg.get("pacing") or "standard"),
+        ),
+        player_id=cfg.get("player_id"),
+    )
 
 
 def _make_mcts(engine: GameEngine, cfg: dict[str, Any]) -> SolverBase:
@@ -506,10 +517,17 @@ def create_solver(
       hybrid.mcts_budget）。
     - 额外 kwargs（``empirical_table`` / ``model`` / ``player_id`` …）合并进
       配置，由 config-class 自行拒绝未知字段。
+    - ``rollout_policy``（str）是装配指令而非 config 字段：弹出后在
+      hybrid 构造后注入其内部 MCTS 的 ``rollout_policy``（如 UNO 启发式
+      先验），使裸 MCTS 的随机 rollout 信号变强。仅 hybrid 生效；非
+      hybrid 传此指令静默跳过。
     """
     factory = RUNTIME_FACTORY.get(name)
     if factory is None:
         raise ValueError(f"未知求解器: {name}（已注册: {', '.join(RUNTIME_FACTORY)}）")
+    # rollout_policy 是装配指令（字符串名），不进 config-class（HybridConfig
+    # 拒绝未知字段）；弹出后在 hybrid 构造后注入其内部 MCTS。
+    rollout_policy_name = kwargs.pop("rollout_policy", None)
     spec = GAMES.get(game_id)
     if spec is None:
         if allow_unknown and name in _RUNTIME_UNKNOWN_ALLOWED:
@@ -518,22 +536,63 @@ def create_solver(
                 cfg[_BUDGET_FIELD[name]] = budget
             cfg.update(kwargs)
             cfg.setdefault("seed", seed)
-            return factory(engine, cfg)
-        raise ValueError(f"未知游戏: {game_id}（已登记: {', '.join(GAMES)}）")
-    if name not in spec.runtime_solvers:
-        raise ValueError(f"求解器 {name} 不适用于 {game_id}（可选: {', '.join(spec.runtime_solvers)}）")
-    cfg = dict(RUNTIME_DEFAULTS.get(name, {}))
-    cfg.update(spec.runtime_configs.get(name, {}))
-    if name in _BUDGET_FIELD:
-        cfg[_BUDGET_FIELD[name]] = budget
-    cfg.update(kwargs)
-    if name == "maac":
-        # 训练产物默认路径：<root>/models/train/<game_id>/maac.pt。显式传入的
-        # ``model_path`` kwarg 优先；产物缺失时运行时工厂回退到该游戏启发式，
-        # 平台默认 AI 因此是"已训练 MAAC，否则不崩的启发式"。
-        cfg.setdefault("model_path", str(_MODELS_TRAIN_DIR / game_id / "maac.pt"))
-    cfg.setdefault("seed", seed)
-    return factory(engine, cfg)
+            solver = factory(engine, cfg)
+        else:
+            raise ValueError(f"未知游戏: {game_id}（已登记: {', '.join(GAMES)}）")
+    else:
+        if name not in spec.runtime_solvers:
+            raise ValueError(f"求解器 {name} 不适用于 {game_id}（可选: {', '.join(spec.runtime_solvers)}）")
+        cfg = dict(RUNTIME_DEFAULTS.get(name, {}))
+        cfg.update(spec.runtime_configs.get(name, {}))
+        if name in _BUDGET_FIELD:
+            cfg[_BUDGET_FIELD[name]] = budget
+        cfg.update(kwargs)
+        if name == "maac":
+            # 训练产物默认路径：<root>/models/train/<game_id>/maac.pt。显式传入的
+            # ``model_path`` kwarg 优先；产物缺失时运行时工厂回退到该游戏启发式，
+            # 平台默认 AI 因此是"已训练 MAAC，否则不崩的启发式"。
+            cfg.setdefault("model_path", str(_MODELS_TRAIN_DIR / game_id / "maac.pt"))
+        cfg.setdefault("seed", seed)
+        solver = factory(engine, cfg)
+    _inject_rollout_policy(solver, name, rollout_policy_name, engine, seed)
+    return solver
+
+
+def _rollout_policy_factory(name: str) -> Callable[[GameEngine, int], Any] | None:
+    """按名取 rollout_policy 工厂（懒 import 避免顶层循环依赖）。
+
+    当前注册：``"uno"`` → ``UnoRolloutPolicy``。新增策略在此分支即可，
+    不污染 config-class（装配指令与配置分离）。
+    """
+    if name == "uno":
+        from layer3_solvers.uno.heuristic import UnoRolloutPolicy
+
+        return lambda engine, seed: UnoRolloutPolicy(engine, seed)
+    return None
+
+
+def _inject_rollout_policy(
+    solver: SolverBase, solver_name: str, policy_name: str | None, engine: GameEngine, seed: int
+) -> None:
+    """hybrid 专属：把 rollout 启发式设到其内部 MCTS 的 ``rollout_policy``。
+
+    非 hybrid / 无 policy_name 时静默跳过；policy_name 未知 → ValueError
+    （装配指令拼错应尽早暴露，而非静默退化）。注意此注入只影响裸 MCTS
+    的 rollout 路径（hybrid 无 ``hiddenWorld`` / 无 CFR 表时走的
+    ``_select_search`` 分支）；PIMC（``_opponent_mcts``）用 hybrid 自己的
+    ``_rollout_prior``，不受此影响。
+    """
+    if not policy_name:
+        return
+    if solver_name != "hybrid":
+        return  # 非 hybrid 无内部 MCTS，rollout_policy 指令无意义（静默跳过）
+    factory = _rollout_policy_factory(policy_name)
+    if factory is None:
+        raise ValueError(f"未知 rollout_policy: {policy_name}（已注册: uno）")
+    mcts = getattr(solver, "mcts", None)
+    if mcts is None:  # pragma: no cover — hybrid 构造必有 mcts
+        return
+    mcts.rollout_policy = factory(engine, seed)
 
 
 class DefaultSolverProvider:

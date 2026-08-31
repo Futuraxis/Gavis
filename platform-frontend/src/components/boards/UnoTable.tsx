@@ -166,9 +166,9 @@ export default function UnoTable({ snapshot, interactive, onAction }: Props) {
               ))}
             </div>
             <div style={{ fontSize: 12, opacity: 0.75 }}>{snapshot.hand_counts[pid] ?? 0} 张</div>
-            {over && snapshot.ai_hand.length > 0 && pid === ai_pid && (
+            {over && (snapshot.final_hands?.[pid]?.length ?? 0) > 0 && (
               <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                {snapshot.ai_hand.map((c, i) => (
+                {snapshot.final_hands![pid].map((c, i) => (
                   <UnoCard key={i} id={c} />
                 ))}
               </div>
@@ -228,7 +228,7 @@ export default function UnoTable({ snapshot, interactive, onAction }: Props) {
         )}
         {over && (
           <div className="hand-names" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <span>{snapshot.winner === player_pid ? '🎉 你赢了！' : `胜者：${snapshot.winner ?? '—'}`}</span>
+            <span>{snapshot.winner === player_pid ? '🎉 你赢了！' : snapshot.winner ? 'AI 获胜' : '—'}</span>
             {snapshot.payoff !== null && <span>收益 {snapshot.payoff}</span>}
           </div>
         )}

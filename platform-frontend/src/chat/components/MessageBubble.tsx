@@ -1,15 +1,18 @@
 // MessageBubble — 单条聊天消息；agent 消息按意图内联卡片（开局卡/创建卡/战绩/复盘/进度）。
 // 对局面板不挂消息上——由 ChatPage 钉在输入框上方（InlineBoard），消息里只留文字与卡片。
+// 思维链（reasoning）折叠块仅在调试模式打开时渲染（getStoredDebug）；
+// 后端照常产出/透传 reasoning，默认隐藏，避免把模型思考过程暴露给玩家。
 
 import type { ChatMessage, GameInfo } from '../../types'
 import type { BattleConfig } from '../../components/BattleSetup'
+import type { StatsData, BenchmarkJob, LearningItem } from '../useChatRuntime'
+import { getStoredDebug } from '../../settings'
 import SetupCard from './SetupCard'
 import CreateCard from './CreateCard'
 import StatsCard from './StatsCard'
 import ReviewCard from './ReviewCard'
 import ProgressCard from './ProgressCard'
 import Chips from './Chips'
-import type { StatsData, BenchmarkJob, LearningItem } from '../useChatRuntime'
 
 interface Props {
   msg: ChatMessage
@@ -59,12 +62,13 @@ export default function MessageBubble({ msg, games, busy, onStart, onCreated, on
   return (
     <div className={`chat-msg ${msg.role === 'player' ? 'chat-msg-player' : 'chat-msg-agent'}`}>
       <div className="chat-msg-bubble">
-        {msg.reasoning ? (
+        {msg.reasoning && getStoredDebug() ? (
           <details className="chat-msg-reasoning">
             <summary>🧠 思维链</summary>
             <div className="chat-msg-reasoning-body">{msg.reasoning}</div>
           </details>
         ) : null}
+        {msg.speaker ? <div className="chat-msg-speaker">{msg.speaker}</div> : null}
         <div className="chat-msg-bubble-text">{msg.text}</div>
         {inlineCard()}
         {chips.length > 0 && <Chips chips={chips} disabled={busy} onPick={onChip} />}

@@ -41,6 +41,7 @@ from .chat import chat_turn, chat_turn_stream
 from .conversations import ConversationError, ConversationStore
 from .custom_games import CustomGameError, CustomGameRegistry, CustomGameStore
 from .game_knowledge import GAME_ALIASES
+from ..engine_helpers import build_seat_names
 from .games import GAMES, PlayError
 from .history import HistoryError, MatchHistory
 from .llm_settings import LLMSettingsStore, probe_llm, sync_env
@@ -320,6 +321,21 @@ def make_handler(
 
         # ── API handlers ──────────────────────────────────────────
 
+        def _seat_names_for(self, game_id: str) -> dict[str, str]:
+            """按 game_id 查注册表算 seat_names（内置 GAMES / 自定义 custom.spec_for）。
+
+            历史/自定义记录不持久化 seat_names，响应时按 game_id 现算注入，
+            这样旧记录也能拿到正确的座位称呼；查不到返回空 dict（前端兜底 pid）。
+            """
+            spec = GAMES.get(game_id)
+            if spec is not None:
+                return build_seat_names(_BUILTIN_FAMILY.get(game_id) or "unknown", spec.seat_options)
+            if custom is not None:
+                spec = custom.spec_for(game_id)
+                if spec is not None:
+                    return build_seat_names(custom.family_of(game_id) or "unknown", spec.seat_options)
+            return {}
+
         def _handle_games(self) -> None:
             games = []
             for spec in GAMES.values():
@@ -334,14 +350,25 @@ def make_handler(
                         "board_size": spec.board_size,
                         "seat_options": list(spec.seat_options),
                         "seat_label": spec.seat_label,
+                        # 座位 pid → 中文称呼（单一数据源：engine_helpers.build_seat_names，
+                        # 按族分派——社交/UNO 不再被套上"庄家"）。
+                        "seat_names": build_seat_names(
+                            _BUILTIN_FAMILY.get(spec.game_id) or "unknown", spec.seat_options
+                        ),
                         "player_counts": list(spec.player_counts),
                         "difficulties": list(spec.difficulty_budgets),
                         "solver_options": list(SOLVER_OPTIONS.get(spec.game_id, ())),
                         "aliases": list(GAME_ALIASES.get(spec.game_id, ())),
+                        # undercover 等多 variant 游戏的主题选项(供前端选择);None → 无主题 UI。
+                        "variant_themes": list(spec.variant_themes) if spec.variant_themes else None,
                     }
                 )
             if custom is not None:
-                games.extend(custom.list_games())
+                for entry in custom.list_games():
+                    entry["seat_names"] = build_seat_names(
+                        entry.get("family") or "unknown", entry.get("seat_options") or []
+                    )
+                    games.append(entry)
             send_json(self, HTTPStatus.OK, {"ok": True, "games": games})
 
         # ── Custom games ─────────────────────────────────────────
@@ -423,6 +450,16 @@ def make_handler(
             # 教学对局：teaching=true 或 mode="teaching"（教练能看到玩家
             # 自己的牌并推理；见 session.py / agent/coach.py）。
             teaching = bool(payload.get("teaching", False)) or str(payload.get("mode", "")) == "teaching"
+            # undercover 主题×难度档词对:前端选 theme,dificulty 选档,拼
+            # variant=f"{theme}_{tier}" 传引擎。adaptive 模式词对档锚定 normal
+            # (AI 强度仍自适应);非 undercover 不传 theme → variant=None(用规则默认)。
+            theme = payload.get("theme")
+            if theme:
+                diff_tier = str(payload.get("difficulty", "normal"))
+                tier = diff_tier if diff_tier in ("easy", "normal", "hard") else "normal"
+                variant = f"{theme}_{tier}"
+            else:
+                variant = None
             session = manager.start(
                 payload["game_id"],
                 str(payload.get("player_pid", "random")),
@@ -433,6 +470,7 @@ def make_handler(
                 pacing=str(payload.get("pacing", "standard")),
                 adaptive_enabled=bool(payload.get("adaptive", False)),
                 teaching=teaching,
+                variant=variant,
             )
             send_json(self, HTTPStatus.OK, {"ok": True, "session": session.snapshot()})
 
@@ -636,10 +674,19 @@ def make_handler(
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             limit = int(query.get("limit", ["100"])[0])
             game_id = query.get("game_id", [None])[0]
-            send_json(self, HTTPStatus.OK, {"ok": True, "matches": history.list_matches(limit=limit, game_id=game_id)})
+            matches = history.list_matches(limit=limit, game_id=game_id)
+            # 注入 seat_names：战绩卡用 player_pid 查座位称呼（旧记录缺省 → 前端兜底 pid）。
+            for meta in matches:
+                if isinstance(meta, dict):
+                    meta["seat_names"] = self._seat_names_for(meta.get("game_id") or "")
+            send_json(self, HTTPStatus.OK, {"ok": True, "matches": matches})
 
         def _handle_history_get(self, match_id: str) -> None:
-            send_json(self, HTTPStatus.OK, {"ok": True, "match": history.get(urllib.parse.unquote(match_id))})
+            record = history.get(urllib.parse.unquote(match_id))
+            # 复盘页用 player_pid 查座位称呼；record 顶层注入，前端 MatchLog.seat_names 读。
+            if isinstance(record, dict):
+                record["seat_names"] = self._seat_names_for(record.get("game_id") or "")
+            send_json(self, HTTPStatus.OK, {"ok": True, "match": record})
 
         def _handle_benchmark_list(self) -> None:
             send_json(self, HTTPStatus.OK, {"ok": True, "jobs": [asdict(j) for j in benchmark.list_jobs()]})

@@ -8,8 +8,12 @@ export interface GameInfo {
   board_size: number | null
   seat_options: string[]
   seat_label: string
+  /** 座位 pid → 中文称呼（后端按族下发：麻将=庄家/下家…、社交/UNO=N号玩家；前端零推导）。 */
+  seat_names: Record<string, string>
   player_counts: number[]
   difficulties: string[]
+  /** variant 主题选项（仅 undercover 等多 variant 游戏携带；null/缺省 → 无主题选择 UI）。 */
+  variant_themes?: string[] | null
   solver_options: string[]
   family: string // 族: grid / poker / mahjong / social（渲染以 family 为准）
   custom: boolean // 是否来自自定义游戏注册表
@@ -123,6 +127,8 @@ export interface MahjongSnapshot {
   phase: string | null
   my_hand: string[]
   ai_hand: string[]
+  // 终局所有座位手牌（含全部 AI 座位）；非终局为空对象。
+  final_hands?: Record<string, string[]>
   hand_counts: Record<string, number>
   melds: Record<string, MahjongMeld[]>
   discards: Record<string, string[]>
@@ -146,6 +152,10 @@ export interface SocialDiscourseEntry {
   text: string
   round?: number
   intent?: string
+  /** 自爆等事件条目（非发言）：event=self_destruct + target + guess。 */
+  event?: string
+  target?: string
+  guess?: string
 }
 
 export interface SocialSnapshot {
@@ -158,14 +168,23 @@ export interface SocialSnapshot {
   winner: string | null
   turn: string | null
   phase: string | null
+  round?: number | null // 当前轮次（who is the undercover 的轮数；狼人杀等可能无）
   my_role: string | null
   my_word?: string | null // 卧底局：自己的词卡（狼人杀等无词卡玩法为 null）
   alive: string[]
   discourse: SocialDiscourseEntry[]
+  /** 投票记录（v5.2 公开 vote_log 投影）：voter → target，含轮次。 */
+  votes?: { voter: string; target: string; round?: number }[]
+  /** 出局名单（公开 deaths_arr）：按出局顺序的玩家 id。 */
+  deaths?: string[]
+  /** 当前轮被投出者 id（平票无人出局时为 null）。 */
+  eliminated?: string | null
   last_action: string | null
   winners: string[]
-  legal: { type: string; text?: string; target?: string }[]
+  legal: { type: string; text?: string; target?: string; guess?: string }[]
   ai_mode: 'ollama' | 'random'
+  /** 终局全场身份揭晓（含存活者）；undercover 另带 word，werewolf 只有 role。 */
+  final_roles?: { pid: string; role: string | null; word?: string | null }[]
 }
 
 export type Snapshot = (BoardSnapshot | PokerSnapshot | MahjongSnapshot | SocialSnapshot | UnoSnapshot) & SnapshotExtras
@@ -178,6 +197,10 @@ export type Snapshot = (BoardSnapshot | PokerSnapshot | MahjongSnapshot | Social
 export interface SnapshotExtras {
   chat?: SnapshotChatEntry[]
   teaching?: boolean
+  /** 自适应难度已生效：本局 AI 强度由玩家近 10 局胜率自动升降（非显式档位）。 */
+  adaptive?: boolean
+  /** 本局实际 AI 搜索强度（预算；自适应开启时随胜率浮动）。 */
+  ai_strength?: number
 }
 
 /** 后端 session.snapshot() 的 chat 增量条目（agent 消息，按 step 排序）。 */
@@ -188,6 +211,12 @@ export interface SnapshotChatEntry {
   step: number
   /** 陪伴/教练消息的思维链（统一客户端 reasoning 透传；可选）。 */
   reasoning?: string
+  /**
+   * 说话人标签（座位 pid + 显示名 / persona 显示名）。多座位群聊（P2）按
+   * 此渲染不同头像与名字；二人对手模式与啦啦队都带 persona 显示名。
+   * 旧后端 / 旧快照可能缺省 → 前端按 persona 默认名兜底渲染。
+   */
+  speaker?: string
 }
 
 // ── UNO 族 ────────────────────────────────────────────────────────
@@ -216,13 +245,17 @@ export interface UnoSnapshot {
   top_symbol: string | null // 台面顶牌符号（数字 / skip / reverse / draw2 / wild / wild4）
   my_hand: string[]
   ai_hand: string[] // 仅终局展示（隐藏信息红线）
+  // 终局所有座位手牌（含全部 AI 座位）；非终局为空对象。
+  final_hands?: Record<string, string[]>
   hand_counts: Record<string, number> // 他人只暴露张数
   discard_top: string | null
   discard_recent: string[]
   deck_count: number
   pending_draw: number
   penalty_target: string | null
-  last_action: string | null
+  // UNO env 未存动作类型，只暴露最后行动者（与德州快照 last_actor 对齐）；
+  // 动作内容见 last_ai_action。曾误命名为 last_action（值实为 lastActor）。
+  last_actor: string | null
   last_ai_action: string | null
   legal: UnoLegalAction[]
   payoff: number | null
@@ -243,8 +276,13 @@ export interface MatchMeta {
   finished_at: string
   persona?: PersonaKey | null
   hinted?: boolean
-  ai_strength?: string | null
+  /** 本局实际 AI 搜索强度（预算；自适应局随胜率浮动，旧记录缺省）。 */
+  ai_strength?: number | null
   teaching?: boolean | null
+  /** 自适应难度局标记（旧记录缺省 undefined）。 */
+  adaptive?: boolean
+  /** 座位 pid → 中文称呼（后端 /api/history 注入；旧记录缺省 → 前端兜底 pid）。 */
+  seat_names?: Record<string, string>
 }
 
 export interface MoveEntry {
@@ -268,8 +306,11 @@ export interface MatchLog {
   moves: MoveEntry[]
   persona?: PersonaKey | null
   hinted?: boolean
-  ai_strength?: string | null
+  ai_strength?: number | null
+  adaptive?: boolean
   family?: string // 复盘快照渲染优先按 family 分发
+  /** 座位 pid → 中文称呼（后端 /api/history/:id 注入；旧记录缺省 → 前端兜底 pid）。 */
+  seat_names?: Record<string, string>
 }
 
 // ── 求解器评测 ─────────────────────────────────────────────────
@@ -403,6 +444,11 @@ export interface ChatMessage {
   params?: Record<string, unknown>
   /** 发送/执行中占位标记。 */
   pending?: boolean
+  /**
+   * 说话人标签（来自快照 chat 增量的 speaker；多座位群聊按此区分头像/名字）。
+   * 平台聊天助手消息（非对局陪伴）不带此字段 → 按 persona 默认名渲染。
+   */
+  speaker?: string
 }
 
 // ── 对话管理与存档 (conversations, 与后端 conversations.py 契约对齐) ──
@@ -439,6 +485,9 @@ export interface ActiveSession {
   persona: PersonaKey | null
   hint_level: HintLevel
   teaching?: boolean
+  /** 自适应难度已生效 + 实际 AI 强度（未开启/旧后端时缺省）。 */
+  adaptive?: boolean
+  ai_strength?: number
   step: number
   started_at: string
 }

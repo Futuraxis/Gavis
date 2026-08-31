@@ -176,6 +176,50 @@ def seat_label(pid: str, *, self_pid: str = "", ai_pid: str = "") -> str:
     return f"玩家 {pid}"
 
 
+#: 麻将座位称呼（庄家 + 顺时针下/对/上，4 人桌的东南西北位）。
+_MAHJONG_SEAT_NAMES = {"p0": "庄家", "p1": "下家", "p2": "对家", "p3": "上家"}
+#: 棋类座位（黑白）。
+_GRID_SEAT_NAMES = {"p_black": "黑棋", "p_white": "白棋"}
+#: 德州扑克座位（小盲 / 大盲）。
+_POKER_SEAT_NAMES = {"p_sb": "小盲位", "p_bb": "大盲位"}
+
+
+def build_seat_names(family: str, seat_options) -> dict[str, str]:
+    """pid → 中文座位称呼（单一数据源，按规则族分派）。
+
+    与 :func:`seat_label` 的"你 / AI / N号玩家"运行时称呼互补——本函数给
+    的是每个座位的**固定展示名**，供前端徽章 / 下拉 / 战绩卡 / 复盘直接查表
+    （后端 ``/games`` 与 ``/api/history`` 统一下发，前端零推导）。
+
+    - grid：黑棋 / 白棋
+    - poker：小盲位 / 大盲位
+    - mahjong：庄家 / 下家 / 对家 / 上家（4 人桌座位文化）
+    - uno / social / unknown：N号玩家（无庄家概念，与 seat_label 一致）
+
+    未命中族映射的 ``pN`` 兜底"N号玩家"（``p0`` → 1号玩家），其余原样返回——
+    谁是卧底 / 狼人杀 / UNO 这类多座社交游戏不再被套上"庄家"。
+    """
+    fam = str(family or "")
+    if fam == "grid":
+        table = _GRID_SEAT_NAMES
+    elif fam == "poker":
+        table = _POKER_SEAT_NAMES
+    elif fam == "mahjong":
+        table = _MAHJONG_SEAT_NAMES
+    else:
+        table = {}
+    names: dict[str, str] = {}
+    for pid in seat_options or []:
+        pid = str(pid)
+        if pid in table:
+            names[pid] = table[pid]
+        elif pid.startswith("p") and pid[1:].isdigit():
+            names[pid] = f"{int(pid[1:]) + 1}号玩家"
+        else:
+            names[pid] = pid
+    return names
+
+
 _SOCIAL_ACTION_LABELS = {
     "speak": "发言",
     "vote": "投票",

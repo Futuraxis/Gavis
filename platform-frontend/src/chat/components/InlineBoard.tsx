@@ -17,11 +17,6 @@ interface Props {
   onRestart: () => void
 }
 
-const SEATS: Record<string, string> = {
-  p_black: '黑棋', p_white: '白棋', p_sb: '小盲位', p_bb: '大盲位',
-  p0: '庄家', p1: '下家', p2: '对家', p3: '上家',
-}
-
 export default function InlineBoard({ snapshot, game, busy, onMove, onRestart }: Props) {
   // 渲染分发对齐 BattlePage: 优先按 family（快照自描述 / game.family，见
   // boardFamily.resolveBoardFamily）经 FAMILY_BOARDS 查表；**未知 family 绝不
@@ -77,14 +72,16 @@ export default function InlineBoard({ snapshot, game, busy, onMove, onRestart }:
             ? snapshot.winner === snapshot.player_pid
               ? '🎉 你赢了'
               : snapshot.winner
-                ? `${SEATS[snapshot.winner] ?? snapshot.winner} 赢了`
+                // 目录未加载 / 未命中时不能回退原始 pid（会泄漏 'p_white'），
+                // 退到关系称呼 "AI"（本面板对手恒为 AI）。
+                ? `${game?.seat_names?.[snapshot.winner] ?? 'AI'} 赢了`
                 : '平局'
             : busy
               ? 'AI 思考中…'
               : myTurn
                 ? (snapshot as MahjongSnapshot).phase === 'claim'
                   ? // claim 是响应别人打出的牌，不是你的出牌回合。
-                    `响应 ${SEATS[(snapshot as MahjongSnapshot).last_discarder ?? ''] ?? '对方'} 的牌`
+                    `响应 ${game?.seat_names?.[(snapshot as MahjongSnapshot).last_discarder ?? ''] ?? '对方'} 的牌`
                   : '轮到你了'
                 : 'AI 回合'}
         </span>

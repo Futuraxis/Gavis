@@ -4,6 +4,7 @@ import type { GameInfo, HintLevel, Pacing, PersonaKey } from '../types'
 export interface BattleConfig {
   playerPid: string
   difficulty: string
+  theme?: string
   playerCount: number
   persona: PersonaKey
   hintLevel: HintLevel
@@ -19,15 +20,8 @@ interface Props {
   onStart: (config: BattleConfig) => void
 }
 
+// 座位称呼统一用 game.seat_names（后端按族下发）；本表仅留"随机"选项文案。
 const SEAT_LABELS: Record<string, string> = {
-  p_black: '黑棋 ⚫',
-  p_white: '白棋 ⚪',
-  p_sb: '小盲位 (先手)',
-  p_bb: '大盲位 (后手)',
-  p0: '庄家 (先手)',
-  p1: '下家',
-  p2: '对家',
-  p3: '上家',
   random: '随机 🎲',
 }
 
@@ -57,6 +51,16 @@ const PACING_OPTIONS: { value: Pacing; label: string }[] = [
   { value: 'slow', label: '慢棋 🐢' },
 ]
 
+// 谁是卧底主题（词对类别）；难度档决定词对相似度，主题决定词对类别。
+const THEME_LABELS: Record<string, string> = {
+  fruit: '水果 🍎',
+  food: '美食 🍔',
+  animal: '动物 🐾',
+  object: '物品 📦',
+  place: '地点 🏛️',
+  plant: '植物 🌿',
+}
+
 const RULES_SUMMARY: Record<string, string> = {
   moon_chess: '3×3 棋盘，双方轮流落子，三子连珠即胜；棋盘放满后最旧的棋子会被挤出。',
   stochastic_gomoku: '9×9 棋盘，五子连珠即胜；每次落子后，棋子有 50% 概率被随机抹去。',
@@ -74,6 +78,7 @@ export default function BattleSetup({ game, busy, error, onStart }: Props) {
   const [playerPid, setPlayerPid] = useState('random')
   const [difficulty, setDifficulty] = useState('normal')
   const [playerCount, setPlayerCount] = useState(game.player_counts[0] ?? 2)
+  const [theme, setTheme] = useState(game.variant_themes?.[0] ?? 'fruit')
   const [persona, setPersona] = useState<PersonaKey>('gentle')
   const [hintLevel, setHintLevel] = useState<HintLevel>('off')
   const [pacing, setPacing] = useState<Pacing>('standard')
@@ -125,13 +130,25 @@ export default function BattleSetup({ game, busy, error, onStart }: Props) {
           </select>
         </div>
       )}
+      {game.variant_themes && game.variant_themes.length > 1 && (
+        <div className="form-row">
+          <label>主题:</label>
+          <select value={theme} onChange={(e) => setTheme(e.target.value)}>
+            {game.variant_themes.map((t) => (
+              <option key={t} value={t}>
+                {THEME_LABELS[t] ?? t}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="form-row">
         <label>{game.seat_label}:</label>
         <select value={playerPid} onChange={(e) => setPlayerPid(e.target.value)}>
           <option value="random">{SEAT_LABELS.random}</option>
           {seatOptions.map((pid) => (
             <option key={pid} value={pid}>
-              {SEAT_LABELS[pid] ?? pid}
+              {game.seat_names[pid] ?? pid}
             </option>
           ))}
         </select>
@@ -185,11 +202,21 @@ export default function BattleSetup({ game, busy, error, onStart }: Props) {
       </div>
       <div className="form-row">
         <label>自适应难度:</label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <label
+          style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+          title="AI 强度按你近 10 局胜率自动升降：连胜变难、连败变易。下方难度档位只作初始锚点。"
+        >
           <input type="checkbox" checked={adaptive} onChange={(e) => setAdaptive(e.target.checked)} />
-          <span>{adaptive ? '开启' : '关闭'}</span>
+          <span>{adaptive ? '开启 ⚙' : '关闭'}</span>
         </label>
       </div>
+      {adaptive && (
+        <div className="form-row" style={{ marginTop: -6 }}>
+          <span style={{ color: 'var(--muted)', fontSize: 13 }}>
+            AI 强度将按你近 10 局胜率自动调整（当前难度档位只作初始锚点；麻将族暂为固定启发式）
+          </span>
+        </div>
+      )}
       <div className="form-row">
         <label>教学对局:</label>
         <label
@@ -206,7 +233,7 @@ export default function BattleSetup({ game, busy, error, onStart }: Props) {
       <button
         className="btn btn-primary"
         disabled={busy}
-        onClick={() => onStart({ playerPid, difficulty, playerCount, persona, hintLevel, pacing, adaptive, teaching })}
+        onClick={() => onStart({ playerPid, difficulty, theme, playerCount, persona, hintLevel, pacing, adaptive, teaching })}
       >
         {busy ? '加载中…' : '开始对局'}
       </button>

@@ -488,11 +488,20 @@ class TestCreateSolverAllowUnknown:
 
 class TestLayerContract:
     def test_no_layer3_import_in_layer4(self):
-        """layer4_interface 内不得 import layer3_solvers（求解器经 provider 注入）。"""
+        """layer4_interface 内不得 import layer3_solvers（求解器经 provider 注入）。
+
+        ``botzone/`` 是唯一刻意的例外：向 Botzone 平台提交棋子的薄适配器，
+        直接驱动 Layer 3 求解器（docs/user/botzone.md 明确记载「接口再调用
+        Layer 4 适配和 Layer 3 solver」）；平台前端（platform/）一律经
+        ``SolverProvider`` 注入，不直连 L3。
+        """
         root = Path(__file__).resolve().parents[2] / "layer4_interface"
+        botzone_dir = root / "botzone"  # 文档记载的例外适配器（薄客户端→L3）
         pattern = re.compile(r"^\s*(?:from\s+layer3_solvers|import\s+layer3_solvers)")
         hits: list[str] = []
         for path in sorted(root.rglob("*.py")):
+            if path.is_relative_to(botzone_dir):
+                continue
             for line in path.read_text(encoding="utf-8").splitlines():
                 if pattern.match(line):
                     hits.append(f"{path.relative_to(root)}: {line.strip()}")

@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react'
 import { clearProfile, getProfile, saveProfile } from '../api/client'
 import { DEFAULT_PROFILE } from '../mock'
 import {
+  getStoredDebug,
   getStoredMuted,
   getStoredTheme,
   getStoredVoice,
+  setStoredDebug,
   setStoredMuted,
   setStoredTheme,
   setStoredVoice,
@@ -30,6 +32,7 @@ export default function SettingsPage() {
   const [theme, setTheme] = useState(getStoredTheme())
   const [voice, setVoice] = useState(getStoredVoice())
   const [muted, setMuted] = useState(getStoredMuted())
+  const [debug, setDebug] = useState(getStoredDebug())
   const [toast, setToast] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -78,6 +81,12 @@ export default function SettingsPage() {
     setStoredMuted(next)
   }
 
+  function toggleDebug() {
+    const next = !debug
+    setDebug(next)
+    setStoredDebug(next)
+  }
+
   async function clearData() {
     setToast(null)
     try {
@@ -89,8 +98,10 @@ export default function SettingsPage() {
     setProfile(DEFAULT_PROFILE)
     setStoredVoice(true)
     setStoredMuted(false)
+    setStoredDebug(false)
     setVoice(true)
     setMuted(false)
+    setDebug(false)
   }
 
   const hintIndex = Math.max(0, HINT_LEVELS.findIndex((h) => h.value === profile.hint_level))
@@ -166,6 +177,13 @@ export default function SettingsPage() {
           <button className="btn" onClick={toggleTheme}>
             {theme === 'light' ? '☀️ 浅色' : '🌙 深色'}
           </button>
+        </div>
+        <div className="form-row">
+          <label>调试模式:</label>
+          <button className={`btn ${debug ? '' : 'btn-ghost'}`} onClick={toggleDebug}>
+            {debug ? '开' : '关'}
+          </button>
+          <span style={{ color: 'var(--muted)', fontSize: 13 }}>展示 Agent 思维链</span>
         </div>
       </section>
 

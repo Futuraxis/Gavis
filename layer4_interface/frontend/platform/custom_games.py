@@ -26,6 +26,7 @@ import json
 import os
 import re
 import tempfile
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -290,6 +291,7 @@ class CustomGameRegistry:
 
         game_id = self._next_game_id(rules, game_name)
         spec = family.build_spec(game_id, rules)
+        spec = self._with_display_name(spec, rules, game_name, game_id)
         entry = self._entry(game_id, spec, family.FAMILY_ID, rules, response.confidence, validation, diff_summary)
         self._store.save(entry)
         self._spec_cache[game_id] = spec
@@ -386,10 +388,20 @@ class CustomGameRegistry:
             raise CustomGameError(f"基础模板文件缺失: {file_name}") from None
 
     def _next_game_id(self, rules: dict, game_name: str | None) -> str:
-        """Slug from meta.gameId / game_name; uniqueness against store + GAMES."""
+        """Slug from ``game_name`` first, then ``meta.gameId``; unique vs store + GAMES.
+
+        用户显式填的名字优先作为 id 来源——否则模板/LLM 的
+        ``meta.gameId``（常是内置 slug 如 ``stochastic_gomoku``）会让
+        自定义游戏与内置撞名。仅在用户没填名字时回退到 ``meta.gameId``；
+        中文名 slug 为空时再次回退 ``meta.gameId`` / ``custom_game``。
+        """
         meta = rules.get("meta", {})
-        raw = (meta.get("gameId") if isinstance(meta, dict) else None) or game_name or "custom_game"
-        base = _slug_id(raw) or "custom_game"
+        meta_id = meta.get("gameId") if isinstance(meta, dict) else None
+        raw = game_name or meta_id or "custom_game"
+        # 中文名 slug 为空时回退到 meta_id 的 slug（而非原始 meta_id）——
+        # 保持 id 一律 slug 化（连字符），避免 stochastic_gomoku-2 这种
+        # 下划线+后缀的混搭，也避免与内置 underscore id 形态撞形。
+        base = _slug_id(raw) or _slug_id(str(meta_id or "")) or "custom_game"
         taken = {entry.get("game_id") for entry in self._store.list()} | set(GAMES)
         candidate = base
         n = 2
@@ -398,12 +410,53 @@ class CustomGameRegistry:
             n += 1
         return candidate
 
+    @staticmethod
+    def _resolve_display_name(
+        rules: dict, game_name: str | None, game_id: str
+    ) -> str:
+        """人类可读展示名优先级：用户名 > meta.gameName > meta.gameId > game_id。
+
+        修复前各族 ``build_spec`` 把 ``display_name`` 直接设成
+        ``meta.gameId``（一个 slug），用户填的名字被丢弃——横幅出现
+        《stochastic_gomoku》而非用户起的名。此函数集中修正该优先级。
+        """
+        meta = rules.get("meta", {})
+        meta_name = meta.get("gameName") if isinstance(meta, dict) else None
+        meta_id = meta.get("gameId") if isinstance(meta, dict) else None
+        return str(game_name or meta_name or meta_id or game_id)
+
+    def _with_display_name(
+        self, spec: GameSpec, rules: dict, game_name: str | None, game_id: str
+    ) -> GameSpec:
+        """Return ``spec`` with ``display_name`` set per :meth:`_resolve_display_name`.
+
+        ``GameSpec`` is frozen; a non-matching resolved name rebuilds the spec
+        via :func:`dataclasses.replace` so the human-readable name flows into
+        the persisted entry and rebuilt specs (``spec_for`` / ``_spec_from_entry``).
+        """
+        display_name = self._resolve_display_name(rules, game_name, game_id)
+        if display_name != spec.display_name:
+            spec = replace(spec, display_name=display_name)
+        return spec
+
     def _spec_from_entry(self, entry: dict) -> GameSpec:
-        """Rebuild the spec from a stored entry (detect family + build)."""
-        family = detect_family(entry.get("rules", {}))
+        """Rebuild the spec from a stored entry (detect family + build).
+
+        与 create 路径共用 ``_with_display_name``：重建 spec 时以持久化的
+        ``display_name`` 为准——用户起的名字不能因为只存了 rules 而回退成
+        ``meta.gameId`` 的 slug。规则族无法识别时明确拒绝（防御性红线，
+        ``spec_for`` 对无族条目必须报错而不是静默生成一个不可玩的 spec）。
+        """
+        rules = entry.get("rules", {})
+        family = detect_family(rules)
         if family is None:
             raise CustomGameError(f"自定义游戏 {entry['game_id']} 无法识别规则族")
-        return family.build_spec(str(entry["game_id"]), entry.get("rules", {}))
+        game_id = str(entry["game_id"])
+        spec = family.build_spec(game_id, rules)
+        stored_name = entry.get("display_name")
+        if isinstance(stored_name, str) and stored_name:
+            spec = self._with_display_name(spec, rules, stored_name, game_id)
+        return spec
 
     def _entry(
         self,

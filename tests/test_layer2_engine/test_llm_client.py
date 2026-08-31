@@ -205,6 +205,25 @@ class TestLLMClientEndpointModelResolution:
         monkeypatch.delenv("LLM_MODEL", raising=False)
         assert LLMClient.available() is False  # 该端口必然不可达
 
+    def test_available_probe_sends_env_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """无参 ``available()`` 必须带上 LLM_API_KEY 环境变量里的密钥——
+        否则配置了云端鉴权端点（DeepSeek/GLM/OpenAI）的平台会话在
+        ``/v1/models`` 探测时 401 → 静默退化为 random 求解器，AI 不跟着
+        平台配置走 API（用户反馈的「AI 还是不发言」根因）。"""
+        monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:59994")
+        monkeypatch.setenv("LLM_API_KEY", "sk-test-123")
+        captured: dict[str, str] = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["auth"] = req.headers.get("Authorization", "")
+            raise urllib.error.URLError("probe-stub")
+
+        monkeypatch.setattr("layer2_engine.core.llm.urllib.request.urlopen", fake_urlopen)
+        assert LLMClient.available() is False  # stub 抛 URLError → False
+        assert captured["url"].rstrip("/").endswith("/v1/models")
+        assert captured["auth"] == "Bearer sk-test-123"
+
 
 def _http_error(url: str, code: int, body: str) -> urllib.error.HTTPError:
     """Construct a real ``HTTPError`` carrying an API error body."""

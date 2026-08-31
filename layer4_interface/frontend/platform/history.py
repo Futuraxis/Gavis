@@ -57,6 +57,8 @@ class MatchHistory:
             "ai_strength": match.get("ai_strength"),
             # 教学对局标记（旧记录缺省 None = 非教学局）。
             "teaching": match.get("teaching"),
+            # 自适应难度标记（旧记录缺省 None；前端按可选字段展示）。
+            "adaptive": match.get("adaptive"),
         }
         path = self.data_dir / f"{match_id}.json"
         self._atomic_write(path, match)

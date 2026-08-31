@@ -101,10 +101,10 @@ class TestGames:
         data = _get(base_url + "/api/games")
         assert data["ok"] is True
         by_id = {g["game_id"]: g for g in data["games"]}
-        # 16 款 = 月亮棋/随机五子棋/德州 + 麻将六变种（v5.2 variants）+ UNO
-        # 六变体 + 谁是卧底（undercover, social 族）—— 与
-        # test_platform_session.py::TestGameSpecRegistry 的 16 游戏契约一致；
-        # 新增/移除必须同步两处断言与用户文档。
+        # 17 款 = 月亮棋/随机五子棋/德州 + 麻将六变种（v5.2 variants）+ UNO
+        # 六变体 + 谁是卧底（undercover, social 族）+ 狼人杀（werewolf,
+        # social 族）—— 与 test_platform_session.py::TestGameSpecRegistry 的
+        # 17 游戏契约一致；新增/移除必须同步两处断言与用户文档。
         assert set(by_id) == {
             "moon_chess",
             "stochastic_gomoku",
@@ -123,6 +123,7 @@ class TestGames:
             "uno_draw_until",
             "uno_strict_wild4",
             "undercover",
+            "werewolf",
         }
         assert by_id["moon_chess"]["board_size"] == 3
         assert by_id["stochastic_gomoku"]["board_size"] == 9
@@ -130,6 +131,8 @@ class TestGames:
         assert by_id["uno"]["kind"] == "uno"
         assert by_id["undercover"]["family"] == "social"
         assert by_id["undercover"]["player_counts"] == [8, 4, 5, 6, 7, 9, 10, 11, 12]
+        assert by_id["werewolf"]["family"] == "social"
+        assert by_id["werewolf"]["player_counts"] == [9]
         assert "cfr" not in by_id["texas_holdem"]["solver_options"]
         assert by_id["moon_chess"]["solver_options"] == ["mcts", "cfr", "hybrid", "random"]
 

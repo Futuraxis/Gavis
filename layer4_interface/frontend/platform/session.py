@@ -17,7 +17,7 @@ from typing import Callable
 from layer2_engine.core.engine import GameEngine
 from layer2_engine.core.state_graph import ActionInstance
 
-from ...agent import PERSONAS, Coach, DialogueEngine, Skills, TeachContext
+from ...agent import PERSONAS, Coach, DialogueEngine, Opponent, Skills, TeachContext
 from ...difficulty.adaptive import AdaptiveController, pacing_scale
 from ...online_learning.recorder import LearningHooks, TrajectoryRecorder
 from ...profile.store import ProfileStore
@@ -49,6 +49,8 @@ _BUILTIN_FAMILY: dict[str, str] = {
     "uno_strict_wild4": "uno",
     # 谁是卧底（social 族）：前端 FAMILY_BOARDS["social"] → SocialChatTable。
     "undercover": "social",
+    # 狼人杀（social 族，9 人固定）：前端同样走 SocialChatTable。
+    "werewolf": "social",
 }
 
 
@@ -86,6 +88,10 @@ class GameSession:
     #: 教学对局开关：教练 Agent 能看到玩家自己的牌并推理（见 agent/coach.py
     #: 的三条设计红线：教练看玩家投影、双脑分离、raw_solver 防录制污染）。
     teaching: bool = field(default=False)
+    #: 自适应难度已生效：AI 强度由玩家近 ``window`` 局胜率自动升降。
+    #: ``difficulty`` 仍记录显式档位（展示/历史用），本标记独立承载
+    #: "这局强度是自适应算出来的"这一事实，供快照/活跃列表/对局记录回显。
+    adaptive_active: bool = field(default=False)
     #: 教练通道用的**原始**（未被 RecordingHandle 包装的）求解器句柄。
     #: 在线学习开启时 ``solver`` 会被包成录制句柄——AI 自己的落子照常
     #: 采集；教练替玩家算的参考动作必须走本句柄，否则会以 "ai" actor
@@ -94,6 +100,9 @@ class GameSession:
     #: 教学讲评载荷：玩家行动前算好的教学上下文（含参考动作），由
     #: ``PlayManager._chat_after_move`` 消费成 ``teach_move`` 消息。
     pending_teach: TeachContext | None = field(default=None, init=False)
+    #: 对手模式单步守门：记录本步已发 ``opp_react`` 的 log 长度，防
+    #: ``run_ai`` 多动作回调重复队列（见 ``_record_ai_action``）。
+    _opp_react_step: int = field(default=0, init=False)
     #: 本局实际使用的随机种子（PlayManager 按 base+开局序号派生——首局等于
     #: base seed 保持既有测试确定性，第二局起牌墙不同，「再来一局」不再同牌）。
     seed: int = 42
@@ -125,6 +134,30 @@ class GameSession:
     def current_player(self) -> str | None:
         return self.engine.get_current_player(self.state)
 
+    @property
+    def is_opponent_mode(self) -> bool:
+        """二人非教练 = 对手模式（陪伴以「座内对手」身份说话）.
+
+        判据：非教学、Agent 在场、座位数为 2（二人局的对手机理成立）。
+        多人非教练（麻将 4 人等）在 P1 仍走啦啦队 fallback，P2 才换成
+        桌友群聊（``agents: dict`` + 发言调度）。教学对局（``teaching``）
+        走教练通道，零改动。
+        """
+        return not self.teaching and self.agent is not None and len(self.spec.seat_options) == 2
+
+    @property
+    def speaker(self) -> str:
+        """pending_chat 条目的说话人标签（前端按此渲染头像/名字）.
+
+        P1 单 Agent：对手模式/啦啦队都取 persona 显示名（如「轻松吐槽」）；
+        教学模式取「教练」前缀 + persona 显示名。P2 多座位会扩展为
+        按座位的 pid + 显示名（如「下家 p2」）。
+        """
+        if self.agent is None:
+            return ""
+        name = self.agent.persona.display_name
+        return f"教练 · {name}" if self.teaching else name
+
     # ── Play ─────────────────────────────────────────────────────
 
     def step(self, payload: dict) -> None:
@@ -152,6 +185,37 @@ class GameSession:
 
     def _record_ai_action(self, action: ActionInstance) -> None:
         self.log.append(self._log_entry("ai", action))
+        # 对手模式：AI 行动后队列一句对手反应（opp_react）。``run_ai`` 可能在
+        # 一个回合内多次回调（多动作轮），用 ``_opp_react_step`` 守门确保单
+        # 步只发一句（防多动作刷屏）；``PlayManager._chat_after_move`` 也会
+        # 在步末兜底（若本步 AI 行动未被此处捕捉，例如 opening 的 AI 先手）。
+        if self.is_opponent_mode and self._opp_react_step != len(self.log):
+            self._opp_react_step = len(self.log)
+            self._queue_opp("opp_react")
+
+    def _queue_opp(self, scenario: str) -> None:
+        """对手模式队列一条消息：用 AI 投影构建 :class:`OpponentContext` 成文.
+
+        fail-soft：OpponentContext 构建或 Agent 成文任一异常都静默跳过
+        （对手说话是表达层增值项，绝不阻断对局主流程）。
+        """
+        if self.agent is None:
+            return
+        try:
+            ctx = Opponent.build(self.state, self.ai_pid, self.player_pid, self.engine, self.log)
+            msg = self.agent.reply(ctx, scenario, game_id=self.game_id)
+        except Exception:  # noqa: BLE001 — 对手通道 fail-soft
+            return
+        self.pending_chat.append(
+            {
+                "scenario": scenario,
+                "text": msg.text,
+                "mood": msg.mood,
+                "step": len(self.log),
+                "reasoning": msg.reasoning,
+                "speaker": self.speaker,
+            }
+        )
 
     def _log_entry(self, actor: str, action: ActionInstance) -> dict:
         return {
@@ -174,6 +238,10 @@ class GameSession:
         snap = self.spec.build_snapshot(self)
         snap["family"] = self.family
         snap["teaching"] = self.teaching
+        # 自适应状态回显：adaptive 标记本局强度是否由胜率自适应算出，
+        # ai_strength 是本局实际搜索预算（自适应时随近 10 局胜率浮动）。
+        snap["adaptive"] = self.adaptive_active
+        snap["ai_strength"] = self.ai_strength
         snap["chat"] = self.drain_chat()
         snap["evaluation"] = self._evaluate_position()
         return snap
@@ -246,6 +314,7 @@ class PlayManager:
         pacing: str = "standard",
         adaptive_enabled: bool = False,
         teaching: bool = False,
+        variant: str | None = None,
     ) -> GameSession:
         """Create a new session; resolves start chance nodes and lets the AI open.
 
@@ -302,10 +371,10 @@ class PlayManager:
         seed = self._seed + self._start_count
         self._start_count += 1
         if spec.player_counts != (2,):
-            engine = spec.create_engine(seed, player_count=player_count)
+            engine = spec.create_engine(seed, player_count=player_count, variant=variant, difficulty=difficulty)
         else:
-            engine = spec.create_engine(seed)
-        solver = spec.create_solver(self._provider, engine, seed, budget)
+            engine = spec.create_engine(seed, variant=variant, difficulty=difficulty)
+        solver = spec.create_solver(self._provider, engine, seed, budget, difficulty=difficulty, pacing=pacing)
         session = GameSession(
             game_id=session_id,
             spec=spec,
@@ -320,6 +389,9 @@ class PlayManager:
             custom=is_custom,
             family=family,
             teaching=teaching,
+            # 与 _pick_budget 的自适应判定保持一致：显式 "adaptive" 档位或
+            # payload 的自适应开关二选一都算自适应局。
+            adaptive_active=difficulty == "adaptive" or adaptive_enabled,
             seed=seed,
         )
         if self._learning is not None and self._learning.enabled(spec.game_id):
@@ -404,6 +476,8 @@ class PlayManager:
                 "persona": s.persona,
                 "hint_level": s.hint_level,
                 "teaching": s.teaching,
+                "adaptive": s.adaptive_active,
+                "ai_strength": s.ai_strength,
                 "step": len(s.log),
                 "started_at": s.started_at,
             }
@@ -417,16 +491,22 @@ class PlayManager:
 
         教学对局：上下文换成 :class:`TeachContext`（玩家自己的投影），
         教练在自由对话里也能围绕玩家的牌回答（"我听什么？"）。
+        对手模式（二人非教练）：上下文换成 :class:`OpponentContext`（AI
+        自己的投影），对手以「座内对手」身份应答（adversarial scan 放行
+        AI 自己的牌、拦玩家的隐藏牌）。
         """
         session = self.get(game_id)
         if session.agent is None:
             return None
-        if session.teaching:
-            ctx = Coach.build(session.state, session.player_pid, session.engine, None)
-        else:
-            ctx = Skills.build(session.state, session.player_pid, session.engine)
+        ctx = self._speak_ctx(session)
         msg = session.agent.reply(ctx, scenario, game_id=session.game_id)
-        return {"scenario": scenario, "text": msg.text, "mood": msg.mood, "reasoning": msg.reasoning}
+        return {
+            "scenario": scenario,
+            "text": msg.text,
+            "mood": msg.mood,
+            "reasoning": msg.reasoning,
+            "speaker": session.speaker,
+        }
 
     def hint(self, game_id: str, level: str) -> dict:
         """Mechanical hint for an active session (direction/specific/demo).
@@ -462,10 +542,14 @@ class PlayManager:
     # ── Internals ────────────────────────────────────────────────
 
     def _say(self, session: GameSession, scenario: str) -> None:
-        """Queue one agent message on the session (no-op when agent off)."""
+        """Queue one agent message on the session (no-op when agent off).
+
+        上下文按陪伴身份分派（``_speak_ctx``）：教学→玩家投影、对手→AI
+        投影、默认啦啦队→玩家投影。``pending_chat`` 条目带 ``speaker``。
+        """
         if session.agent is None:
             return
-        ctx = Skills.build(session.state, session.player_pid, session.engine)
+        ctx = self._speak_ctx(session)
         msg = session.agent.reply(ctx, scenario, game_id=session.game_id)
         session.pending_chat.append(
             {
@@ -474,15 +558,37 @@ class PlayManager:
                 "mood": msg.mood,
                 "step": len(session.log),
                 "reasoning": msg.reasoning,
+                "speaker": session.speaker,
             }
         )
 
-    def _chat_after_move(self, session: GameSession) -> None:
-        """Nine-scenario detection after a completed move (D 节接线).
+    def _speak_ctx(self, session: GameSession) -> object:
+        """按陪伴身份构建说话上下文（``say`` / ``_say`` / ``_chat_after_move`` 共用）.
 
-        教学对局：玩家的 blunder/good_move 泛化点评升级为 ``teach_move``
-        讲评（对照教练在玩家座位算的参考动作），讲评后若又轮到玩家则
-        追加 ``teach_turn`` 读牌导读。
+        - 教学对局（``teaching``）：玩家自己的投影（教练看玩家的牌）。
+        - 对手模式（二人非教练）：AI 自己的投影（对手看自己的牌 + 玩家
+          公开动作序列），驱动 adversarial scan。
+        - 默认啦啦队（多人非教练，P2 前的 fallback）：玩家投影。
+        """
+        if session.teaching:
+            return Coach.build(session.state, session.player_pid, session.engine, None)
+        if session.is_opponent_mode:
+            return Opponent.build(session.state, session.ai_pid, session.player_pid, session.engine, session.log)
+        return Skills.build(session.state, session.player_pid, session.engine)
+
+    def _chat_after_move(self, session: GameSession) -> None:
+        """场景检测与消息队列（D 节接线 + 对手模式双触发）.
+
+        - 教学对局：玩家的 blunder/good_move 泛化点评升级为 ``teach_move``
+          讲评（对照教练在玩家座位算的参考动作），讲评后若又轮到玩家则
+          追加 ``teach_turn`` 读牌导读。
+        - 对手模式（二人非教练）：玩家行动后队列 ``opp_read``（读人，不
+          依赖评分命中）；AI 行动后的 ``opp_react`` 已在
+          ``_record_ai_action`` 里队列（步末此处不重复）。终局走
+          ``ai_win`` / ``ai_lose`` / ``game_over``（对手视角，showdown 后
+          ``revealed=True`` 全放行可复盘）。
+        - 默认啦啦队（多人非教练，P2 前 fallback）：保留既有
+          blunder/good_move 评分触发。
         """
         if session.agent is None:
             return
@@ -503,6 +609,14 @@ class PlayManager:
             if session.current_player == session.player_pid:
                 self._say_teach_turn(session)
             return
+        # 对手模式：玩家行动后读人（opp_read），不依赖评分命中。AI 行动后
+        # 的 opp_react 已在 ``_record_ai_action`` 队列（此处只补 opp_read，
+        # 保持「双触发」的玩家侧半边）。去重窗口（5 分钟）+ 人设分寸节制频率。
+        if session.is_opponent_mode:
+            ctx = Opponent.build(session.state, session.ai_pid, session.player_pid, session.engine, session.log)
+            self._say_ctx(session, ctx, "opp_read")
+            return
+        # 默认啦啦队（多人非教练 fallback）：保留评分触发的 blunder/good_move。
         last = session.log[-1] if session.log else None
         if last is None or last.get("actor") != "human":
             return
@@ -524,7 +638,11 @@ class PlayManager:
         self._say_ctx(session, ctx, "teach_turn")
 
     def _say_ctx(self, session: GameSession, ctx: object, scenario: str) -> None:
-        """Queue a message from a prebuilt context (avoid a second build)."""
+        """Queue a message from a prebuilt context (avoid a second build).
+
+        ``pending_chat`` 条目带 ``speaker``（与 ``_say`` / ``_queue_opp``
+        对齐，前端按 speaker 渲染头像/名字）。
+        """
         msg = session.agent.reply(ctx, scenario, game_id=session.game_id)  # type: ignore[arg-type] — ctx is SkillContext
         session.pending_chat.append(
             {
@@ -533,6 +651,7 @@ class PlayManager:
                 "mood": msg.mood,
                 "step": len(session.log),
                 "reasoning": msg.reasoning,
+                "speaker": session.speaker,
             }
         )
 
@@ -547,6 +666,19 @@ class PlayManager:
         else:
             base = budgets[difficulty]
         return max(1, int(base * pacing_scale(pacing)))
+
+    def default_persona(self) -> str:
+        """Resolve the global default persona key (profile → gentle fallback).
+
+        封装 ``start()`` 里曾内联的解析逻辑，供平台聊天层（``chat``）在
+        没有进行中对局时取全局人设——让平台助手与对局陪玩共用同一份
+        persona（方向 C 人设统一）。
+        """
+        if self._profiles is not None:
+            key = str(self._profiles.load().get("default_persona", "") or "")
+            if key and key in PERSONAS:
+                return key
+        return "gentle"
 
     def _recent_matches(self, spec: GameSpec) -> list[dict]:
         """Win-rate window derived from the profile tally (oldest-first).
@@ -600,6 +732,7 @@ class PlayManager:
             "persona": session.persona,
             "hinted": session.hinted,
             "ai_strength": session.ai_strength,
+            "adaptive": session.adaptive_active,
             "family": session.family,
             "custom": session.custom,
             "teaching": session.teaching,

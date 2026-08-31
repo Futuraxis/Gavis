@@ -167,10 +167,10 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
     }
     community_name = next((name for name in ground if "community" in name), None)
 
-    def _create_engine(seed: int, player_count: int = 2) -> GameEngine:
+    def _create_engine(seed: int, player_count: int = 2, **_: object) -> GameEngine:
         return engine_from_rules_dict(rules, seed, player_count=player_count)
 
-    def _create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int) -> SolverHandle:
+    def _create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int, **_: object) -> SolverHandle:
         return provider.create_solver(
             game_id,
             "hybrid",

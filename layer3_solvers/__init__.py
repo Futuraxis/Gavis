@@ -10,6 +10,7 @@ from .hybrid.solver import HybridConfig, HybridSolver
 from .llm.ollama_solver import OllamaConfig, OllamaSolver
 from .mahjong.heuristic import MahjongHeuristicAI
 from .mcts.solver import MCTS, MCTSConfig
+from .uno.heuristic import UnoRolloutPolicy
 from .werewolf import BayesConfig, BayesSolver
 
 try:
@@ -42,6 +43,7 @@ __all__ = [
     "CFR",
     "CFRConfig",
     "MahjongHeuristicAI",
+    "UnoRolloutPolicy",
     "HybridSolver",
     "HybridConfig",
     "OllamaSolver",

@@ -4,10 +4,12 @@ Covers the intent contract shared with the frontend:
 
 - deterministic fallback routing (no LLM): play-by-name, play-clarify with
   chips, resume, grid text moves, history/review/create/settings/platform/
-  benchmark/learning/help, default chat;
+  benchmark/learning/help, default chat, plus specific-feature questions
+  (“怎么改难度/教学对局是什么/视觉识别怎么用”) → 主题文档 help；
 - LLM + function-calling path: ``play_game`` / ``make_move`` tool calls
   mapped and *validated against the engine contract* (invalid actions →
-  clarify, never an exception);
+  clarify, never an exception), and ``get_platform_help`` info-tool loop
+  (具体功能提问先取权威主题文档再作答);
 - ``build_tools`` shape (make_move present only with a live session);
 - empty input → help text.
 
@@ -27,6 +29,13 @@ from layer4_interface.frontend.platform.chat import (
 )
 from layer4_interface.frontend.platform.game_knowledge import game_knowledge_text
 from layer4_interface.frontend.platform.history import MatchHistory
+from layer4_interface.frontend.platform.platform_knowledge import (
+    PLATFORM_TOPIC_KEYS,
+    PLATFORM_TOPICS,
+    match_platform_topic,
+    platform_help_index,
+    platform_help_text,
+)
 from layer4_interface.frontend.platform.session import PlayManager
 from train_cli import default_provider
 
@@ -144,6 +153,37 @@ class TestFallbackIntent:
         assert fallback_intent("你能做什么", _games(manager), None).intent == "help"
         assert fallback_intent("你好呀", _games(manager), None).intent == "chat"
 
+    def test_help_topic_routes_specific_feature_questions(self, manager: PlayManager) -> None:
+        """具体功能怎么用（不命中动作面板关键词）→ 主题文档确定性回答。
+
+        旧逻辑这些提问落到泛泛默认 chat；现在按最长关键词命中路由到
+        ``platform_knowledge`` 的权威主题文档（与 ``get_platform_help``
+        同一事实来源）。
+        """
+        r = fallback_intent("怎么改难度", _games(manager), None)
+        assert r.intent == "help"
+        assert r.params["topic"] == "settings"
+        assert "难度" in r.text
+        r2 = fallback_intent("教学对局是什么", _games(manager), None)
+        assert r2.intent == "help"
+        assert r2.params["topic"] == "teaching"
+        assert "教练" in r2.text
+        r3 = fallback_intent("视觉识别怎么用", _games(manager), None)
+        assert r3.intent == "help"
+        assert r3.params["topic"] == "vision"
+        assert "视觉识别" in r3.text
+        r4 = fallback_intent("LLM 模型在哪配置", _games(manager), None)
+        assert r4.intent == "help"
+        assert r4.params["topic"] == "llm"
+        assert "密钥" in r4.text
+
+    def test_help_generic_keeps_overview_text(self, manager: PlayManager) -> None:
+        """泛泛“你能做什么”不命中任何主题关键词 → 维持原总览帮助文案。"""
+        r = fallback_intent("你能做什么", _games(manager), None)
+        assert r.intent == "help"
+        assert "topic" not in r.params
+        assert "玩月亮棋" in r.text
+
     def test_what_is_game_answers_from_registry(self, manager: PlayManager) -> None:
         """“月亮棋是什么？” —— 无 LLM 也有确定性回答（零幻觉路径）。"""
         result = fallback_intent("月亮棋是什么", _games(manager), None)
@@ -247,6 +287,7 @@ class TestInfoTools:
         names = [t["function"]["name"] for t in build_tools(games=_games(manager), session=None, active=[])]
         assert "describe_game" in names
         assert "list_games" in names
+        assert "get_platform_help" in names  # 具体功能帮助工具常驻暴露
 
     def test_describe_game_tool_loop(self, manager: PlayManager) -> None:
         fake = _ScriptedLLM(
@@ -353,6 +394,45 @@ class TestInfoTools:
         assert result.params["game_id"] == "texas_holdem"
         assert len(fake.seen) == 1  # 动作立即返回，没有第二轮取数
 
+    def test_platform_help_tool_loop(self, manager: PlayManager) -> None:
+        """具体功能提问（LLM 路径）：模型取主题文档再作答，不再泛泛总览。
+
+        旧 ``help`` 工具只回一段总览，面对“在线学习怎么用”这类具体提问
+        只能泛泛而谈或编造；``get_platform_help`` 与 ``describe_game``
+        同一条信息工具路径：本地执行 + ``role:"tool"`` 回传权威文档。
+        """
+        fake = _ScriptedLLM(
+            [
+                ChatReply(text="", tool_calls=[ToolCall("get_platform_help", {"topic": "learning"}, id="call_help")]),
+                ChatReply(text="在线学习会收集人机对局里人类的决策，门禁通过后发布给 AI。"),
+            ]
+        )
+        result = chat_turn(manager, "在线学习怎么用？", llm=fake)
+        assert result.intent == "chat"
+        assert "在线学习" in result.text
+        second = fake.seen[1]
+        tool_msgs = [m for m in second if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0]["tool_call_id"] == "call_help"
+        assert "门禁" in tool_msgs[0]["content"]  # 主题文档的权威要点
+        assert "发布" in tool_msgs[0]["content"]
+        assistant = next(m for m in second if m.get("role") == "assistant" and m.get("tool_calls"))
+        assert assistant["tool_calls"][0]["function"]["name"] == "get_platform_help"
+
+    def test_platform_help_unknown_topic_returns_index(self, manager: PlayManager) -> None:
+        """topic 缺省/未知 → 主题总览（fail-soft），模型可据此继续提问。"""
+        fake = _ScriptedLLM(
+            [
+                ChatReply(text="", tool_calls=[ToolCall("get_platform_help", {"topic": "xx"}, id="call_1")]),
+                ChatReply(text="平台功能挺多，我再具体问一下某项怎么用。"),
+            ]
+        )
+        result = chat_turn(manager, "平台都有什么功能？", llm=fake)
+        assert result.intent == "chat"
+        tool_msgs = [m for m in fake.seen[1] if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert "在线学习" in tool_msgs[0]["content"]  # 总览索引含各主题
+
 
 # ── Shared knowledge assembly (game_knowledge) ─────────────────────
 
@@ -370,6 +450,41 @@ class TestGameKnowledge:
         """未知 / custom 游戏返回空串 —— 调用方各自 fail-soft。"""
         assert game_knowledge_text("no_such_game") == ""
         assert game_knowledge_text("") == ""
+
+
+# ── Shared platform help (platform_knowledge) ──────────────────────
+
+
+class TestPlatformKnowledge:
+    """具体功能帮助文档的单一事实来源（``get_platform_help`` / 兜底共用）。"""
+
+    def test_index_covers_all_topic_keys(self) -> None:
+        index = platform_help_index()
+        assert "在线学习" in index
+        assert "创建自定义游戏" in index
+        assert "教学对局 / 教练" in index
+        assert "视觉识别" in index
+        for key in PLATFORM_TOPIC_KEYS:
+            topic = next(t for t in PLATFORM_TOPICS if t.key == key)
+            assert topic.title in index or topic.title.split(" / ")[0] in index
+
+    def test_topic_text_returns_authoritative_doc(self) -> None:
+        text = platform_help_text("learning")
+        assert "门禁" in text
+        assert "发布" in text
+        assert "在线学习" in text
+        assert platform_help_text("no_such_topic") == ""
+        assert platform_help_text("") == ""
+
+    def test_match_platform_topic_longest_keyword_wins(self) -> None:
+        assert match_platform_topic("在线学习功能在哪") == "learning"
+        assert match_platform_topic("怎么改难度") == "settings"
+        assert match_platform_topic("教学对局是什么") == "teaching"
+        assert match_platform_topic("视觉识别怎么用") == "vision"
+        assert match_platform_topic("LLM 模型在哪配置") == "llm"
+        # 泛泛帮助提问不命中任何具体主题（保持原总览文案）
+        assert match_platform_topic("你能做什么") is None
+        assert match_platform_topic("你好呀") is None
 
 
 # ── In-match / post-match info tools (对局信息源修复) ───────────────
@@ -566,9 +681,10 @@ class TestChatTurnHistory:
         assert fake.seen[1]["content"] == "我想玩德州扑克"
         assert fake.seen[2]["content"] == "好，来一局德州扑克！"
         assert fake.seen[3]["content"] == "那月亮棋呢"
-        # system 由后端现构（含实时对局上下文），绝不采信 history/客户端
+        # system 由后端现构（含实时对局上下文），绝不采信 history/客户端；
+        # 开头是 persona 身份块（方向 C），平台助手行紧随其后。
         assert fake.seen[0]["role"] == "system"
-        assert fake.seen[0]["content"].startswith("你是 Gavis 平台的对话助手")
+        assert "你是 Gavis 平台的对话助手" in fake.seen[0]["content"]
 
     def test_history_sanitizes_junk(self, manager: PlayManager) -> None:
         fake = _RecordingLLM()
@@ -700,9 +816,7 @@ class _StrictStreamLLM:
         self._chunks = list(chunks)
         self.tools_seen: list[list[dict] | None] = []
 
-    def complete_stream(
-        self, messages: list[dict], *, tools: list[dict] | None = None, **_: object
-    ):
+    def complete_stream(self, messages: list[dict], *, tools: list[dict] | None = None, **_: object):
         self.tools_seen.append(tools)
         while self._chunks:
             chunk = self._chunks.pop(0)

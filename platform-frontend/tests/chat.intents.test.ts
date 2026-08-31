@@ -78,6 +78,30 @@ test('help：问到能力 → help 且带帮助长文案', () => {
   assert.ok(r.text.includes('玩月亮棋'))
 })
 
+test('help 主题：具体功能提问 → 主题文档（与后端 platform_knowledge 对齐）', () => {
+  const r = classifyLocal('怎么改难度', NO_SESSION)
+  assert.equal(r.intent, 'help')
+  assert.equal(r.params.topic, 'settings')
+  assert.ok(r.text.includes('难度'))
+  const r2 = classifyLocal('教学对局是什么', NO_SESSION)
+  assert.equal(r2.intent, 'help')
+  assert.equal(r2.params.topic, 'teaching')
+  assert.ok(r2.text.includes('教练'))
+  const r3 = classifyLocal('视觉识别怎么用', NO_SESSION)
+  assert.equal(r3.intent, 'help')
+  assert.equal(r3.params.topic, 'vision')
+  assert.ok(r3.text.includes('视觉识别'))
+  const r4 = classifyLocal('LLM 模型在哪配置', NO_SESSION)
+  assert.equal(r4.intent, 'help')
+  assert.equal(r4.params.topic, 'llm')
+  assert.ok(r4.text.includes('密钥'))
+  // 泛泛“你能做什么”不命中主题 → 维持原总览文案
+  const r5 = classifyLocal('你能做什么', NO_SESSION)
+  assert.equal(r5.intent, 'help')
+  assert.ok(!r5.params.topic)
+  assert.ok(r5.text.includes('玩月亮棋'))
+})
+
 test('默认：识别不出的闲聊 → chat（不抛异常）', () => {
   const r = classifyLocal('你好呀', NO_SESSION)
   assert.equal(r.intent, 'chat')

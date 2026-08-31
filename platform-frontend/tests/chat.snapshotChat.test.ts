@@ -44,3 +44,21 @@ test('snapshotChatToMessages 全部映射为 agent 消息', () => {
   assert.equal(messages[0].mood, 'neutral')
   assert.equal(messages[1].mood, 'thinking')
 })
+
+test('snapshotChatToMessages 透传 speaker 标签（对手/群聊多气泡区分）', () => {
+  const snap = fakeSnapshot([
+    { scenario: 'opp_react', text: '我这边落定了。', mood: 'neutral', step: 1, speaker: '轻松吐槽' },
+    { scenario: 'opp_read', text: '你在试探。', mood: 'thinking', step: 1, speaker: '轻松吐槽' },
+  ])
+  const messages = snapshotChatToMessages(snap as never)
+  assert.equal(messages.length, 2)
+  assert.equal(messages[0].speaker, '轻松吐槽')
+  assert.equal(messages[1].speaker, '轻松吐槽')
+})
+
+test('snapshotChatToMessages 无 speaker 时缺省（旧后端兼容）', () => {
+  const snap = fakeSnapshot([{ scenario: 'greet', text: '欢迎。', mood: 'neutral', step: 0 }])
+  const messages = snapshotChatToMessages(snap as never)
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].speaker, undefined)
+})

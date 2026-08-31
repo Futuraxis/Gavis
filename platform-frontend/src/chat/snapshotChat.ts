@@ -26,6 +26,7 @@ export function snapshotChatToMessages(snap: Snapshot): ChatMessage[] {
     text: entry.text,
     mood: (entry.mood as Mood) ?? 'neutral',
     ...(entry.reasoning ? { reasoning: entry.reasoning } : {}),
+    ...(entry.speaker ? { speaker: entry.speaker } : {}),
     ts: Date.now(),
   }))
 }

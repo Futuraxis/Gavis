@@ -41,12 +41,15 @@ BENCHMARK_BUDGETS: dict[str, int] = {
     "moon_chess": 2000,
     "stochastic_gomoku": 3000,
     "texas_holdem": 1500,
-    "mahjong_guangdong": 1000,
-    "mahjong_hongzhong": 1000,
-    "mahjong_blood": 1000,
-    "mahjong_sichuan": 1000,
-    "mahjong_changsha": 1000,
-    "mahjong_taiwan": 1000,
+    # 麻将 MCTS 基线预算：该游戏每决策 ~200ms/迭代，1000 迭代单决策需数分钟；
+    # 登记 30（与 train-cli 评估预算一致，数据驱动的“可执行基线”语义）。
+    "mahjong_guangdong": 30,
+    "mahjong_hongzhong": 30,
+    "mahjong_blood": 30,
+    "mahjong_sichuan": 30,
+    "mahjong_changsha": 30,
+    "mahjong_taiwan": 30,
+    "mahjong_international": 1000,
 }
 
 SOLVER_LABELS: dict[str, str] = {

@@ -13,9 +13,19 @@ Agent 发言之外：
 snapshot：投影观测用 *视图名*（``sb_hole_view`` / ``hand_view_p0`` /
 ``my_role``），永远不该出现这些原始隐藏键。
 
-教学对局（``teaching=True``）下 :func:`scan` 切换到 *教学模式泄露
-模式*：玩家自己的牌可以讨论（教练看的正是玩家自己的投影，见
-``coach.py``），只有 **AI/对手的** 隐藏信息仍然拦截。
+:func:`scan` 四态互斥（按陪伴身份选其一）：
+
+- **default**（全拦）：任何牌面表述都改写。啦啦队模式的既有行为。
+- **teaching**（``teaching=True``）：教学模式泄露模式——玩家自己的牌
+  可以讨论（教练看的正是玩家自己的投影，见 ``coach.py``），只有
+  **AI/对手的** 隐藏信息仍然拦截。
+- **adversarial**（``adversarial=True``）：对手模式泄露模式，与 teaching
+  **镜像**——AI 对手讲**自己的牌力**允许（模糊措辞如「我这手还行」「一对
+  K」，它本就看得到自己的牌），只有**玩家的** 隐藏信息仍然拦截；且**具体
+  花色点数**（黑桃4 / ♠A）一律拦——报牌等于明牌，破坏二人博弈。二人非
+  教练对手模式（见 ``opponent.py``）。
+- **revealed**（``revealed=True``）：终局 showdown 揭底后双方牌公开，全
+  放行——可做完整复盘式对手点评。优先级最高。
 """
 
 from __future__ import annotations
@@ -52,8 +62,10 @@ HIDDEN_FIELDS: frozenset[str] = frozenset(
 #: 泄露句被改写成的通用语（不透露任何牌面信息）。
 _GENERIC_REWRITE = "这把牌先不细说。"
 
-#: 单张牌记法：花色（符号或 S/H/D/C）+ 点数（10 或 2-9/J/Q/K/A）。
-_CARD_TOKEN = r"(?:[♠♥♦♣]|[SHDC])(?:10|[2-9JQKA])"
+#: 单张牌面：花色（中文「黑桃/红桃/方块/梅花」、符号 ♠♥♦♣、或英文字母
+#: S/H/D/C）+ 点数（10 或 2-9/J/Q/K/A）。覆盖 LLM 常见写法「黑桃4」「♠10」
+#: 「sA」；不含「一对K」「同花」这类无花色牌力描述（不误伤）。
+_CARD_TOKEN = r"(?:(?:黑桃|红桃|方块|梅花)|[♠♥♦♣]|[SHDC])(?:10|[2-9JQKA])"
 
 _TEXAS_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(rf"(?:{_CARD_TOKEN}\s*){{2,}}", re.IGNORECASE),
@@ -91,6 +103,13 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[。！？!?；;\n])")
 #: "你" 指玩家 —— 只有这些前缀指向的隐藏信息才是教练不可知的）。
 _OPPONENT_POSSESSIVE = r"(?:我的|AI\s*的?|对手的?|庄家的?|上家的?|下家的?|对家的?|他的|她的)"
 
+#: 「玩家持牌」的中文所有格前缀（对手扫描用：AI 说话人自称"我"，
+#: "你" 指玩家 —— 这些前缀指向的隐藏信息才是 AI 对手不可知的，即玩家
+#: 的底牌/手牌）。与 :data:`_OPPONENT_POSSESSIVE` 对称定义：教学模式
+#: 拦「对手/AI 的牌」、放行「玩家的牌」；对手模式镜像——拦「玩家的牌」、
+#: 放行「我的/AI 的牌」。
+_PLAYER_POSSESSIVE = r"(?:你的|玩家的?)"
+
 #: 教学对局的泄露模式：玩家自己的牌可以讲（玩家本来就看得到自己
 #: 的牌），只有 **AI/对手的** 隐藏信息仍然拦截。这是教学模式下对
 #: ``scan`` 红线的定向放宽 —— 不改动默认（非教学）行为。
@@ -119,6 +138,60 @@ _TEACHING_PATTERNS_BY_GAME: dict[str, tuple[re.Pattern[str], ...]] = {
     "mahjong_changsha": _TEACHING_MAHJONG_PATTERNS,
     "mahjong_taiwan": _TEACHING_MAHJONG_PATTERNS,
     "werewolf": _TEACHING_WEREWOLF_PATTERNS,
+}
+
+
+# ── 对手模式（adversarial）：与 teaching 镜像 ──────────────────────
+#
+# 二人非教练对局下，陪伴是「座内对手」：AI 说话人自称"我"（= AI 自己），
+# "你" 指玩家。AI 对手讲**自己的牌力**是其本分（它本就看得到自己的牌），
+# 因此放行「我的/AI 的 + 牌力措辞」（如「我手里一对K」「这手同花不算大」）；
+# 只有**玩家的**隐藏信息（"你的/玩家的 + 底牌/手牌"）仍然拦截——AI 本来
+# 就没有玩家底牌（visibility 规则不给），scan 是双保险防 LLM 幻觉编造玩家
+# 未公开牌面。但**具体花色点数**（黑桃4 / ♠A / s10）一律拦——banter 人设
+# 明写「不报牌」，报出自己底牌的具体牌面等于明牌，破坏二人博弈；终局
+# showdown 揭底后双方牌公开，由 ``revealed`` 全放行。无花色前缀的牌力描述
+# （「一对K」「同花」「高牌」）不命中牌面正则，照旧放行。
+
+#: 对手模式的德州泄露模式：拦「你的/玩家的 + 底牌」（玩家底牌本就不可见），
+#: 拦英语 ``hole cards``；放行「我的底牌」这类**模糊**措辞（对手可自称牌力
+#: 「我这手还行」「我手里一对K」——无花色点数，属人设「读牌/虚张」本分）；
+#: 但**具体牌面**（黑桃4 / ♠A / s10）一律拦——banter 人设明写「不报牌」，
+#: 报出具体花色点数等于明牌，破坏二人博弈（终局 showdown 揭底后由
+#: ``revealed`` 全放行，可做完整复盘）。无花色的牌力描述（「一对K」「同花」
+#: 「高牌」）不带花色前缀，不命中 ``_CARD_TOKEN``，照旧放行。
+_ADVERSARIAL_TEXAS_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(rf"{_PLAYER_POSSESSIVE}\s*底牌", re.IGNORECASE),
+    re.compile(r"hole\s*cards?", re.IGNORECASE),
+    re.compile(rf"{_CARD_TOKEN}", re.IGNORECASE),
+)
+#: 对手模式的麻将泄露模式：拦「你的/玩家的 + 手牌/听牌」，放行「我的/
+#: AI 的手牌/听牌」。
+_ADVERSARIAL_MAHJONG_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(rf"{_PLAYER_POSSESSIVE}\s*手牌", re.IGNORECASE),
+    re.compile(rf"{_PLAYER_POSSESSIVE}\s*听(?:牌|了)"),
+)
+#: 对手模式的狼人杀泄露模式：拦「你是<角色>」「你的/玩家的 + 身份」
+#: （AI 不知玩家身份，不得声称玩家角色）。AI 自报身份在对手模式下是
+#: 允许的（它就是那个角色，本就该能讲自己）——与 teaching 镜像（teaching
+#: 拦 AI 自报「我是<角色>」、放行玩家身份；adversarial 放行 AI 自报、
+#: 拦玩家身份「你是<角色>」）。
+_ADVERSARIAL_WEREWOLF_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"你是(?:狼人|预言家|女巫|猎人|守卫|村民|平民)"),
+    re.compile(rf"{_PLAYER_POSSESSIVE}\s*身份\s*(?:是|：)"),
+)
+
+#: 对手模式按游戏分派的泄露模式（只拦玩家的隐藏信息；与 teaching 镜像）。
+_ADVERSARIAL_PATTERNS_BY_GAME: dict[str, tuple[re.Pattern[str], ...]] = {
+    "texas_holdem": _ADVERSARIAL_TEXAS_PATTERNS,
+    "mahjong": _ADVERSARIAL_MAHJONG_PATTERNS,
+    "mahjong_guangdong": _ADVERSARIAL_MAHJONG_PATTERNS,
+    "mahjong_hongzhong": _ADVERSARIAL_MAHJONG_PATTERNS,
+    "mahjong_blood": _ADVERSARIAL_MAHJONG_PATTERNS,
+    "mahjong_sichuan": _ADVERSARIAL_MAHJONG_PATTERNS,
+    "mahjong_changsha": _ADVERSARIAL_MAHJONG_PATTERNS,
+    "mahjong_taiwan": _ADVERSARIAL_MAHJONG_PATTERNS,
+    "werewolf": _ADVERSARIAL_WEREWOLF_PATTERNS,
 }
 
 
@@ -160,21 +233,54 @@ def assert_no_hidden(ctx: "SkillContext") -> None:
         raise ValueError(f"observation 泄露隐藏字段: {', '.join(sorted(found))}")
 
 
-def scan(text: str, game_id: str, *, teaching: bool = False) -> str:
+def scan(
+    text: str,
+    game_id: str,
+    *,
+    teaching: bool = False,
+    adversarial: bool = False,
+    revealed: bool = False,
+) -> str:
     """对生成文本做后置泄露令牌扫描，命中句改写为通用语.
+
+    四态互斥（调用方按陪伴身份选其一；``revealed`` 优先级最高）：
+
+    - **default**（全拦）：任何牌面记法 / 持牌表述都改写。啦啦队模式的
+      既有行为，不动。
+    - **teaching**（定向放行玩家牌）：玩家自己的牌（"你的底牌/手牌"）
+      允许讨论（玩家本来就看得到），只有 **AI/对手的** 隐藏信息
+      （"我的/AI 的底牌"）仍然拦截。教练模式。
+    - **adversarial**（定向放行 AI 自己的牌力、拦玩家牌与具体牌面，与
+      teaching 镜像）：AI 对手讲**自己的牌力**（模糊措辞如「我这手还行」
+      「一对K」）允许（它本就看得到自己的牌），只有**玩家的** 隐藏信息
+      （"你的/玩家的 + 底牌/手牌"）仍然拦截；且**具体花色点数**（黑桃4 /
+      ♠A）一律拦——报牌等于明牌，破坏二人博弈。二人非教练对手模式。
+    - **revealed**（全放行）：终局 showdown 揭底后双方牌公开，文本原样
+      返回——可做完整复盘式对手点评。
 
     Args:
         text: 待清洗的生成文本。
         game_id: 游戏 id，决定启用的模式规则（至少覆盖德州底牌记法）。
-        teaching: 教学对局模式 —— 放宽为"教学模式泄露模式"：玩家自己
-            的牌（"你的底牌/手牌"）允许讨论（玩家本来就看得到），只有
-            **AI/对手的** 隐藏信息（"我的/AI 的底牌"）仍然拦截。
+        teaching: 教学对局模式（见上）。
+        adversarial: 对手模式（见上；与 ``teaching`` 互斥，同时为真时
+            ``adversarial`` 生效——它是二人非教练的更具体身份）。
+        revealed: 揭底模式（终局 showdown 后；优先级最高，为真即全放行）。
 
     Returns:
         改写后的文本；未命中或 ``game_id`` 无规则时原样返回。
     """
-    patterns = _TEACHING_PATTERNS_BY_GAME.get(game_id) if teaching else _PATTERNS_BY_GAME.get(game_id)
-    if not patterns or not text:
+    if not text:
+        return text
+    if revealed:
+        # 揭底后双方牌公开，全放行（不拦截任何牌面表述）。
+        return text
+    if adversarial:
+        patterns = _ADVERSARIAL_PATTERNS_BY_GAME.get(game_id)
+    elif teaching:
+        patterns = _TEACHING_PATTERNS_BY_GAME.get(game_id)
+    else:
+        patterns = _PATTERNS_BY_GAME.get(game_id)
+    if not patterns:
         return text
     sentences = [part for part in _SENTENCE_SPLIT.split(text) if part]
     rewritten: list[str] = []

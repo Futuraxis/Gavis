@@ -8,11 +8,6 @@ interface Props {
   plays: number
 }
 
-const SEATS: Record<string, string> = {
-  p_black: '黑棋', p_white: '白棋', p_sb: '小盲位', p_bb: '大盲位',
-  p0: '庄家', p1: '下家', p2: '对家', p3: '上家',
-}
-
 function resultOf(m: MatchMeta): string {
   if (m.winner === m.player_pid) return '胜'
   if (m.winner === m.ai_pid) return '负'
@@ -37,7 +32,7 @@ export default function StatsCard({ matches, wins, plays }: Props) {
             <span className={`chat-stats-result ${resultOf(m) === '胜' ? 'win' : resultOf(m) === '负' ? 'lose' : ''}`}>
               {resultOf(m)}
             </span>
-            <span className="chat-stats-seat">{SEATS[m.player_pid] ?? m.player_pid}</span>
+            <span className="chat-stats-seat">{m.seat_names?.[m.player_pid] ?? m.player_pid}</span>
             <span className="chat-stats-date">{m.started_at?.slice(0, 10) ?? ''}</span>
           </li>
         ))}
