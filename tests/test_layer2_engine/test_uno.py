@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pytest
 
-from _gen_uno import gen_rules
+from scripts._gen_uno import gen_rules
 from layer1_translator.schema_validator import SchemaValidator
 from layer2_engine.core.engine import GameEngine
 

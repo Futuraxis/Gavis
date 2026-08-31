@@ -4,7 +4,7 @@ from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 
-from _gen_werewolf import gen_rules
+from scripts._gen_werewolf import gen_rules
 from layer2_engine.core.engine import GameEngine
 
 RULES_PATH = Path(__file__).resolve().parent.parent.parent / "rules" / "werewolf.json"
