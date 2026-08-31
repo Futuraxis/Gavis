@@ -161,12 +161,17 @@ class GameSession:
 
     # ── Play ─────────────────────────────────────────────────────
 
-    def step(self, payload: dict) -> None:
+    def step(self, payload: dict, on_progress: Callable[[dict], None] | None = None) -> None:
         """Validate and apply the human's action, then run the AI reply.
 
         教学对局：应用动作**之前**（状态还是玩家决策时刻的快照）由教练
         从玩家座位算一手参考动作——求解器按状态当前行动者推理，此刻它
         读的正是玩家的手牌；``Coach.review`` 把玩家实际动作并入对照。
+
+        流式（``on_progress``）：每产生一份可见变化就推送一次玩家投影
+        快照——人类落子/发言应用后推一次，AI 每走一步再推一次，前端
+        据此逐条上屏（社交游戏逐条发言、棋盘逐手落子），无需等服务端
+        把整轮 AI 循环跑完才看到任何进展。
         """
         if self.over:
             raise PlayError("本局已结束")
@@ -180,9 +185,28 @@ class GameSession:
             reference = Coach.build(self.state, self.player_pid, self.engine, self.raw_solver)
         self.spec.apply_human(self, action)
         self.log.append(self._log_entry("human", action))
-        self.spec.run_ai(self, self._record_ai_action)
+        if on_progress is not None:
+            on_progress(self.snapshot())
+        self.run_ai(on_progress)
         if reference is not None:
             self.pending_teach = Coach.review(reference, action, self.spec.describe_action)
+
+    def run_ai(self, on_progress: Callable[[dict], None] | None = None) -> None:
+        """Drive the AI reply loop; with ``on_progress`` push one snapshot per AI action.
+
+        各族 ``spec.run_ai(session, on_ai_action)`` 都在每步 AI 动作落地
+        后回调一次——这里在不改动各族实现的前提下把「记录 + 推送进度」
+        合进同一个回调（记录先于推送，快照里能看到刚产生的发言/落子）。
+        """
+        if on_progress is None:
+            self.spec.run_ai(self, self._record_ai_action)
+            return
+
+        def _hooked(action: ActionInstance) -> None:
+            self._record_ai_action(action)
+            on_progress(self.snapshot())
+
+        self.spec.run_ai(self, _hooked)
 
     def _record_ai_action(self, action: ActionInstance) -> None:
         self.log.append(self._log_entry("ai", action))
@@ -316,6 +340,7 @@ class PlayManager:
         adaptive_enabled: bool = False,
         teaching: bool = False,
         variant: str | None = None,
+        on_progress: Callable[[dict], None] | None = None,
     ) -> GameSession:
         """Create a new session; resolves start chance nodes and lets the AI open.
 
@@ -325,6 +350,10 @@ class PlayManager:
         adaptively from the player's recent win rate, then scaled by the
         pacing preset.  A ``greet`` chat increment is queued on the
         session for the start response.
+
+        流式开局（``on_progress``）：AI 先行（非人类首座）时，每走一步
+        推一次玩家投影快照——社交游戏开局若干 AI 发言逐条可见，而不是
+        等整段 AI 开场跑完才一次性看到。
 
         教学对局（``teaching=True``）：未显式指定性格且档案无默认时，
         人格兜底从 ``gentle`` 换成 ``teacher``；开局队列 ``teach_greet``
@@ -406,7 +435,7 @@ class PlayManager:
             session.solver = self._learning.wrap_handle(session, session.solver)
         spec.resolve_start(session)
         if spec.ai_opens(session):
-            spec.run_ai(session, session._record_ai_action)
+            session.run_ai(on_progress)
         if teaching:
             self._say(session, "teach_greet")
             if not session.over and session.current_player == session.player_pid:
@@ -425,7 +454,7 @@ class PlayManager:
             raise PlayError(f"未知对局: {game_id}")
         return session
 
-    def move(self, game_id: str, payload: dict) -> dict:
+    def move(self, game_id: str, payload: dict, *, on_progress: Callable[[dict], None] | None = None) -> dict:
         """Apply a human move, run the AI reply, and return the snapshot.
 
         Companion hook (D 节接线): after every move the nine scenarios
@@ -434,11 +463,14 @@ class PlayManager:
         re-raised.  When the game ends, the session is recorded into
         history, the profile tally is updated, and the session is removed
         from the registry.
+
+        流式走子（``on_progress``）：透传给 ``GameSession.step`` —— 人类
+        行动落地后推一次快照、AI 每走一步再推一次，前端实时上屏。
         """
         session = self.get(game_id)
         with session.lock:
             try:
-                session.step(payload)
+                session.step(payload, on_progress=on_progress)
             except PlayError:
                 self._say(session, "illegal")
                 raise

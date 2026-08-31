@@ -602,6 +602,84 @@ class TestChatEndpoint:
         assert parsed["intent"] == "chat"
 
 
+class TestMatchStream:
+    """/api/match/start 与 /api/match/move 的 SSE 流式契约（?stream=1 / Accept 协商）。
+
+    流式是显式 opt-in：不带流式协商的请求仍走原 JSON 信封（向后兼容）；
+    带协商则发 ``progress{session}``（每步可见变化一帧，全游戏通用）→
+    ``snapshot{session}`` → ``done{}``——AI 回合（发言/落子/出牌）逐条
+    上屏，不再等服务端把整轮 AI 循环跑完才看到结果。
+    """
+
+    def test_start_stream_ai_opens_progress_then_snapshot(self, base_url: str):
+        """人类坐 p_white → AI（p_black）开局先行：开局期间就推进度帧。"""
+        content_type, body = _post_stream(
+            base_url + "/api/match/start?stream=1",
+            {"game_id": "moon_chess", "player_pid": "p_white", "difficulty": "easy"},
+            accept=True,
+        )
+        assert "text/event-stream" in content_type
+        frames = _parse_sse(body)
+        events = [e for e, _ in frames]
+        assert "progress" in events, "AI 先行开局必须推送逐帧进度"
+        assert events[-2] == "snapshot"
+        assert events[-1] == "done"
+        final = json.loads(dict(frames)["snapshot"])["session"]
+        assert final["game_id"]
+        assert final["turn"] == "p_white"  # AI 开完局轮到人类
+        # 进度帧的棋盘逐帧可见 AI 落子（不是等整段开局跑完才一次性看到）
+        progress = [json.loads(d)["session"] for e, d in frames if e == "progress"]
+        assert progress[0]["board"].count("") < 9 or final["over"]
+        # 进度快照与终帧同属一个对局
+        assert all(p["game_id"] == final["game_id"] for p in progress)
+
+    def test_move_stream_progress_then_snapshot(self, base_url: str):
+        """流式走子：人类落子后的首帧进度即包含自己的落子（动态上屏核心）。"""
+        start = _post(
+            base_url + "/api/match/start",
+            {"game_id": "moon_chess", "player_pid": "p_white", "difficulty": "easy"},
+        )
+        snap = start["session"]
+        session_id = snap["game_id"]
+        board = snap["board"]
+        free = [i for i, v in enumerate(board) if not v]
+        assert free, "开局后应有空位"
+        action = {"cell_index": free[0]}
+        content_type, body = _post_stream(
+            base_url + "/api/match/move?stream=1",
+            {"game_id": session_id, "action": action},
+            accept=True,
+        )
+        assert "text/event-stream" in content_type
+        frames = _parse_sse(body)
+        events = [e for e, _ in frames]
+        assert "progress" in events
+        assert events[-2] == "snapshot"
+        assert events[-1] == "done"
+        final = json.loads(dict(frames)["snapshot"])["session"]
+        assert final["game_id"] == session_id
+        first_progress = json.loads(next(d for e, d in frames if e == "progress"))["session"]
+        assert first_progress["board"][free[0]], "人类落子必须在首帧进度里可见"
+
+    def test_move_json_envelope_without_stream(self, base_url: str):
+        """无流式协商 → 走子仍返回原 JSON 信封（向后兼容红线）。"""
+        start = _post(
+            base_url + "/api/match/start",
+            {"game_id": "moon_chess", "player_pid": "p_white", "difficulty": "easy"},
+        )
+        session_id = start["session"]["game_id"]
+        board = start["session"]["board"]
+        free = [i for i, v in enumerate(board) if not v]
+        content_type, body = _post_stream(
+            base_url + "/api/match/move",
+            {"game_id": session_id, "action": {"cell_index": free[0]}},
+        )
+        assert "application/json" in content_type
+        parsed = json.loads(body.decode("utf-8"))
+        assert parsed["ok"] is True
+        assert parsed["session"]["game_id"] == session_id
+
+
 @pytest.fixture
 def llm_config_url(tmp_path: pytest.TempPathFactory) -> Generator[str, None, None]:
     """带平台 LLM 配置存储的服务器（独立实例，与 base_url fixture 互不影响）。"""

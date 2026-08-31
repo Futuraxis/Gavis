@@ -547,3 +547,51 @@ class TestNightTurnMasking:
     def test_hunter_shot_masks_other_actor(self, live_session):
         snap = self._force_phase(live_session, "vote_hunter", "p7")
         assert snap["turn"] is None, "猎人开枪目标时机也是私密信息"
+
+
+# ── 流式进度钩子（on_progress：每步可见变化推一帧玩家投影快照）───────────
+#
+# 前端痛点回归：谁是卧底看不到发言动态过程——旧实现一次请求把整轮 AI
+# 循环（开局 7 连发言 / 投票等）跑完才返回最终快照，玩家全程干等。
+# 修复后 ``PlayManager.start/move`` 支持 ``on_progress``：人类行动落地即
+# 推一帧（自己的发言/落子立刻可见），AI 每走一步再推一帧，前端逐条上屏。
+
+
+class TestStreamingProgress:
+    def test_start_ai_opens_streams_each_speech(self, manager):
+        """人类坐 p7 → p0..p6 七名 AI 先发言：开局期间每条发言一帧。"""
+        progresses: list[dict] = []
+        session = manager.start("undercover", "p7", "easy", player_count=8, on_progress=progresses.append)
+        assert progresses, "AI 先行开局未收到任何进度帧"
+        lengths = [len(p["discourse"]) for p in progresses]
+        assert lengths == sorted(lengths), f"发言必须逐条递增（动态过程）: {lengths}"
+        assert lengths[-1] >= 7, f"开局 7 名 AI 发言未逐条推送: {lengths}"
+        # 每帧都是玩家投影快照（隐藏信息红线继续成立：自己的身份不暴露）。
+        for p in progresses:
+            assert p["over"] is False
+            assert p["my_role"] is None
+        assert session.snapshot()["turn"] == "p7"
+
+    def test_move_streams_human_speech_immediately(self, manager):
+        """人类发言落地后首帧进度即含自己的发言（不等待任何 AI 推理）。"""
+        session = manager.start("undercover", "p7", "easy", player_count=8)
+        progresses: list[dict] = []
+        result = manager.move(
+            session.game_id,
+            {"type": "speak", "text": "我拿到的词圆圆的"},
+            on_progress=progresses.append,
+        )
+        assert progresses, "人类行动后未收到进度帧"
+        first = progresses[0]
+        mine = [e for e in first["discourse"] if e.get("speaker") == "p7"]
+        assert mine and mine[-1].get("text") == "我拿到的词圆圆的", "人类发言必须在首帧进度可见"
+        # 后续 AI（投票等）逐帧推进，帧数 ≥ 2（人类帧 + 至少一步 AI）。
+        assert len(progresses) >= 2, f"后续 AI 行动未逐帧推送: {len(progresses)}"
+        assert result["game_id"] == progresses[-1]["game_id"] == session.game_id
+
+    def test_move_without_progress_keeps_old_contract(self, manager):
+        """不带 on_progress → 与旧版一致：单一快照返回，不产生任何进度帧。"""
+        session = manager.start("undercover", "p7", "easy", player_count=8)
+        result = manager.move(session.game_id, {"type": "speak", "text": "你好"})
+        assert result["discourse"], "最终快照仍含发言记录"
+        assert result["turn"] == "p7"  # AI 回完后轮到人类

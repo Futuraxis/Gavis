@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { agentSay, apiGet, apiPost, matchHint } from '../api/client'
+import { agentSay, apiGet, apiPost, matchHint, matchMoveStream, matchStartStream } from '../api/client'
 import { getStoredMuted, setStoredMuted } from '../settings'
 import type {
   BoardSnapshot,
@@ -112,34 +112,60 @@ export default function BattlePage() {
     pushAgent(PERSONA_GREETINGS[p], 'happy')
   }
 
+  /** 开局完成的统一收尾（流式最终帧与 JSON 兜底共用）。 */
+  function applyStartResult(session: Snapshot, config: BattleConfig) {
+    setSession(session)
+    setPendingCell(null)
+    setInvalidCell(null)
+    if (invalidTimer.current != null) window.clearTimeout(invalidTimer.current)
+    setPersona(config.persona)
+    setChat([])
+    setSearchParams({ game: session.game_id })
+    greet(config.persona)
+    // 教练开场（teach_greet / teach_turn）与陪伴消息都在快照 chat 增量里。
+    drainChat(session)
+  }
+
   async function start(config: BattleConfig) {
     setBusy(true)
     setError(null)
+    const body = {
+      game_id: gameId,
+      player_pid: config.playerPid,
+      difficulty: config.difficulty,
+      theme: config.theme,
+      player_count: config.playerCount,
+      persona: config.persona,
+      hint_level: config.hintLevel,
+      pacing: config.pacing,
+      adaptive: config.adaptive,
+      teaching: config.teaching,
+    }
+    // 流式开局（全游戏通用）：AI 先行的对局（卧底/狼人杀开局若干 AI 发言、
+    // 麻将 AI 先手等）在开局期间逐帧推送快照，前端实时上屏，不再等服务端
+    // 把整段 AI 开场跑完才一次性看到。
+    let progressed = false
     try {
-      const data = await apiPost<{ session: Snapshot }>('/match/start', {
-        game_id: gameId,
-        player_pid: config.playerPid,
-        difficulty: config.difficulty,
-        theme: config.theme,
-        player_count: config.playerCount,
-        persona: config.persona,
-        hint_level: config.hintLevel,
-        pacing: config.pacing,
-        adaptive: config.adaptive,
-        teaching: config.teaching,
+      const data = await matchStartStream(body, {
+        onProgress: (snap) => {
+          progressed = true
+          setSession(snap)
+          drainChat(snap)
+        },
       })
-      setSession(data.session)
-      setPendingCell(null)
-      setInvalidCell(null)
-      if (invalidTimer.current != null) window.clearTimeout(invalidTimer.current)
-      setPersona(config.persona)
-      setChat([])
-      setSearchParams({ game: data.session.game_id })
-      greet(config.persona)
-      // 教练开场（teach_greet / teach_turn）与陪伴消息都在快照 chat 增量里。
-      drainChat(data.session)
+      applyStartResult(data.session, config)
     } catch (err) {
-      setError((err as Error).message)
+      if (!progressed) {
+        // 流在服务端执行前失败（旧后端不支持 SSE 等）→ 回退原 JSON 一次性请求。
+        try {
+          const data = await apiPost<{ session: Snapshot }>('/match/start', body)
+          applyStartResult(data.session, config)
+        } catch (err2) {
+          setError((err2 as Error).message)
+        }
+      } else {
+        setError((err as Error).message)
+      }
     } finally {
       setBusy(false)
     }
@@ -152,17 +178,20 @@ export default function BattlePage() {
     if (invalidTimer.current != null) window.clearTimeout(invalidTimer.current)
     setInvalidCell(null)
     // 棋类即时反馈: 人落子先本地乐观摆放自己的棋子, 服务端权威快照返回后再覆盖。
-    // 服务端 /match/move 在一趟请求里同时执行人 + AI 两步, 若不乐观渲染,
-    // 人点击后要等 AI 思考完才一次性看到两个子 —— 这正是本修复要消除的体验。
+    // 服务端 /match/move 现在走流式: 人类行动落地即推一帧（落子/发言立刻上屏），
+    // AI 每走一步再推一帧 —— 社交逐条发言、棋盘逐手落子，不再等服务端把整轮
+    // AI 循环跑完才一次性看到全部结果。
     const cell = gridCellOf(action)
     if (cell != null && 'board' in session) setPendingCell(cell)
     try {
-      const data = await apiPost<{ session: Snapshot }>('/match/move', {
-        game_id: session.game_id,
-        action: action,
+      const data = await matchMoveStream(session.game_id, action, {
+        onProgress: (snap) => {
+          setSession(snap)
+          drainChat(snap) // 教练讲评（teach_move）与导读（teach_turn）增量
+        },
       })
       setSession(data.session)
-      drainChat(data.session) // 教练讲评（teach_move）与导读（teach_turn）
+      drainChat(data.session)
       setPendingCell(null)
       setStepKey((k) => k + 1)
     } catch (err) {
@@ -174,6 +203,14 @@ export default function BattlePage() {
         if (invalidTimer.current != null) window.clearTimeout(invalidTimer.current)
         invalidTimer.current = window.setTimeout(() => setInvalidCell(null), 1400)
       }
+      // 流中断兜底：重拉服务端权威快照，避免本地停留在旧的进度帧上
+      // （服务端该步可能已推进完，只是连接断在了最后一帧之前）。
+      apiPost<{ session: Snapshot }>('/match/state', { game_id: session.game_id })
+        .then((d) => {
+          setSession(d.session)
+          drainChat(d.session)
+        })
+        .catch(() => {})
     } finally {
       setBusy(false)
     }

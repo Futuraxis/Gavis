@@ -155,6 +155,105 @@ export function chatTurnStream(
   })
 }
 
+// ── 对局流式（SSE，全游戏通用）───────────────────────────────────
+// 同一 /match/start 与 /match/move 路由，带 Accept: text/event-stream
+//（+ ?stream=1），后端按事件契约发流：
+//   progress{session} / snapshot{session} / error{error} / done{}
+// progress = 每份可见变化后的玩家投影快照——人类行动落地一帧（发言/落子
+// 即刻上屏），AI 每走一步再一帧（社交逐条发言、棋盘逐手落子），前端逐帧
+// 更新棋盘，不再等服务端把整轮 AI 循环跑完才看到结果。
+// 最终以 snapshot 事件 resolve；error 或流意外中断以 ApiError reject。
+export interface MatchStreamHandlers {
+  onProgress?: (session: import('../types').Snapshot) => void
+}
+
+function matchStream<T>(path: string, body: unknown, handlers: MatchStreamHandlers): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    void (async () => {
+      try {
+        let resp: Response
+        try {
+          resp = await fetch(BASE + path + '?stream=1', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'text/event-stream',
+            },
+            body: JSON.stringify(body),
+          })
+        } catch {
+          throw new ApiError(
+            '无法连接服务器，请确认平台服务已启动 (python -m layer4_interface.frontend.platform.server)',
+          )
+        }
+        if (!resp.ok || !resp.body) {
+          let detail = `服务器返回异常 (HTTP ${resp.status})`
+          const ct = resp.headers.get('Content-Type') ?? ''
+          if (ct.includes('application/json')) {
+            try {
+              const data = (await resp.json()) as { error?: string }
+              if (data?.error) detail = data.error
+            } catch {
+              /* 保持默认文案 */
+            }
+          }
+          throw new ApiError(detail)
+        }
+        const reader = resp.body.getReader()
+        const decoder = new TextDecoder('utf-8')
+        const parser = new SseParser()
+        let snap: T | null = null
+        let streamError: string | null = null
+        const handle = (ev: SseEvent): void => {
+          if (ev.event === 'progress') {
+            const d = JSON.parse(ev.data) as { session?: import('../types').Snapshot }
+            if (d.session) handlers.onProgress?.(d.session)
+          } else if (ev.event === 'snapshot') {
+            snap = JSON.parse(ev.data) as T
+          } else if (ev.event === 'error') {
+            const d = JSON.parse(ev.data) as { error?: string }
+            streamError = d.error ?? '对局流式推送失败'
+          }
+          // done 无业务载荷；无 snapshot 的 done 由收尾处判失败。
+        }
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          for (const ev of parser.push(decoder.decode(value, { stream: true }))) handle(ev)
+        }
+        for (const ev of parser.finish()) handle(ev)
+        if (snap) {
+          resolve(snap)
+          return
+        }
+        throw new ApiError(streamError ?? '对局流意外结束（未收到 snapshot 事件）')
+      } catch (err) {
+        reject(err instanceof ApiError ? err : new ApiError((err as Error).message))
+      }
+    })()
+  })
+}
+
+export function matchStartStream(
+  body: unknown,
+  handlers: MatchStreamHandlers = {},
+): Promise<{ session: import('../types').Snapshot }> {
+  return matchStream<{ session: import('../types').Snapshot }>('/match/start', body, handlers)
+}
+
+export function matchMoveStream(
+  gameId: string,
+  action: unknown,
+  handlers: MatchStreamHandlers = {},
+): Promise<{ session: import('../types').Snapshot }> {
+  return matchStream<{ session: import('../types').Snapshot }>(
+    '/match/move',
+    { game_id: gameId, action },
+    handlers,
+  )
+}
+
 export function apiPut<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, {
     method: 'PUT',

@@ -461,11 +461,11 @@ def make_handler(
                 variant = f"{theme}_{tier}"
             else:
                 variant = None
-            session = manager.start(
-                payload["game_id"],
-                str(payload.get("player_pid", "random")),
-                str(payload.get("difficulty", "normal")),
-                player_count,
+            start_kwargs = dict(
+                game_id=payload["game_id"],
+                player_pid=str(payload.get("player_pid", "random")),
+                difficulty=str(payload.get("difficulty", "normal")),
+                player_count=player_count,
                 persona=str(payload["persona"]) if payload.get("persona") else None,
                 hint_level=str(payload.get("hint_level", "off")),
                 pacing=str(payload.get("pacing", "standard")),
@@ -473,15 +473,57 @@ def make_handler(
                 teaching=teaching,
                 variant=variant,
             )
+            # 流式开局（SSE，协商见 ``_wants_stream``）：AI 先行的多座位游戏
+            # （卧底/狼人杀开局若干 AI 发言、麻将 AI 先手等）逐条推送玩家
+            # 投影快照，前端实时上屏；非流式保持原 JSON 信封（向后兼容）。
+            if _wants_stream(self):
+                self._handle_start_stream(**start_kwargs)
+                return
+            session = manager.start(**start_kwargs)
             send_json(self, HTTPStatus.OK, {"ok": True, "session": session.snapshot()})
+
+        def _handle_start_stream(self, **start_kwargs: object) -> None:
+            """SSE 出口：``PlayManager.start`` 期间每步 AI 行动推一帧进度快照。"""
+            start_sse(self)
+            try:
+
+                def _on_progress(snap: dict) -> None:
+                    send_sse_event(self, "progress", {"session": snap})
+
+                session = manager.start(on_progress=_on_progress, **start_kwargs)
+                send_sse_event(self, "snapshot", {"session": session.snapshot()})
+                send_sse_event(self, "done", {})
+            except Exception as exc:  # noqa: BLE001 — 绝不能让 SSE 连接悬挂
+                send_sse_event(self, "error", {"error": str(exc)})
+                send_sse_event(self, "done", {})
 
         def _handle_match_move(self) -> None:
             payload = read_json_body(self)
             action = payload.get("action")
             if not isinstance(action, dict):
                 raise KeyError("缺少 action")
+            # 流式走子（SSE）：人类行动落地后推一帧（发言/落子即刻上屏），
+            # 之后 AI 每走一步再推一帧——所有游戏的 AI 回合逐条可见。
+            if _wants_stream(self):
+                self._handle_move_stream(str(payload["game_id"]), action)
+                return
             snapshot = manager.move(payload["game_id"], action)
             send_json(self, HTTPStatus.OK, {"ok": True, "session": snapshot})
+
+        def _handle_move_stream(self, game_id: str, action: dict) -> None:
+            """SSE 出口：move 期间人类行动 + 每步 AI 行动各推一帧进度快照。"""
+            start_sse(self)
+            try:
+
+                def _on_progress(snap: dict) -> None:
+                    send_sse_event(self, "progress", {"session": snap})
+
+                snapshot = manager.move(game_id, action, on_progress=_on_progress)
+                send_sse_event(self, "snapshot", {"session": snapshot})
+                send_sse_event(self, "done", {})
+            except Exception as exc:  # noqa: BLE001 — 绝不能让 SSE 连接悬挂
+                send_sse_event(self, "error", {"error": str(exc)})
+                send_sse_event(self, "done", {})
 
         def _handle_match_state(self) -> None:
             payload = read_json_body(self)

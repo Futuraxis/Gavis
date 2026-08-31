@@ -334,7 +334,25 @@ export default function SocialChatTable({ snapshot, interactive, onMove }: Props
         </div>
       )}
       {!snapshot.over && snapshot.turn !== snapshot.player_pid && (
-        <div className="social-waiting">其他玩家行动中…</div>
+        <div className="social-waiting">
+          {/* 流式进度帧里 turn = 当前说话/行动的 AI 座位 —— 逐条发言时这里会
+              跟随每一帧实时切换，让「谁在说话」和发言本身一样动态可见。 */}
+          {snapshot.turn != null ? (
+            <>
+              <span className="social-waiting-name">
+                {snapshot.turn === snapshot.player_pid ? '你' : snapshot.turn}
+              </span>
+              <span className="social-typing-dots">
+                <i />
+                <i />
+                <i />
+              </span>
+              正在发言…
+            </>
+          ) : (
+            '其他玩家行动中…'
+          )}
+        </div>
       )}
     </div>
   )
