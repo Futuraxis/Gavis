@@ -458,7 +458,7 @@ GAMES: dict[str, GameSpec] = {
         display_name="谁是卧底",
         # v5.2 声明式：scenario(词对) + 人数由 rules JSON 的 variants 选择
         # （1卧底+1白板+N平民；人数 4..12 可用 player_count 覆盖）。
-        engine=EngineSpec(rules="undercover.json", variant="fruit", player_count=8),
+        engine=EngineSpec(rules="undercover.json", variant="fruit_normal", player_count=8),
         players=("p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7"),
         eval_episodes=4,
         solvers={},  # 暂无专用可训练求解器（与狼人杀同类的自由发言桌游）

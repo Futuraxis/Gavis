@@ -7,7 +7,7 @@ AIFight Bridge 调用的是模型 API。Gavis 的 Layer 3/Layer 4 solver 本身�
 ```bash
 export GAVIS_AIFIGHT_TOKEN='gavis-local-aifight-20260830'
 
-.venv-2/bin/python -m layer4_interface.aifight.openai_compat \
+python -m layer4_interface.aifight.openai_compat \
   --host 127.0.0.1 \
   --port 8789 \
   --token "$GAVIS_AIFIGHT_TOKEN" \
@@ -54,7 +54,7 @@ api_key = gavis-local-aifight-20260830
 ```bash
 export GAVIS_AIFIGHT_TOKEN='gavis-local-aifight-20260830'
 
-.venv-2/bin/python -m layer4_interface.aifight.openai_compat \
+python -m layer4_interface.aifight.openai_compat \
   --host 127.0.0.1 \
   --port 8789 \
   --token "$GAVIS_AIFIGHT_TOKEN" \
@@ -96,4 +96,4 @@ aifight connect <PAIRING_CODE>
 当前更完整的游戏适配仍在 Botzone 协议侧：
 
 - 国标/国际麻将：Botzone 字符串协议 -> Layer 4 Mahjong 适配 -> Layer 3 Mahjong solver。
-- 双人德州扑克：Botzone JSON 协议 -> Layer 4 Texas 适配 -> Layer 3 MCTS。
+- 双人德州扑克：Botzone JSON 协议 -> Layer 4 Texas 适配 -> Layer 3 Hybrid（不完全信息搜索）。

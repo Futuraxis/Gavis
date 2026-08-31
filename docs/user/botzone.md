@@ -17,7 +17,7 @@ https://www.botzone.org/api/<用户ID>/<密钥>/localai
 
 ```bash
 export BOTZONE_LOCALAI_URL='https://www.botzone.org/api/<用户ID>/<密钥>/localai'
-.venv-2/bin/python -m layer4_interface.botzone.localai
+python -m layer4_interface.botzone.localai
 ```
 
 这个客户端会：
@@ -30,7 +30,7 @@ export BOTZONE_LOCALAI_URL='https://www.botzone.org/api/<用户ID>/<密钥>/loca
 也可以让客户端调用 Botzone 的 `/runmatch` 创建测试桌：
 
 ```bash
-.venv-2/bin/python -m layer4_interface.botzone.localai \
+python -m layer4_interface.botzone.localai \
   --create-game TexasHoldem \
   --player me \
   --player <另一个BotID>
@@ -50,7 +50,7 @@ Botzone 的 Python 运行环境可能是 3.6，不能直接上传完整 Gavis �
 ## 启动完整项目接口
 
 ```bash
-.venv-2/bin/python -m layer4_interface.botzone.server \
+python -m layer4_interface.botzone.server \
   --host 0.0.0.0 \
   --port 8788 \
   --token YOUR_TOKEN
@@ -68,7 +68,7 @@ Authorization: Bearer YOUR_TOKEN
 ## 构建上传包
 
 ```bash
-.venv-2/bin/python scripts/build_botzone_zip.py \
+python scripts/build_botzone_zip.py \
   --remote-url https://YOUR_DOMAIN/botzone/decide \
   --remote-token YOUR_TOKEN \
   --remote-timeout 0.75
@@ -83,5 +83,7 @@ dist/gavis_botzone.zip
 ## 当前支持
 
 - 国标/国际麻将：Botzone 字符串协议 -> `mahjong_international` -> `MahjongHeuristicAI`。
-- 双人德州扑克：Botzone JSON 协议 -> `texas_holdem` -> Layer 3 MCTS 决策。
+- 双人德州扑克：Botzone JSON 协议 -> `texas_holdem` -> Layer 3 Hybrid 决策
+  （不完全信息搜索，`BOTZONE_LAYER3_BUDGET=35` 覆盖搜索预算；六人德州走
+  L4 保守启发式，见下文）。
 - 六人德州扑克：不作为完整项目接入目标；上传端仅保留合法兜底，防止误传时崩溃。

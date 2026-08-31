@@ -1,6 +1,6 @@
 # Gavis 随机博弈模型
 
-> 版本: 1.0 | 日期: 2026-07-28 | 对应规则版本: v5.0
+> 版本: 1.0 | 日期: 2026-07-28 | 对应规则版本: v5.0（**现行实现 v5.2**：variants/visibility 声明式，语法见 [gamerule/v5.2.md](gamerule/v5.2.md)；moon_chess/stochastic_gomoku 仍是 5.0.0 存量规则）
 
 ---
 
@@ -27,7 +27,9 @@ $$\langle N, S, A, T, O, R \rangle$$
 
 $$\langle N, S, A, T, R \rangle$$
 
-这也是当前实现覆盖的场景。
+当前实现**同时覆盖**：完美信息（moon_chess/stochastic_gomoku/mahjong）与
+部分可观测 POSG（texas_holdem/werewolf/undercover/uno 有 `hiddenWorld` 或
+`visibility` 声明式投影）。
 
 ---
 
@@ -237,9 +239,11 @@ $$T(s, a, s') = \sum_{c \in C(s)} P_c(s) \cdot [s' = f_c(s)]$$
 
 | 类型 | 描述 | 用例 |
 |------|------|------|
-| `explicit` | 枚举每个 outcome 的概率 | 掷硬币 50%/50% |
+| `explicit` | 枚举每个 outcome 的概率（`prob` 数值表） | 结算型随机（v5.2 常用 explicit 1.0 + `effectMap`） |
 | `uniform` | 从候选集中均匀抽样 | 洗牌后抽牌 |
-| `weighted` | 按权重分布 | 加权随机事件 |
+
+> v4.1 的 `weighted`（权重分布）已在 v5.0/v5.1 移除，v5.2 只保留
+> `explicit` / `uniform` 两种形式。
 
 ```json
 {
@@ -284,41 +288,57 @@ $$O(s, i) = \text{project}(s, i, \text{visibility})$$
         隐藏/掩码 f
 ```
 
-Visibility 规则：
+Visibility 规则（v5.2 声明式；v4.1 的 `rules[] + fields + filter` 列表写法已废弃）：
 
 ```json
 {
   "visibility": {
-    "default": "public",
-    "rules": [
-      {
-        "view": "hand",
-        "fields": {"suit": "public", "rank": "private"},
-        "filter": {"neq": [{"get": ["owner"]}, {"var": "$viewer"}]}
-      }
-    ]
+    "default": "partial",
+    "my_role": {
+      "when": {"eq": [{"get": ["$node._index"]}, {"call": ["player_index", "$viewer"]}]},
+      "keep": true
+    },
+    "dead_roles": {
+      "when": {"eq": [{"get": ["alive[$node._index]"]}, 0]},
+      "keep": true
+    },
+    "env": {
+      "seerResult": {"when": {"eq": [{"get": ["roles[$player_index($viewer)]"]}, "seer"]}}
+    }
   }
 }
 ```
 
-可见性级别：
+可见性语义（v5.2）：
 
-| 级别 | 含义 |
+| 机制 | 含义 |
 |------|------|
-| `public` | 所有玩家可见 |
-| `private` | 仅 owner/viewer 可见 |
-| `hidden` | 完全隐藏 |
-| `masked` | 用聚合值替代 |
+| `default: "public"` | 全部公开（完美信息） |
+| `default: "partial"` | 默认隐藏，只有 `keep: true` 且 when 命中的行才放行 |
+| 视图级 `when` + `keep` | 对视图实体逐行过滤（如 werewolf `my_role` 只对 `_index == $viewer` 的行） |
+| `env` 级条目 | 对 env 字段做 `$viewer` 条件投影（如 `seerResult` 仅预言家可见） |
 
-### 6.2 完美信息简化
+> v4.1 的 `private/hidden/masked` 五档与 `aggregateAs` 已在 v5.x 移除；
+> 现行为「public 全放行 / partial 默认隐藏 + drop 行 + env 投影」。
 
-对于完美信息游戏（当前所有已实现游戏）：
+### 6.2 完美信息简化与部分可观测现状
+
+完美信息游戏（moon_chess/stochastic_gomoku/mahjong）用：
 
 ```json
 {"visibility": {"default": "public"}}
 ```
 
-`get_observation` 返回完整的 derived views。等价于恒等投影。
+`project_observation` / `get_observation` 返回完整的 derived views，等价于恒等投影。
+
+**部分可观测游戏已是现行实现的一部分**（不再是"未来工作"）：
+
+| 游戏 | 机制 |
+|------|------|
+| texas_holdem | `hiddenWorld` + 投影（v5.1.0） |
+| werewolf | `visibility` 声明式：`roles`/`dead_roles`/`seerResult` 投影（v5.2） |
+| undercover | `visibility`：他人牌身份隐藏，无 `my_role`（v5.2） |
+| uno | `visibility`：他人手牌隐藏但保留张数（v5.2） |
 
 ---
 
@@ -352,37 +372,53 @@ $$Z(s) = \bigvee_{t \in \text{terminal}} \text{condition}_t(s)$$
 
 ## 9. 与旧模型的对比
 
-| 维度 | 旧 v4.1 实现 | 新 v5.0 模型 |
+| 维度 | 旧 v4.1 实现 | 新 v5.0/v5.2 模型 |
 |------|-------------|-------------|
 | 状态表示 | `_board` 特化数组 + `nodes` 字典 | 任意 ground arrays + 推导规则 |
 | 实体声明 | 硬编码在 `create_gomoku_state` | `groundState` + `derivedViews` |
 | 棋盘格 | `create_gomoku_state(bs)` 生成 | `grid(board, cols)` 推导 |
 | 关系 | 不存在 | 外键字段 |
-| 可见性 | 无 | 字段级投影 |
-| 概率分布 | 仅 explicit | explicit / uniform / weighted |
-| 外部函数 | `check_five_in_row` 硬编码注册 | 内置函数 + solverSafe 声明 |
+| 可见性 | 无 | 字段级投影（v5.2 起 `visibility` 声明式：public/partial + drop + env 投影） |
+| 概率分布 | 仅 explicit | explicit / uniform（weighted 已移除） |
+| 外部函数 | `check_five_in_row` 硬编码注册 | v5.1 起零 BUILTIN：`functions` 节纯 alias（`{"params", "expr"}`） |
+| 变体/人数 | 硬编码 | v5.2 `variants` 声明式（options dict + 常量补丁 + trim） |
 | 玩家 | `p_black`/`p_white` 字符串硬编码 | `players` 数组声明 |
 | 阶段流转 | `set phase = "game_over"` goto 式 | 声明式 `phases[].next` |
+| 求解器契约 | SolverAdapter 9 方法 | `GameEngine` 13 方法（L2→L3 唯一契约） |
 | JSON 自足 | 否（需要引擎硬编码） | 是（JSON + GameEngine 即可） |
 
 ---
 
-## 10. SolverAdapter 接口
+## 10. GameEngine 契约（L2→L3 唯一契约，取代 SolverAdapter）
+
+v5.2 起 **SolverAdapter 已退役**（v4.1 时代的 9 方法 per-game 适配器接口，
+`layer2_engine/interfaces/solver_adapter.py` 已不存在）。求解器统一消费
+`GameEngine`（`layer2_engine/core/engine.py`）：
 
 ```python
-class SolverAdapter(Protocol):
+class GameEngine:
+    def __init__(self, rules, seed=None, variant=None, player_count=None,
+                 allow_codegen=True): ...
     def create_initial_state(self) -> State: ...
-    def get_node_type(self, state: State) -> NodeType: ...
-    def get_current_player(self, state: State) -> str | None: ...
-    def get_legal_actions(self, state: State) -> list[ActionInstance]: ...
-    def apply_action(self, state: State, action: ActionInstance) -> State: ...
-    def get_chance_outcomes(self, state: State) -> list[ChanceOutcome]: ...
-    def apply_chance(self, state: State, outcome: ChanceOutcome) -> State: ...
-    def is_terminal(self, state: State) -> bool: ...
-    def get_utility(self, state: State, player: str) -> float: ...
-
-    # 新增：
-    def project_observation(self, state: State, viewer: str) -> Obs: ...
+    def get_node_type(self, state) -> NodeType: ...
+    def get_current_player(self, state) -> str | None: ...
+    def get_legal_actions(self, state) -> list[ActionInstance]: ...
+    def apply_action(self, state, action) -> State: ...
+    def get_chance_outcomes(self, state) -> list[ChanceOutcome]: ...
+    def apply_chance(self, state, outcome) -> State: ...
+    def sample_chance(self, state) -> tuple[ChanceOutcome, State]: ...
+    def is_terminal(self, state) -> bool: ...
+    def get_utility(self, state, player) -> float: ...
+    def project_observation(self, state, viewer) -> Obs: ...
+    def get_info_set_key(self, state, player) -> str: ...
+    def eval_expr(self, expr, extra_ctx=None): ...
 ```
 
-求解器只依赖此 Protocol，不依赖 GameEngine 具体实现。新增的 `project_observation` 为不完全信息游戏提供接口。
+要点：
+
+- 求解器只依赖 `GameEngine`，不依赖任何 per-game 适配器；所有游戏
+  （含变体/人数解析、部分可观测投影）都从规则 JSON 声明驱动。
+- `project_observation` 为部分可观测游戏提供投影（v5.2 `visibility`
+  声明式）；`get_info_set_key` 输出 sha256 64 字符信息集键（非完整 JSON，
+  旧 Hybrid cfr_table 需重训）。
+- `allow_codegen=False` 时纯解释器路径（平台自定义游戏一律如此）。

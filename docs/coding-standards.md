@@ -131,10 +131,11 @@ try:
 except ImportError:
     _HAS_TORCH = False
 
-from layer2_engine.interfaces.solver_adapter import (
-    SolverAdapter,
+from layer2_engine.core.engine import GameEngine
+from layer2_engine.core.state_graph import (
     State,
     ActionInstance,
+    ChanceOutcome,
 )
 from ..base import SolverBase, SolverConfig
 ```
@@ -148,7 +149,7 @@ from ..base import SolverBase, SolverConfig
 ### 3.2 导入风格
 
 - **层内部引用**：使用相对导入（`from ..base import SolverBase`）
-- **跨层引用**：使用绝对导入（`from layer2_engine.interfaces.solver_adapter import SolverAdapter`）
+- **跨层引用**：使用绝对导入（L2→L3 契约经 `from layer2_engine.core.engine import GameEngine`；L1/L4 协议同理，如 `from layer1_translator.protocol import TranslatorProtocol`）
 - **仅导入需要的符号**，避免 `from module import *`
 - **多行导入**：当符号超过 3 个时使用带括号的多行形式
 
@@ -173,8 +174,8 @@ __all__ = [
 
 | 类别 | 规范 | 示例 |
 |------|------|------|
-| 模块/包 | 小写+下划线 | `solver_adapter.py`, `moon_state_encoder.py` |
-| 类 | PascalCase | `GameEngine`, `SolverAdapter`, `MCTSNode` |
+| 模块/包 | 小写+下划线 | `state_graph.py`, `moon_state_encoder.py`, `expr_eval.py` |
+| 类 | PascalCase | `GameEngine`, `SolverBase`, `MCTSNode` |
 | 函数/方法 | snake_case | `create_initial_state`, `select_action` |
 | 变量 | snake_case | `legal_actions`, `info_sets` |
 | 常量 | UPPER_CASE | `REQUIRED_TOP_LEVEL`, `FEATURE_DIM` |
@@ -185,7 +186,7 @@ __all__ = [
 
 ### 4.1 特殊约定
 
-- **Protocol 类**：以 `…Protocol` 或描述性名词命名（`SolverAdapter`, `TranslatorProtocol`）
+- **Protocol 类**：以 `…Protocol` 或描述性名词命名（`TranslatorProtocol`, `BaseBinding`, `SolverProvider`；注意 L2→L3 契约是具体类 `GameEngine`，不是 Protocol）
 - **私有模块**：以下划线开头（当前项目中不使用，仅在必要时引入）
 - **测试类**：以 `Test` 开头
 - **测试方法**：以 `test_` 开头，snake_case
@@ -244,7 +245,7 @@ rollout-based leaf evaluation.  Implements ``SolverBase``.
 class MCTS(SolverBase):
     """Monte Carlo Tree Search with chance-node handling."""
 
-    def __init__(self, adapter: SolverAdapter, config: SolverConfig | None = None): ...
+    def __init__(self, engine: GameEngine, config: SolverConfig | None = None): ...
 ```
 
 或用更详细的格式：
@@ -313,8 +314,8 @@ from typing import Protocol, runtime_checkable
 
 
 @runtime_checkable
-class SolverAdapter(Protocol):
-    def create_initial_state(self) -> State: ...
+class TranslatorProtocol(Protocol):
+    def translate(self, request: TranslateRequest) -> TranslateResponse: ...
 ```
 
 - Protocol 方法体使用 `...`
@@ -430,32 +431,38 @@ tests/
 ### 9.3 组织方式
 
 ```python
-"""Tests for MoonChessAdapter (Layer 2)."""
+"""Tests for GameEngine (Layer 2, rules-driven)."""
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-from layer2_engine.games.moon_chess.moon_env_adapter import MoonChessAdapter
+from layer2_engine.core.engine import GameEngine
+
+RULES_DIR = Path(__file__).resolve().parents[3] / "rules"
 
 
 @pytest.fixture
-def adapter() -> MoonChessAdapter:
-    return MoonChessAdapter(seed=42)
+def engine() -> GameEngine:
+    rules = json.loads((RULES_DIR / "moon_chess.json").read_text(encoding="utf-8"))
+    return GameEngine(rules, seed=42)
 
 
 class TestMoonChessBasics:
-    def test_create_initial_state(self, adapter: MoonChessAdapter):
-        state = adapter.create_initial_state()
-        assert state["board_size"] == 3
+    def test_create_initial_state(self, engine: GameEngine):
+        state = engine.create_initial_state()
+        assert state["env"]["turn"] == "p_black"
 
-    def test_get_node_type(self, adapter: MoonChessAdapter):
-        state = adapter.create_initial_state()
-        assert adapter.get_node_type(state) == "player"
+    def test_get_node_type(self, engine: GameEngine):
+        state = engine.create_initial_state()
+        assert engine.get_node_type(state) == "player"
 
 
 class TestMoonChessGameplay:
-    def test_place_piece(self, adapter: MoonChessAdapter): ...
+    def test_place_piece(self, engine: GameEngine): ...
 ```
 
 ### 9.4 规则
@@ -482,7 +489,7 @@ except ImportError:
 
 @pytest.mark.skipif(not _HAS_TORCH, reason="torch not installed")
 class TestPPO:
-    def test_select_action_no_training(self, moon_adapter: MoonChessAdapter): ...
+    def test_select_action_no_training(self, engine: GameEngine): ...
 ```
 
 ---
@@ -494,30 +501,31 @@ class TestPPO:
 每个 `__init__.py` 应有简短描述：
 
 ```python
-"""Layer 2: Env/Engine — declarative game engine.
+"""Layer 2: Env/Engine — declarative, adapter-free game engine.
 
-Loads ``rules.json`` and provides a full game runtime that all
-Layer 3 solvers consume via the ``SolverAdapter`` Protocol.
+Loads ``rules.json`` (v5.2, zero BUILTIN + variants/visibility declarative)
+and provides a full game runtime that all Layer 3 solvers consume via the
+``GameEngine`` contract (no per-game adapters, no ``interfaces/``).
 """
 ```
 
 ### 10.2 导出
 
 ```python
-from .interfaces.solver_adapter import (
-    SolverAdapter,
+from .core.engine import GameEngine
+from .core.state_graph import (
     State,
     NodeType,
     ActionInstance,
+    ChanceOutcome,
 )
-from .core.engine import GameEngine
 
 __all__ = [
-    "SolverAdapter",
+    "GameEngine",
     "State",
     "NodeType",
     "ActionInstance",
-    "GameEngine",
+    "ChanceOutcome",
 ]
 ```
 
@@ -592,25 +600,32 @@ return [action for action in self._generate_actions()]
 ### 12.1 硬性规则
 
 - **禁止循环依赖**：Layer N 只能依赖 Layer N-1
-- **Layer 4 (Interface) 不依赖 Layer 3 (Solver)**
-- 层间通信只能通过 Protocol（`SolverAdapter`, `SolverBase`, `BaseBinding`）
+- **Layer 4 (Interface) 原则上不依赖 Layer 3 (Solver)**（唯一例外：
+  `layer4_interface/botzone/mahjong_format.py` 直引 `SolverConfig` +
+  `MahjongHeuristicAI` 的 Botzone 薄适配边界）
+- 层间通信只能通过契约（L2→L3: `GameEngine` 具体类；L3: `SolverBase`；
+  L4: `BaseBinding` / `SolverProvider` 注入协议）
 
 ### 12.2 依赖方向
 
 ```
-Layer 1 (Translator)          ──→  Layer 2 (Engine)  [future]
-Layer 2 (Engine)              ──→  (无层内内部依赖)
-Layer 3 (Solver)               ──→  Layer 2 (Protocol: SolverAdapter)
-Layer 4 (Interface)            ──→  Layer 2 (Protocol: SolverAdapter)
-Layer 4 (Interface)            ──→  (不依赖 Layer 3)
+Layer 1 (Translator)          ──→  Layer 2 (Engine)  (校验通道: engine_validator
+                                  = schema + smoke_validate(variants="all"))
+Layer 2 (Engine)              ──→  (无 per-game 适配器；v5.2 规则自足)
+Layer 3 (Solver)               ──→  Layer 2 (契约: GameEngine, 13 方法)
+Layer 4 (Interface)            ──→  Layer 2 (契约: BaseBinding / VisionBridge)
+Layer 4 (Interface)            ──→  (不依赖 Layer 3; 例外: botzone/mahjong_format.py)
 ```
 
 ### 12.3 Protocol 规则
 
 - 定义在 **消费方** 所在的层
-- `SolverAdapter` 定义在 Layer 2，被 Layer 3 消费
-- `SolverBase` 定义在 Layer 3，被 Demo/Benchmark 消费
+- `GameEngine` 是 Layer 2 的**具体类**（非 Protocol；v5.2 起无 per-game
+  `SolverAdapter`），被 Layer 3 求解器消费
+- `SolverBase` 定义在 Layer 3，被 train-cli 工厂与 L4 装配消费
 - `BaseBinding` 定义在 Layer 4，被测试和前端消费
+- `TranslatorProtocol`（L1）、`SolverProvider`（L4 注入点）是 Protocol，
+  分别被 L1 消费者与 L4 装配消费
 
 ---
 

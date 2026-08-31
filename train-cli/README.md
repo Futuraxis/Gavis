@@ -49,6 +49,8 @@ python -m train_cli --game all --solver cfr
 | `--eval-episodes` | 注册表默认 | 每个评估对手的局数（座位轮换） |
 | `--eval-opponents` | 注册表 `eval_opponents` | 评估对手（逗号分隔：`random`/`self` 或任何已登记 `runtime_solvers` 名字，如 `mcts,mahjong`；未登记时该列自动跳过） |
 | `--skip-eval` | — | 跳过评估 |
+| `--preset` | `full` | 训练预设：`full`（完整训练）/ `quick`（快速演示校准，训练局数 0.2 缩放） |
+| `--config-override` | — | `KEY=VALUE`（可多次）：覆盖求解器 config 的字段（如 `--config-override budget=500`） |
 | `--list` | — | 打印注册表一览并退出 |
 | `--verbose` | — | 训练过程详细输出 |
 
@@ -60,7 +62,7 @@ GAMES: dict[str, GameSpec] = {
     "moon_chess": GameSpec(
         game_id="moon_chess",
         display_name="月亮棋",
-        engine=EngineSpec(rules="moon_chess.json"),          # v5.2 变种/人数在此选择
+        engine=EngineSpec(rules="moon_chess.json"),          # v5.0.0 无 variants；需变种/人数的游戏在 EngineSpec 里选 variant/player_count
         players=("p_black", "p_white"),                      # 座位顺序（先手在前）
         solvers={
             "hybrid": SolverPipeline(
@@ -112,7 +114,14 @@ GAMES: dict[str, GameSpec] = {
 | `mahjong_changsha` | mahjong.json | changsha × 4p | qmix / happo / maac |
 | `mahjong_taiwan` | mahjong.json | taiwan × 4p | qmix / happo / maac |
 | `mahjong_international` | mahjong.json | international × 4p | qmix / happo / maac |
-| `werewolf` | werewolf.json | 默认 9 人 | bayes(per_player，训练 no-op，仅评估) |
+| `werewolf` | werewolf.json | 默认 9 人（3 狼+3 村+预言家+女巫+猎人） | bayes(per_player，训练 no-op，仅评估) |
+| `undercover` | undercover.json | fruit_normal × 8p（4..12 人） | —（`solvers={}` 无训练管线；运行时 ollama/random） |
+| `uno` | uno.json | classic × 4p（2..10 人） | hybrid(不完全信息, `imperfect_information=True`) |
+| `uno_seven_zero` | uno.json | seven_zero × 4p（2..10 人） | hybrid(不完全信息, `imperfect_information=True`) |
+| `uno_jump_in` | uno.json | jump_in × 4p（2..10 人） | hybrid(不完全信息, `imperfect_information=True`) |
+| `uno_stacking` | uno.json | stacking × 4p（2..10 人） | hybrid(不完全信息, `imperfect_information=True`) |
+| `uno_draw_until` | uno.json | draw_until × 4p（2..10 人） | hybrid(不完全信息, `imperfect_information=True`) |
+| `uno_strict_wild4` | uno.json | strict_wild4 × 4p（2..10 人） | hybrid(不完全信息, `imperfect_information=True`) |
 
 ## 运行时装配（前端/基准共用）
 
