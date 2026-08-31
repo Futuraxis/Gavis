@@ -8,6 +8,7 @@ then responds in ``X-Match-<match_id>`` headers on the next poll.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
@@ -36,8 +37,19 @@ class LocalAIMatch:
     def decide(self) -> Any:
         if self.has_unsubmitted_response:
             return self.pending_response
-        decision = decide(self._decision_payload())
-        self.pending_response = decision.response
+        try:
+            decision = decide(self._decision_payload())
+            self.pending_response = decision.response
+        except Exception as exc:  # noqa: BLE001 - Local AI must keep polling.
+            self.pending_response = _fallback_response(self.requests)
+            latest = self.requests[-1] if self.requests else None
+            print(
+                "Botzone localai decision failed for "
+                f"{self.match_id}: {type(exc).__name__}: {exc}; "
+                f"latest_request={_short_repr(latest)}; fallback={_header_value(self.pending_response)}",
+                file=sys.stderr,
+                flush=True,
+            )
         self.has_unsubmitted_response = True
         return self.pending_response
 
@@ -50,6 +62,10 @@ class LocalAIMatch:
         latest = self.requests[-1] if self.requests else None
         if isinstance(latest, dict) and isinstance(latest.get("requests"), list):
             return latest
+        if isinstance(latest, list):
+            responses = latest[1::2] if latest and len(latest) > 1 else self.responses
+            requests = latest[0::2] if latest and len(latest) > 1 else latest
+            return {"requests": requests, "responses": responses}
         return {"requests": self.requests, "responses": self.responses}
 
 
@@ -76,7 +92,7 @@ def run(
                 if match.requests and not match.has_unsubmitted_response:
                     response = match.decide()
                     print(f"response ready for {match.match_id}: {_header_value(response)}", flush=True)
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, http.client.RemoteDisconnected) as exc:
             print(f"Botzone localai poll failed: {exc}; retrying in {poll_interval:g}s", file=sys.stderr, flush=True)
             time.sleep(poll_interval)
         if once:
@@ -148,7 +164,7 @@ def _decode_request(raw_request: str) -> Any:
     text = raw_request.strip()
     if not text:
         return raw_request
-    if text[0] in "[{":
+    if text[0] in '[{"':
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -162,6 +178,25 @@ def _header_value(response: Any) -> str:
     if isinstance(response, (str, int, float)):
         return str(response)
     return json.dumps(response, ensure_ascii=False, separators=(",", ":"))
+
+
+def _fallback_response(requests: list[Any]) -> Any:
+    latest = requests[-1] if requests else None
+    if isinstance(latest, dict):
+        if {"num_players", "my_id", "my_chips", "my_cards", "history"}.issubset(latest):
+            return 0
+        if isinstance(latest.get("requests"), list):
+            return _fallback_response(list(latest["requests"]))
+    if isinstance(latest, list):
+        return _fallback_response(latest)
+    return "PASS"
+
+
+def _short_repr(value: Any, limit: int = 500) -> str:
+    text = repr(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 
 def _runmatch_url(localai_url: str) -> str:

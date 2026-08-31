@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-import threading
+import http.client
 import urllib.error
 import urllib.request
 import zipfile
-from http.server import ThreadingHTTPServer
+from io import BytesIO
 
 import pytest
 
@@ -121,6 +121,21 @@ def test_localai_does_not_mark_response_submitted_on_poll_failure(monkeypatch: p
     assert match.has_unsubmitted_response
 
 
+def test_localai_run_retries_remote_disconnected(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps: list[float] = []
+
+    def disconnected(req: urllib.request.Request, timeout: object = None) -> _FakeHTTPResponse:
+        del req, timeout
+        raise http.client.RemoteDisconnected("closed")
+
+    monkeypatch.setattr(localai.urllib.request, "urlopen", disconnected)
+    monkeypatch.setattr(localai.time, "sleep", sleeps.append)
+
+    localai.run("https://botzone.test/api/u/s/localai", poll_interval=0.25, once=True)
+
+    assert sleeps == [0.25]
+
+
 def test_localai_runmatch_url_and_header_values() -> None:
     assert localai._runmatch_url("https://www.botzone.org/api/u/secret/localai") == "https://www.botzone.org/api/u/secret/runmatch"
     assert localai._header_value(200) == "200"
@@ -132,6 +147,49 @@ def test_localai_can_decide_from_full_botzone_envelope_request() -> None:
     match.add_request('{"requests":["0 1 2"],"responses":[]}')
 
     assert match.decide() == "PASS"
+
+
+def test_localai_can_decide_from_json_array_request() -> None:
+    match = localai.LocalAIMatch("m1")
+    match.add_request('["0 1 2"]')
+
+    assert match.decide() == "PASS"
+
+
+def test_localai_decodes_quoted_mahjong_requests() -> None:
+    match = localai.LocalAIMatch("m1")
+    match.add_request('"0 0 1"')
+    assert match.decide() == "PASS"
+    match.mark_submitted()
+    match.add_request('"1 0 0 1 1 B4 W6 T5 F2 W1 T9 B2 B3 W7 W9 W8 B8 W1 H2 H1"')
+    assert match.decide() == "PASS"
+    match.mark_submitted()
+    match.add_request('"2 F3"')
+
+    assert match.requests[0] == "0 0 1"
+    assert match.decide().startswith("PLAY ")
+
+
+def test_localai_decision_error_keeps_process_alive(monkeypatch: pytest.MonkeyPatch) -> None:
+    match = localai.LocalAIMatch("m1")
+    match.add_request('"unknown raw request"')
+
+    def boom(payload: dict) -> object:
+        del payload
+        raise RuntimeError("bad shape")
+
+    monkeypatch.setattr(localai, "decide", boom)
+
+    assert match.decide() == "PASS"
+    assert match.has_unsubmitted_response
+
+
+def test_localai_current_request_shape_error_falls_back_to_pass() -> None:
+    match = localai.LocalAIMatch("m1")
+    match.add_request('"unknown raw request"')
+
+    assert match.decide() == "PASS"
+    assert match.has_unsubmitted_response
 
 
 def test_botzone_mahjong_format_handshake_and_draw() -> None:
@@ -197,34 +255,31 @@ def test_botzone_mahjong_format_claim_priority() -> None:
 
 
 def test_botzone_remote_server_decides_mahjong_format() -> None:
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(token="secret"))
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    try:
-        import urllib.request
+    payload = {
+        "requests": [
+            "0 1 2",
+            "1 0 0 0 0 W1 W2 W3 B1 B2 B3 T1 T2 T3 F1 F2 F3 J1",
+            "2 T6",
+        ],
+        "responses": ["PASS", "PASS"],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    handler = object.__new__(make_handler(token="secret"))
+    handler.path = "/botzone/decide"
+    handler.headers = {"Content-Length": str(len(body)), "Authorization": "Bearer secret"}
+    handler.rfile = BytesIO(body)
+    sent: list[dict[str, object]] = []
 
-        payload = {
-            "requests": [
-                "0 1 2",
-                "1 0 0 0 0 W1 W2 W3 B1 B2 B3 T1 T2 T3 F1 F2 F3 J1",
-                "2 T6",
-            ],
-            "responses": ["PASS", "PASS"],
-        }
-        body = json.dumps(payload).encode("utf-8")
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{httpd.server_address[1]}/botzone/decide",
-            data=body,
-            headers={"Content-Type": "application/json", "Authorization": "Bearer secret"},
-        )
-        with opener.open(req, timeout=2) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-        thread.join(timeout=2)
+    def send_json(status: object, response_payload: dict[str, object]) -> None:
+        sent.append({"status": status, "payload": response_payload})
 
+    handler._send_json = send_json
+
+    handler.do_POST()
+
+    assert sent
+    data = sent[0]["payload"]
+    assert isinstance(data, dict)
     assert isinstance(data["response"], str)
     assert data["response"].startswith("PLAY ")
 
@@ -281,7 +336,7 @@ def test_botzone_texas_holdem_heads_up_uses_layer3() -> None:
     decision = decide(payload)
 
     assert decision.response in legal_responses(request, betting)
-    assert decision.debug.startswith("texas-holdem/layer3:")
+    assert decision.debug.startswith("texas-holdem/layer3:Hybrid(search):")
 
 
 def test_botzone_texas_holdem_non_heads_up_falls_back_legally() -> None:
