@@ -7,16 +7,25 @@ current session, validates the tool arguments against the authoritative
 engine contract, and always fails soft to a deterministic regex fallback
 when the LLM is missing.
 
-Tool classes (function-calling audit 2026-09 + 对局/复盘信息源修复):
+Tool classes (function-calling audit 2026-09 + 对局/复盘信息源修复 + 卡片下线):
 
 - **action tools** (play_game / make_move / …) map straight to a
-  frontend intent — validated, fail-soft, one shot;
-- **info tools** are executed locally in a bounded loop and their result
+  frontend intent — validated, fail-soft, one shot.  ``play_game`` 带
+  **玩家偏好参数**（人数/难度/主题/性格/提示档/节奏/自适应/教学/座位）：
+  模型从用户那句话里取，服务端按 ``GameSpec`` 校验后塞进 ``params.config``
+  （前端不再有开局配置卡）。
+- **local tools** are executed locally in a bounded loop and their result
   is fed back to the model as ``role: "tool"`` messages:
 
   - ``describe_game`` / ``list_games`` — registry + play docs, so
     knowledge questions (“月亮棋是什么？”) are answered from
-    authoritative data instead of hallucinated;
+    authoritative data instead of hallucinated; ``describe_game`` 同时给出
+    **可配置面**（人数/难度/座位/主题），模型据此填 ``play_game`` 参数
+    而不是猜；
+  - ``create_game`` — **有副作用的本地工具**：把用户口述的规则/模板变体
+    交给 L1 翻译器（``CustomGameRegistry.create``），成功即以 ``create``
+    意图带 ``params.game`` 回前端（刷新目录 + 提示「玩X」），失败文本化
+    上报（fail-soft）。同一回合只执行一次（防一次请求建出两个游戏）。
   - ``get_match_state`` — the *player-projected* live snapshot (board
     layout / own hand / pot / discards …): the in-match information
     source, the model pulls it instead of asking the user to describe
@@ -41,14 +50,20 @@ Intent contract (shared with the frontend ``ChatPage`` / ``useChatRuntime``):
 =========  ========================================================
 intent     params
 =========  ========================================================
-play       ``{game_id}``            → 前端开新对局
+play       ``{game_id, config?, config_ignored?}``
+                                   → 前端开新对局（``config`` = 已校验的
+                                     玩家偏好；``config_ignored`` = 该游戏
+                                     不支持、被丢弃的偏好项）
 resume     ``{game_id}``            → 前端恢复活跃会话
 move       ``{action}``             → 前端调 ``/match/move``
 hint       ``{level, hint?}``       → 前端展示提示（``hint`` = 后端已算的机械提示 dict）
 restart    ``{}``                   → 前端重开当前对局
 history    ``{}``                   → 前端展示战绩
 review     ``{match_id?, report?}`` → 前端展示复盘（``report`` = 后端已算的 ReviewReport）
-create     ``{}``                   → 前端展示创建游戏面板
+create     ``{game_id?, game?, family?, diff_summary?, validation?}``
+                                   → 创建结果通知（``game`` = 注册表条目）；
+                                     **无 ``game``** 时前端打开创建游戏页
+                                     （无 LLM 兜底路径：不臆造规则）
 settings   ``{}``                   → 前端展示设置
 platform   ``{}``                   → 前端切回完整平台界面
 benchmark  ``{}``                   → 前端展示评测中心
@@ -80,6 +95,7 @@ from ...result import player_won
 from ...review import ReviewReport
 from ...review import analyze as review_analyze
 from ..engine_helpers import (
+    build_seat_names,
     canonical_family_text,
     game_family,
     mahjong_tile_name,
@@ -88,8 +104,14 @@ from ..engine_helpers import (
     social_role_name,
     uno_card_name,
 )
-from .custom_games import CustomGameRegistry
-from .game_knowledge import GAME_ALIASES, game_knowledge_text, game_rules_text
+from .custom_games import CustomGameError, CustomGameRegistry
+from .game_knowledge import (
+    DIFFICULTY_LABELS,
+    GAME_ALIASES,
+    THEME_LABELS,
+    game_knowledge_text,
+    game_rules_text,
+)
 from .games import GAMES
 from .platform_knowledge import (
     PLATFORM_TOPIC_KEYS,
@@ -132,6 +154,11 @@ _INFO_TOOLS = (
     "get_match_review",
     "get_platform_help",
 )
+
+#: 就地执行的工具全集 = 只读信息工具 + 有副作用的本地工具。工具循环用
+#: 它挑「动作工具」（其余才算映射意图的一次性动作）；``create_game``
+#: 因此不再走 ``_intent_from_tool`` 的空参映射，而是真正执行创建。
+_LOCAL_TOOLS = (*_INFO_TOOLS, "create_game")
 
 #: get_match_state 的载荷预算（字符）。玩家投影快照除头部/棋盘/噪音
 #: 字段外逐 key 序列化，超预算截断（fail-soft，宁缺毋滥）。
@@ -195,7 +222,7 @@ _FALLBACK_REPLIES = {
     "restart": "好，重新开一局！",
     "history": "这是你最近的战绩 👇",
     "review": "复盘已为你展开 👇",
-    "create": "创建游戏面板已为你展开 👇",
+    "create": "已为你打开创建游戏页 👇",
     "settings": "设置面板已为你展开 👇",
     "platform": "已为你打开完整平台界面 👇",
     "benchmark": "评测中心已为你展开 👇",
@@ -209,7 +236,7 @@ _HELP_TEXT = (
     "· “继续上一局” —— 恢复进行中的对局\n"
     "· 对局中：“下第2行第3列” / “这步怎么走” / “提示我”\n"
     "· “看战绩” / “复盘上一局”\n"
-    "· “创建一个新游戏” —— 用自然语言写规则\n"
+    "· “创建一个新游戏” —— 直接说规则，我帮你生成（也可进「创建游戏」页）\n"
     "· “打开平台界面” —— 切回完整界面\n"
     "· “设置” / “评测中心” / “在线学习” —— 各功能面板"
 )
@@ -223,7 +250,7 @@ _RESTART_RE = re.compile(
 _HINT_RE = re.compile(r"(?:提示|怎么走|这步为什么|帮我想|下一步)")
 _HISTORY_RE = re.compile(r"(?:战绩|历史|记录|胜率|输赢|数据)")
 _REVIEW_RE = re.compile(r"(?:复盘|回放|重看|复盘一下)")
-_CREATE_RE = re.compile(r"(?:创建|新建|自定义|设计一?个新?游戏)")
+_CREATE_RE = re.compile(r"(?:创建|新建|自定义|设计一?个新?游戏|(?:做|写|弄|生成|搞)一?(?:个|款|套).{0,12}游戏)")
 _SETTINGS_RE = re.compile(r"(?:设置|性格|声音|主题|偏好|选项)")
 _PLATFORM_RE = re.compile(r"(?:平台界面|完整界面|平台模式|打开平台|回去|回平台)")
 _BENCHMARK_RE = re.compile(r"(?:评测|benchmark|模拟对局|求解器对比)")
@@ -232,6 +259,50 @@ _HELP_RE = re.compile(r"(?:帮助|能做什么|怎么用|你有什么功能|你�
 _GRID_MOVE_RE = re.compile(r"(?:下|放|走)(?:第)?(\d{1,2})\s*行\s*(?:第)?(\d{1,2})\s*列")
 _GRID_CELL_RE = re.compile(r"(?:下|放|走)\s*(?:第)?(\d{1,2})\s*(?:格|格位置|个空位)")
 _CENTER_RE = re.compile(r"(?:中间|正中|中心)")
+
+#: 无 LLM 兜底的开局偏好解析（与前端 ``intents.ts::parseBattleOptions`` 同表）。
+#: 每条 = ``(play_game 参数名, 取值, 触发正则)``，按序覆盖（同键后命中者胜）。
+#: 刻意保守：只在措辞明确时命中，认不出的偏好一律不填——宁可走默认开局，
+#: 也不要把「标准节奏」误判成难度档。
+_BATTLE_COUNT_RE = re.compile(r"(\d{1,2}|[二两三四五六七八九十]{1,3})\s*个?\s*人")
+#: 中文数词 → 阿拉伯数字（“三人局”“四人麻将”与“3 人”等价；与前端同表）。
+_CN_NUMERALS: dict[str, int] = {
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+    "十一": 11,
+    "十二": 12,
+}
+_BATTLE_OPTION_RULES: tuple[tuple[str, Any, re.Pattern[str]], ...] = (
+    ("difficulty", "easy", re.compile(r"(?:简单|容易)")),
+    ("difficulty", "hard", re.compile(r"(?:困难|高难)")),
+    ("difficulty", "normal", re.compile(r"(?:普通|中等)")),
+    ("teaching", True, re.compile(r"(?:教学对局|教学|教练|带我打|带打)")),
+    ("persona", "gentle", re.compile(r"(?:温柔|贴心|陪玩)")),
+    ("persona", "banter", re.compile(r"(?:吐槽|幽默|搞笑)")),
+    ("persona", "cold", re.compile(r"(?:高冷|严肃|竞技)")),
+    ("hint_level", "demo", re.compile(r"(?:演示|示范)")),
+    ("hint_level", "specific", re.compile(r"(?:具体建议|具体提示|详细建议|详细提示)")),
+    ("hint_level", "direction", re.compile(r"(?:方向提示|给我方向|指个方向)")),
+    ("hint_level", "off", re.compile(r"(?:关闭提示|不要提示|别提示)")),
+    ("pacing", "fast", re.compile(r"(?:快棋|快节奏|快点下|下快点)")),
+    ("pacing", "slow", re.compile(r"(?:慢棋|慢节奏|慢慢来)")),
+    ("theme", "fruit", re.compile(r"水果")),
+    ("theme", "food", re.compile(r"美食")),
+    ("theme", "animal", re.compile(r"动物")),
+    ("theme", "object", re.compile(r"物品")),
+    ("theme", "place", re.compile(r"地点")),
+    ("theme", "plant", re.compile(r"植物")),
+    ("adaptive", True, re.compile(r"自适应")),
+    ("adaptive", False, re.compile(r"(?:不要|不用|别|关闭).{0,4}自适应")),
+)
 
 _GOOD_WORDS = ("赢", "好", "棒", "哈", "谢", "厉害")
 _BAD_WORDS = ("输", "难过", "唉", "可惜", "气", "烦")
@@ -263,9 +334,11 @@ def _collect_games(custom: CustomGameRegistry | None) -> list[dict]:
     """Built-in + custom catalog for the ``play_game`` tool and fallback.
 
     Keeps each game's ``description`` — the one-line authoritative intro
-    from ``GameSpec`` / the custom entry.  It feeds the system prompt and
-    the info tools, so the model never has to *guess* what a game is
-    (the "月亮棋是什么？" hallucination class).
+    from ``GameSpec`` / the custom entry — plus its **可配置面**
+    （人数档 / 难度档 / 座位 / 主题）：``describe_game`` 与系统提示据此
+    让模型填 ``play_game`` 的偏好参数，不必猜合法取值。它 feeds the
+    system prompt and the info tools, so the model never has to *guess*
+    what a game is (the "月亮棋是什么？" hallucination class).
     """
     games: list[dict] = [
         {
@@ -274,19 +347,32 @@ def _collect_games(custom: CustomGameRegistry | None) -> list[dict]:
             "description": spec.description,
             "kind": spec.kind,
             "family": _BUILTIN_FAMILY.get(spec.game_id),
+            "player_counts": list(spec.player_counts),
+            "difficulties": list(spec.difficulty_budgets),
+            "seat_options": list(spec.seat_options),
+            "seat_label": spec.seat_label,
+            "seat_names": build_seat_names(_BUILTIN_FAMILY.get(spec.game_id) or "unknown", spec.seat_options),
+            "variant_themes": list(spec.variant_themes) if spec.variant_themes else None,
         }
         for spec in GAMES.values()
     ]
     if custom is not None:
         for entry in custom.list_games():
+            family = entry.get("family")
             games.append(
                 {
                     "game_id": str(entry.get("game_id", "")),
                     "display_name": str(entry.get("display_name") or entry.get("game_id", "")),
                     "description": str(entry.get("description") or ""),
                     "kind": "board",
-                    "family": entry.get("family"),
+                    "family": family,
                     "custom": True,
+                    "player_counts": list(entry.get("player_counts") or ()),
+                    "difficulties": list(entry.get("difficulties") or ("easy", "normal", "hard")),
+                    "seat_options": list(entry.get("seat_options") or ()),
+                    "seat_label": entry.get("seat_label"),
+                    "seat_names": build_seat_names(str(family or "unknown"), entry.get("seat_options") or ()),
+                    "variant_themes": list(entry.get("variant_themes") or ()) or None,
                 }
             )
     # 去重（自定义游戏可能覆盖内置 id）
@@ -303,6 +389,131 @@ def _game_brief(g: dict) -> str:
     """One catalog line for the system prompt: 名字(id)：一句话简介。"""
     desc = str(g.get("description") or "")
     return f"{g['display_name']}({g['game_id']})" + (f"：{desc}" if desc else "")
+
+
+def _config_surface_text(game: dict) -> str:
+    """目录条目 → 「可配置项」一行（人数/难度/座位/主题；缺项自动省略）.
+
+    ``describe_game`` 的收尾行：模型据此知道该游戏**合法**的偏好取值，
+    再把它从用户那句话里读到的偏好填进 ``play_game`` —— 不用猜、不用问。
+    取值一律「中文名(机器 id)」双轨，与合法动作的表述口径一致。
+    """
+    parts: list[str] = []
+    counts = game.get("player_counts") or []
+    if counts:
+        parts.append("人数: " + "、".join(f"{c}人" for c in counts))
+    tiers = game.get("difficulties") or []
+    if tiers:
+        parts.append("难度: " + "、".join(f"{DIFFICULTY_LABELS.get(str(d), str(d))}({d})" for d in tiers))
+    seats = game.get("seat_options") or []
+    if seats:
+        names = game.get("seat_names") or {}
+        label = str(game.get("seat_label") or "座位")
+        parts.append(f"{label}: " + "、".join(f"{names.get(str(s), str(s))}({s})" for s in seats))
+    themes = game.get("variant_themes") or []
+    if themes:
+        parts.append("主题: " + "、".join(f"{THEME_LABELS.get(str(t), str(t))}({t})" for t in themes))
+    if not parts:
+        return ""
+    return "可配置项 —— " + "；".join(parts)
+
+
+#: ``play_game`` 偏好的「工具参数名 → 前端 BattleConfig 字段」映射
+#: （见 platform-frontend/src/chat/battleConfig.ts 的白名单——两侧同表）。
+_PLAY_CONFIG_FIELDS: dict[str, str] = {
+    "player_count": "playerCount",
+    "difficulty": "difficulty",
+    "theme": "theme",
+    "player_pid": "playerPid",
+    "persona": "persona",
+    "hint_level": "hintLevel",
+    "pacing": "pacing",
+    "adaptive": "adaptive",
+    "teaching": "teaching",
+}
+
+#: 平台级枚举（与游戏无关的偏好档位；未命中的取值一律丢弃并如实上报）。
+_PERSONA_VALUES = ("gentle", "teacher", "banter", "cold")
+_HINT_LEVEL_VALUES = ("off", "direction", "specific", "demo")
+_PACING_VALUES = ("fast", "standard", "slow")
+
+
+def _validated_play_config(game: dict | None, arguments: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """校验 ``play_game`` 的偏好参数 → ``(config, ignored)``.
+
+    - ``config`` —— 只含该游戏**真的支持**的项：人数在 ``player_counts``
+      内、难度在 ``difficulties`` 内、座位在 ``seat_options`` 内、主题在
+      ``variant_themes`` 内；性格/提示档/节奏为平台级枚举；两个布尔开关
+      严格取 bool（字符串一律不认，避免把 ``"false"`` 当 True）。
+    - ``ignored`` —— 用户提了但本游戏不支持的项（人类可读短句），交给
+      前端在开局提示里说明：宁可说"这游戏不支持 9 人"，也不静默吞掉。
+
+    任何拿不准的取值都**丢弃而不报错**：偏好非法绝不该让开局失败
+    （fail-soft），缺省/全非法时 ``config`` 为空 dict。
+    """
+    config: dict[str, Any] = {}
+    ignored: list[str] = []
+    if not isinstance(arguments, dict):
+        return config, ignored
+    counts = [int(c) for c in (game or {}).get("player_counts") or ()]
+    tiers = [str(d) for d in (game or {}).get("difficulties") or ()]
+    seats = [str(s) for s in (game or {}).get("seat_options") or ()]
+    themes = [str(t) for t in (game or {}).get("variant_themes") or ()]
+    for raw_key, field_name in _PLAY_CONFIG_FIELDS.items():
+        if raw_key not in arguments or arguments.get(raw_key) is None:
+            continue
+        value = arguments.get(raw_key)
+        if field_name in ("adaptive", "teaching"):
+            if isinstance(value, bool):
+                config[field_name] = value
+            continue
+        if field_name == "playerCount":
+            try:
+                count = int(value)
+            except (TypeError, ValueError):
+                continue
+            if counts and count not in counts:
+                ignored.append(f"{count}人")
+                continue
+            config[field_name] = count
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        if field_name == "difficulty":
+            if tiers and text not in tiers:
+                ignored.append(f"难度 {DIFFICULTY_LABELS.get(text, text)}")
+                continue
+            config[field_name] = text
+        elif field_name == "theme":
+            # 只有**声明了主题**的游戏才接受主题：``/api/match/start`` 见到 theme 就会
+            # 按 ``f"{theme}_{tier}"`` 拼 variant 传给引擎——给无主题的游戏塞主题会
+            # 变成一个非法变体。拿不准就当"不支持"上报。
+            if not themes or text not in themes:
+                ignored.append(f"主题 {THEME_LABELS.get(text, text)}")
+                continue
+            config[field_name] = text
+        elif field_name == "playerPid":
+            if seats and text not in seats:
+                ignored.append(f"座位 {text}")
+                continue
+            config[field_name] = text
+        elif field_name == "persona":
+            if text not in _PERSONA_VALUES:
+                ignored.append(f"性格 {text}")
+                continue
+            config[field_name] = text
+        elif field_name == "hintLevel":
+            if text not in _HINT_LEVEL_VALUES:
+                ignored.append(f"提示档 {text}")
+                continue
+            config[field_name] = text
+        elif field_name == "pacing":
+            if text not in _PACING_VALUES:
+                ignored.append(f"节奏 {text}")
+                continue
+            config[field_name] = text
+    return config, ignored
 
 
 # ── 传给 LLM 的信息「不过分技术化」：快照/合法动作 → 中文读法 ──────
@@ -801,18 +1012,23 @@ def _system_prompt(
             "规则：",
             "1. 用户没指明玩哪个游戏时，不要调用 play_game，直接回复询问（intent clarify）。",
             "2. 对局中的替玩家落子/发言只能用描述里给出的合法动作；含糊的话不调用动作工具，直接聊天。",
-            "3. 你能看到**自己**的底牌/手牌（仅供判断牌力、决定下注与虚张），"
+            "3. 用户一句话里带了开局偏好（人数/难度/主题/性格/提示档/节奏/自适应/教学/座位）时，"
+            "把偏好填进 play_game 的对应参数；取值先看 describe_game 给出的可配置项，"
+            "用户没说的**不要为了问而问**——直接省略按默认开局（前端不再有开局配置卡）。",
+            "4. 用户要创建游戏：信息够了（规则描述，或基础模板 + 改动描述）直接调用 create_game，"
+            "不要自己编造规则；缺规则或缺基础模板时先追问（intent clarify）。",
+            "5. 你能看到**自己**的底牌/手牌（仅供判断牌力、决定下注与虚张），"
             "但**看不到玩家的底牌/手牌/身份**——那是玩家的隐藏信息。"
             "需要局面细节时调用 get_match_state（它返回**你(AI)自己可见的投影**："
             "你的底牌 + 公共牌 + 公开下注；绝不含玩家底牌——也不要猜测玩家底牌）。",
-            "4. 红线一：绝不提及或猜测玩家的未公开信息（底牌、手牌、身份等）——只能基于玩家"
+            "6. 红线一：绝不提及或猜测玩家的未公开信息（底牌、手牌、身份等）——只能基于玩家"
             "公开的下注/弃牌/摸打序列推断意图（读人），绝不报玩家未公开牌面。",
-            "5. 红线二：绝不报出**你自己**底牌的具体花色与点数（如「黑桃4」「♠A」「s10」"
+            "7. 红线二：绝不报出**你自己**底牌的具体花色与点数（如「黑桃4」「♠A」「s10」"
             "「红5」），只能说「这手还行」「牌不大」「一对K」这类模糊牌力——报出具体牌面"
             "等于明牌，会直接毁掉这局；终局 showdown 揭底后双方牌公开，可做完整复盘式点评。",
-            "6. 知识红线：用户问游戏/平台知识（“X是什么/怎么玩/规则/有哪些游戏”）时，先调用 "
+            "8. 知识红线：用户问游戏/平台知识（“X是什么/怎么玩/规则/有哪些游戏”）时，先调用 "
             "describe_game / list_games 取权威资料，只依据资料回答；资料里没有的细节不要编造。",
-            "7. 平台功能提问：用户问**某功能怎么用/在哪**时，先调用 get_platform_help 取该主题的"
+            "9. 平台功能提问：用户问**某功能怎么用/在哪**时，先调用 get_platform_help 取该主题的"
             "权威说明，再依据资料回答；不要泛泛而谈或编造功能细节。",
         ]
     else:
@@ -821,13 +1037,18 @@ def _system_prompt(
             "规则：",
             "1. 用户没指明玩哪个游戏时，不要调用 play_game，直接回复询问（intent clarify）。",
             "2. 对局中的落子/发言只能用描述里给出的合法动作；含糊的话不调用动作工具，直接聊天。",
-            "3. 隐藏信息红线：不得编造任何对手/其他玩家的未公开信息"
+            "3. 用户一句话里带了开局偏好（人数/难度/主题/性格/提示档/节奏/自适应/教学/座位）时，"
+            "把偏好填进 play_game 的对应参数；取值先看 describe_game 给出的可配置项，"
+            "用户没说的**不要为了问而问**——直接省略按默认开局（前端不再有开局配置卡）。",
+            "4. 用户要创建游戏：信息够了（规则描述，或基础模板 + 改动描述）直接调用 create_game，"
+            "不要自己编造规则；缺规则或缺基础模板时先追问（intent clarify）。",
+            "5. 隐藏信息红线：不得编造任何对手/其他玩家的未公开信息"
             "（手牌、身份、底牌、未翻开的牌、棋局评估等）——依据用户输入和给出的合法动作行事；"
             "需要局面细节时调用 get_match_state（它返回玩家自己可见的投影）。",
-            "4. 知识红线：用户问游戏/平台知识（“X是什么/怎么玩/规则/有哪些游戏”）时，先调用 "
+            "6. 知识红线：用户问游戏/平台知识（“X是什么/怎么玩/规则/有哪些游戏”）时，先调用 "
             "describe_game / list_games 取权威资料，只依据资料回答；资料里没有的细节不要编造，"
             "直接说不知道或建议开一局体验。",
-            "5. 平台功能提问：用户问**某功能怎么用/在哪**（“怎么创建游戏”“在线学习怎么用”“评测中心"
+            "7. 平台功能提问：用户问**某功能怎么用/在哪**（“怎么创建游戏”“在线学习怎么用”“评测中心"
             "在哪”“教学对局是什么”“视觉识别”“LLM配置”）时，先调用 get_platform_help 取该主题的"
             "权威说明，再依据资料回答；不要泛泛而谈或编造功能细节。",
         ]
@@ -873,14 +1094,19 @@ def _system_prompt(
 def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[dict]:
     """Build the OpenAI ``tools`` list for the current context.
 
-    Besides the action tools this always exposes the *info* tools —
-    read-only queries the backend executes in-loop and feeds back as
-    ``role: "tool"`` messages: ``describe_game`` / ``list_games`` (the
-    registry + play docs), ``get_platform_help`` (per-feature platform
-    help docs — answers “具体功能怎么用” from authoritative data),
-    ``get_match_review`` (latest match timeline + key nodes) and,
+    Besides the action tools this always exposes the *local* tools — the
+    ones the backend executes in-loop and feeds back as ``role: "tool"``
+    messages: ``describe_game`` / ``list_games`` (the registry + play docs
+    + **可配置面**), ``get_platform_help`` (per-feature platform help docs
+    — answers “具体功能怎么用” from authoritative data),
+    ``get_match_review`` (latest match timeline + key nodes),
+    ``create_game`` (自然语言规则/模板变体 → 真正落盘的自定义游戏) and,
     mid-match, ``get_match_state`` (the player-projected live snapshot)
     + ``ask_hint`` (the mechanical hint).
+
+    ``play_game`` 带**偏好参数**：模型从用户那句话里取（“三人局、困难、
+    教学对局”），服务端按注册表校验后才传前端——前端不再有开局配置卡，
+    所以这里的参数契约就是"配置界面"。
     """
     game_enum = [g["game_id"] for g in games if g["game_id"]]
     tools: list[dict] = [
@@ -888,11 +1114,57 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
             "type": "function",
             "function": {
                 "name": "play_game",
-                "description": "用户想玩某款游戏 / 开局 / 对战。游戏没指明时不要调用。",
+                "description": (
+                    "用户想玩某款游戏 / 开局 / 对战。游戏没指明时不要调用。"
+                    "用户一句话里带了偏好就一并填上：player_count 人数、difficulty 难度、"
+                    "theme 主题（多主题游戏）、persona 陪玩性格、hint_level 提示档、"
+                    "pacing 节奏、adaptive 自适应难度、teaching 教学对局、player_pid 座位。"
+                    "取值必须来自 describe_game 给出的可配置项；不确定或用户没说就省略，"
+                    "不要为了问而问——省略即按默认开局。"
+                ),
                 "parameters": {
                     "type": "object",
-                    "properties": {"game_id": {"type": "string", "enum": game_enum}},
+                    "properties": {
+                        "game_id": {"type": "string", "enum": game_enum},
+                        "player_count": {"type": "integer", "description": "人数（须在该游戏支持人数档内）"},
+                        "difficulty": {"type": "string", "enum": ["easy", "normal", "hard"]},
+                        "theme": {
+                            "type": "string",
+                            "description": "主题 id（仅 undercover 等多主题游戏；见 describe_game）",
+                        },
+                        "persona": {"type": "string", "enum": ["gentle", "teacher", "banter", "cold"]},
+                        "hint_level": {"type": "string", "enum": ["off", "direction", "specific", "demo"]},
+                        "pacing": {"type": "string", "enum": ["fast", "standard", "slow"]},
+                        "adaptive": {"type": "boolean", "description": "自适应难度（按近期胜率自动升降）"},
+                        "teaching": {"type": "boolean", "description": "教学对局（教练看你的牌带你打）"},
+                        "player_pid": {"type": "string", "description": "人类座位 pid（见 describe_game）"},
+                    },
                     "required": ["game_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_game",
+                "description": (
+                    "创建自定义游戏：用户描述规则（mode=from_scratch，rule_text 必填）或"
+                    "基于已有游戏改变体（mode=variant，base_game_id + change_text 必填）。"
+                    "用户没说规则/没说基础模板时**不要调用**，先追问（intent clarify）；"
+                    "信息够了就调用，不要自己编造规则。默认走确定性模板翻译（快）；"
+                    "只有用户明确要求用大模型翻译时才 use_llm=true（较慢）。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {"type": "string", "enum": ["from_scratch", "variant"]},
+                        "rule_text": {"type": "string", "description": "从零描述的游戏规则（中文自然语言）"},
+                        "base_game_id": {"type": "string", "description": "变体模式的基础模板 id"},
+                        "change_text": {"type": "string", "description": "变体模式要做的改动描述"},
+                        "game_name": {"type": "string", "description": "可选游戏名"},
+                        "use_llm": {"type": "boolean", "description": "是否用 LLM 翻译规则（默认 false）"},
+                    },
+                    "required": ["mode"],
                 },
             },
         },
@@ -901,8 +1173,9 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
             "function": {
                 "name": "describe_game",
                 "description": (
-                    "查询某款游戏的权威介绍（一句话简介、玩法规则要点、支持人数、难度档）。"
-                    "用户问“X是什么/怎么玩/规则”时先调用它，再依据返回的资料回答。"
+                    "查询某款游戏的权威介绍（一句话简介、玩法规则要点、支持人数、难度档、"
+                    "座位、主题等可配置项）。用户问“X是什么/怎么玩/规则”时先调用它；"
+                    "需要知道某款游戏能怎么配置（人数/难度/主题）时也调用它，再据此填 play_game 参数。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -1051,7 +1324,10 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
         )
     for name, description in [
         ("show_history", "用户想看战绩/历史/胜率时调用"),
-        ("create_game", "用户想创建/自定义新游戏时调用"),
+        # 注意：create_game 上面已有**带参数**的同名工具（本地执行、真正落盘），
+        # 这里绝不能再登记一次——工具名重复会被端点的 schema 校验整包拒绝
+        # （DeepSeek：400 Tool names must be unique），全量工具随之失效、
+        # 每个聊天回合都掉进正则兜底。见 test_build_tools_names_are_unique。
         ("update_settings", "用户想改设置/性格/主题时调用"),
         ("open_platform", "用户想回到完整平台界面时调用"),
         ("run_benchmark", "用户想看评测/求解器对比时调用"),
@@ -1110,7 +1386,7 @@ def _find_game(text: str, games: list[dict]) -> dict | None:
     return best
 
 
-def _execute_info_tool(
+def _execute_local_tool(
     name: str,
     arguments: dict[str, Any],
     *,
@@ -1118,28 +1394,36 @@ def _execute_info_tool(
     session: Any = None,
     manager: PlayManager | None = None,
     match_history: Any = None,
+    custom: CustomGameRegistry | None = None,
+    allow_create: bool = True,
 ) -> ChatTurnResult:
-    """Run one *info* tool locally (fail-soft).
+    """Run one *local* tool in-process (fail-soft).
 
     Returns the executed :class:`ChatTurnResult`: its ``text`` is the
     ``role: "tool"`` payload the model reads *and* doubles as the
     deterministic answer when the tool-round budget runs out; tools that
     map to a frontend intent (``ask_hint`` → ``hint`` with the hint
-    dict, ``get_match_review`` → ``review`` with the report) carry
+    dict, ``get_match_review`` → ``review`` with the report,
+    ``create_game`` → ``create`` with the created registry entry) carry
     intent + params so the narration lands on the right intent.
 
     Deterministic, no LLM; read-only except ``ask_hint`` marking
     ``session.hinted`` (the user did ask for a hint — the same call the
-    ``/match/hint`` route would make).
+    ``/match/hint`` route would make) and ``create_game``，它**有副作用**
+    （翻译 + 校验 + 落盘一个自定义游戏），因此由 ``allow_create`` 闸门
+    保证同一回合至多建一个（同一批次里的重复调用回一句说明而不是再建）。
     """
     if name == "describe_game":
         game_id = str(arguments.get("game_id", ""))
         # 内置游戏走共享拼装（与陪伴对话注入同源）；custom 游戏
-        # （无 GameSpec）回落到目录条目 + description。
+        # （无 GameSpec）回落到目录条目 + description。两条路径都以
+        # 「可配置项」一行收尾——play_game 的取值就来自这里。
+        game = next((g for g in games if g["game_id"] == game_id), None)
+        surface = _config_surface_text(game) if game is not None else ""
         knowledge = game_knowledge_text(game_id)
         if knowledge:
-            return ChatTurnResult(intent="chat", text=knowledge, mood="thinking", params={})
-        game = next((g for g in games if g["game_id"] == game_id), None)
+            body = knowledge + ("\n" + surface if surface else "")
+            return ChatTurnResult(intent="chat", text=body, mood="thinking", params={})
         if game is None:
             body = f"未找到游戏 {game_id!r}。可用游戏请调用 list_games 查看。"
             return ChatTurnResult(intent="chat", text=body, mood="thinking", params={})
@@ -1147,6 +1431,8 @@ def _execute_info_tool(
         desc = str(game.get("description") or "")
         if desc:
             parts.append(desc)
+        if surface:
+            parts.append(surface)
         rules_md = game_rules_text(game_id)
         if rules_md:
             parts.append("规则要点:\n" + rules_md)
@@ -1181,7 +1467,80 @@ def _execute_info_tool(
         return _ask_hint_result(arguments, session, manager)
     if name == "get_match_review":
         return _match_review_result(match_history, arguments)
+    if name == "create_game":
+        if not allow_create:
+            # 同回合并发重复调用：已经有创建在执行，别再建第二个。
+            return ChatTurnResult(intent="chat", text="（同一回合只执行一次创建。）", mood="thinking", params={})
+        return _create_game_result(arguments, custom)
     return ChatTurnResult(intent="chat", text="", params={})
+
+
+def _create_error_text(exc: CustomGameError) -> str:
+    """``CustomGameError`` → 给模型读的文本化失败原因（fail-soft，不抛）."""
+    lines = [f"创建失败：{exc}"]
+    validation = getattr(exc, "validation", None)
+    errors = list(getattr(validation, "errors", ()) or ())
+    warnings = list(getattr(validation, "warnings", ()) or ())
+    if errors:
+        lines.append("校验错误: " + "；".join(str(e) for e in errors[:6]))
+    if warnings:
+        lines.append("校验警告: " + "；".join(str(w) for w in warnings[:6]))
+    lines.append("可以换一种说法重试，或改用平台「创建游戏」页手动创建。")
+    return "\n".join(lines)
+
+
+def _create_game_result(arguments: dict[str, Any], custom: CustomGameRegistry | None) -> ChatTurnResult:
+    """Execute ``create_game``: 用户口述的规则/变体 → 落盘的自定义游戏.
+
+    有副作用的本地工具（与 ``ask_hint`` 同列：就地执行 + 携带意图）。
+    成功返回 ``create`` 意图 + ``params.game``（注册表条目，与
+    ``/api/custom/games`` 的 ``game`` 字段同源）：前端据此刷新游戏目录
+    （新游戏立刻能被「玩X」命中）并提示下一句怎么说。失败/注册表未启用
+    一律文本化上报并回退 ``chat`` 意图，让模型解释原因——绝不抛异常毁掉
+    一个聊天回合。
+
+    ``use_llm`` 默认 False（确定性模板翻译，快）；只有用户明确要求用
+    大模型翻译时才走 LLM（慢且有等待）。
+    """
+    if custom is None:
+        return ChatTurnResult(
+            intent="chat",
+            text="自定义游戏注册表未启用，暂时不能在对话里创建游戏；可改用平台「创建游戏」页。",
+            mood="thinking",
+            params={},
+        )
+    mode = str(arguments.get("mode") or "from_scratch").strip()
+    if mode not in ("from_scratch", "variant"):
+        mode = "from_scratch"
+    try:
+        entry = custom.create(
+            mode=mode,
+            rule_text=arguments.get("rule_text"),
+            base_game_id=arguments.get("base_game_id"),
+            change_text=arguments.get("change_text"),
+            game_name=arguments.get("game_name"),
+            use_llm=bool(arguments.get("use_llm", False)),
+        )
+    except CustomGameError as exc:
+        return ChatTurnResult(intent="chat", text=_create_error_text(exc), mood="sorry", params={})
+    except Exception as exc:  # 翻译器/校验器任何异常都不该毁掉一个聊天回合
+        logger.warning("create_game 工具执行失败: %s", exc)
+        return ChatTurnResult(intent="chat", text=f"创建失败：{exc}", mood="sorry", params={})
+    game_id = str(entry.get("game_id") or "")
+    name = str(entry.get("display_name") or game_id)
+    body = f"创建成功《{name}》（id: {game_id}，族: {entry.get('family') or '未知'}）。想玩就说“玩{name}”。"
+    return ChatTurnResult(
+        intent="create",
+        text=body,
+        mood="happy",
+        params={
+            "game_id": game_id,
+            "game": entry,
+            "family": entry.get("family"),
+            "diff_summary": entry.get("diff_summary"),
+            "validation": entry.get("validation"),
+        },
+    )
 
 
 def _ask_hint_result(arguments: dict[str, Any], session: Any, manager: PlayManager | None) -> ChatTurnResult:
@@ -1255,18 +1614,30 @@ def _intent_from_tool(
     games: list[dict],
     session: Any,
 ) -> ChatTurnResult:
-    """Map one validated tool call to the intent contract (fail-soft on bad args)."""
+    """Map one validated tool call to the intent contract (fail-soft on bad args).
+
+    ``play_game`` 的偏好参数在这里按注册表校验：合法项进 ``params.config``，
+    用户提了但本游戏不支持的进 ``params.config_ignored``（前端开局提示里
+    明说，绝不静默）。**都不为真时不产生这两个键**——「玩月亮棋」这类
+    零偏好请求的参数形状与旧版完全一致（既有断言不破）。
+    """
     if name == "play_game":
         game_id = str(arguments.get("game_id", ""))
         game = next((g for g in games if g["game_id"] == game_id), None)
         if game is None:
             chips = [g["display_name"] for g in games[:8]]
             return ChatTurnResult(intent="clarify", text="想玩哪一款？", params={"chips": chips})
+        config, ignored = _validated_play_config(game, arguments)
+        params: dict[str, Any] = {"game_id": game_id}
+        if config:
+            params["config"] = config
+        if ignored:
+            params["config_ignored"] = ignored
         return ChatTurnResult(
             intent="play",
             text=f"好，来一局{game['display_name']}！对局正在创建…",
             mood="happy",
-            params={"game_id": game_id},
+            params=params,
         )
     if name == "resume_session":
         if session is not None and not session.over:
@@ -1297,13 +1668,16 @@ def _intent_from_tool(
                 params={},
             )
         return ChatTurnResult(intent="move", text="好，走这步！", mood="happy", params={"action": action})
-    # ask_hint / get_match_review 是信息工具（_execute_info_tool 就地执行并
-    # 携带 intent），不再走动作映射——这里不再有对应分支。
+    # ask_hint / get_match_review / create_game 是本地工具（_execute_local_tool
+    # 就地执行并携带 intent），不再走动作映射——这里不再有对应分支。
     if name == "restart_game":
         return ChatTurnResult(intent="restart", text=_FALLBACK_REPLIES["restart"], mood="neutral", params={})
     if name == "show_history":
         return ChatTurnResult(intent="history", text=_FALLBACK_REPLIES["history"], params={})
     if name == "create_game":
+        # 兜底：create_game 是就地执行的本地工具，正常不会走到这里
+        # （``_LOCAL_TOOLS`` 让它不进动作映射）；万一模型用错参数形状，
+        # 仍然落到打开创建游戏页，而不是无声丢弃。
         return ChatTurnResult(intent="create", text=_FALLBACK_REPLIES["create"], params={})
     if name == "update_settings":
         return ChatTurnResult(intent="settings", text=_FALLBACK_REPLIES["settings"], params={})
@@ -1344,6 +1718,29 @@ def _grid_cell_from_text(text: str, session: Any) -> dict | None:
     return None
 
 
+def _parse_battle_options(text: str) -> dict[str, Any]:
+    """从一句话里抠开局偏好（无 LLM 兜底；与前端 ``parseBattleOptions`` 同表）.
+
+    返回值就是 ``play_game`` 的**工具参数形状**，随后交给
+    :func:`_validated_play_config` 按注册表校验 —— 无 LLM 路径与工具调用
+    路径共用同一套校验与同一个 ``params.config`` 契约，不存在两套口径。
+    只在措辞明确时命中；认不出的一律不填（默认开局），宁可少配不可误配。
+    """
+    out: dict[str, Any] = {}
+    if not text:
+        return out
+    m = _BATTLE_COUNT_RE.search(text)
+    if m:
+        raw = m.group(1)
+        count = int(raw) if raw.isdigit() else _CN_NUMERALS.get(raw)
+        if count is not None:
+            out["player_count"] = count
+    for key, value, pattern in _BATTLE_OPTION_RULES:
+        if pattern.search(text):
+            out[key] = value
+    return out
+
+
 def fallback_intent(text: str, games: list[dict], session: Any) -> ChatTurnResult:
     """Deterministic regex routing used when the LLM is unavailable."""
     mood = _mood_for(text)
@@ -1379,13 +1776,21 @@ def fallback_intent(text: str, games: list[dict], session: Any) -> ChatTurnResul
             except Exception:
                 return ChatTurnResult(intent="clarify", text="这个位置当前不能下，换个格试试。", mood=mood, params={})
 
-    # 明确点名游戏 → play（优先级高于其它意图）
+    # 明确点名游戏 → play（优先级高于其它意图）。偏好同样在这里读：
+    # 「三人局、困难、教学对局，玩谁是卧底」无需 LLM 也能落到 params.config
+    # （与工具调用路径同一契约、同一校验）。
     if game is not None and _PLAY_RE.search(text):
+        config, ignored = _validated_play_config(game, _parse_battle_options(text))
+        params: dict[str, Any] = {"game_id": game["game_id"]}
+        if config:
+            params["config"] = config
+        if ignored:
+            params["config_ignored"] = ignored
         return ChatTurnResult(
             intent="play",
             text=f"好，来一局{game['display_name']}！对局正在创建…",
             mood="happy",
-            params={"game_id": game["game_id"]},
+            params=params,
         )
     if _HINT_RE.search(text) and has_session:
         return ChatTurnResult(intent="hint", text=_FALLBACK_REPLIES["hint"], mood="thinking", params={})
@@ -1605,7 +2010,7 @@ def _chat_turn_core(
                     carried.text = reply.text.strip()
                     return carried
                 break
-            action = next((c for c in reply.tool_calls if str(c.name) not in _INFO_TOOLS), None)
+            action = next((c for c in reply.tool_calls if str(c.name) not in _LOCAL_TOOLS), None)
             if action is not None:
                 args = action.arguments if isinstance(action.arguments, dict) else {}
                 result = _intent_from_tool(str(action.name), args, games=games, session=session)
@@ -1614,19 +2019,25 @@ def _chat_turn_core(
                 return result
             tool_calls_payload: list[dict[str, Any]] = []
             results: list[str] = []
+            created = False  # create_game 有副作用：同回合至多执行一次
             for call in reply.tool_calls:
                 args = call.arguments if isinstance(call.arguments, dict) else {}
                 call_seq += 1
                 call_id = call.id or f"call_{call_seq}"
                 name = str(call.name)
-                executed = _execute_info_tool(
+                allow_create = not created
+                executed = _execute_local_tool(
                     name,
                     args,
                     games=games,
                     session=session,
                     manager=manager,
                     match_history=match_history,
+                    custom=custom,
+                    allow_create=allow_create,
                 )
+                if name == "create_game" and allow_create and executed.intent == "create":
+                    created = True
                 if executed.intent != "chat" or executed.params:
                     carried = executed  # 多个携带意图时最后一个生效（同回合并发 hint+review 无实际语义）
                 results.append(executed.text)
@@ -1791,7 +2202,7 @@ def _chat_turn_stream_core(
                 yield from _stream_events(ChatTurnResult(intent="chat", text=full, mood=_mood_for(text), params={}))
                 return
             break  # 无文本无工具 → 走兜底（与 JSON 模式空回复语义一致）
-        action = next((c for c in tool_calls if str(c.name) not in _INFO_TOOLS), None)
+        action = next((c for c in tool_calls if str(c.name) not in _LOCAL_TOOLS), None)
         if action is not None:
             args = action.arguments if isinstance(action.arguments, dict) else {}
             result = _intent_from_tool(str(action.name), args, games=games, session=session)
@@ -1803,19 +2214,25 @@ def _chat_turn_stream_core(
         # 信息工具就地执行、逐个以 role:"tool" 回传（并行 tool_calls 语义与 chat_turn 一致）。
         tool_calls_payload: list[dict[str, Any]] = []
         results: list[str] = []
+        created = False  # create_game 有副作用：同回合至多执行一次
         for call in tool_calls:
             args = call.arguments if isinstance(call.arguments, dict) else {}
             call_seq += 1
             call_id = call.id or f"call_{call_seq}"
             name = str(call.name)
-            executed = _execute_info_tool(
+            allow_create = not created
+            executed = _execute_local_tool(
                 name,
                 args,
                 games=games,
                 session=session,
                 manager=manager,
                 match_history=match_history,
+                custom=custom,
+                allow_create=allow_create,
             )
+            if name == "create_game" and allow_create and executed.intent == "create":
+                created = True
             if executed.intent != "chat" or executed.params:
                 carried = executed  # 多个携带意图时最后一个生效（同回合并发 hint+review 无实际语义）
             results.append(executed.text)

@@ -38,6 +38,7 @@ import type {
 import type { BattleConfig } from '../components/BattleSetup'
 import { snapshotChatToMessages } from './snapshotChat'
 import { classifyLocal } from './intents'
+import { battleConfigFor } from './battleConfig'
 import { readConversationMirror, writeConversationMirror } from './conversationMirror'
 import { loadChatStore, openPlatform, saveChatStore } from './sessionStore'
 
@@ -75,8 +76,9 @@ export interface ChatRuntime {
   activeGameInfo: GameInfo | null
   send: (text: string) => Promise<void>
   moveAction: (action: unknown) => Promise<void>
-  startSession: (gameId: string, config: BattleConfig) => Promise<void>
-  notifyCreated: (game: GameInfo) => void
+  startSession: (gameId: string, config: BattleConfig, note?: string) => Promise<void>
+  /** 重拉游戏目录（对话里 create_game 建完新游戏后刷新，让「玩X」立刻能命中）。 */
+  refreshGames: () => Promise<void>
   clearSession: () => void
   /** 对话存档：当前会话 id（null = 新对话，首条消息懒建档）。 */
   conversationId: string | null
@@ -150,14 +152,20 @@ export function useChatRuntime(): ChatRuntime {
     messagesRef.current = messages
   }, [messages])
 
+  /** 拉取游戏目录（含自定义游戏）；失败仅上报，不影响在途动作。 */
+  const refreshGames = useCallback(async (): Promise<void> => {
+    try {
+      const d = await apiGet<{ games: GameInfo[] }>('/games')
+      setGames(d.games)
+      gamesRef.current = d.games
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }, [])
+
   // 初始数据：游戏目录 + 恢复上次对局 + 恢复对话存档。
   useEffect(() => {
-    apiGet<{ games: GameInfo[] }>('/games')
-      .then((d) => {
-        setGames(d.games)
-        gamesRef.current = d.games
-      })
-      .catch((err: Error) => setError(err.message))
+    void refreshGames()
     const stored = loadChatStore().activeGameId
     if (stored) {
       apiPost<{ session: Snapshot }>('/match/state', { game_id: stored })
@@ -315,7 +323,7 @@ export function useChatRuntime(): ChatRuntime {
   }, [])
 
   const startSession = useCallback(
-    async (gameId: string, config: BattleConfig): Promise<void> => {
+    async (gameId: string, config: BattleConfig, note = ''): Promise<void> => {
       setBusyState(true)
       setError(null)
       try {
@@ -334,10 +342,14 @@ export function useChatRuntime(): ChatRuntime {
         setActiveSession(data.session)
         _drainSnapshot(data.session)
         setActiveGameId(gameId)
-        saveChatStore({ activeGameId: gameId })
+        // 新局默认看得见：把「专心对话」的收起状态置回展开（ChatPage 跟随重读）。
+        saveChatStore({ activeGameId: gameId, boardCollapsed: false })
         const name = gamesRef.current.find((g) => g.game_id === gameId)?.display_name ?? gameId
         const teach = data.session.teaching ? '教学局：教练看得到你的牌，边打边讲。' : ''
-        pushAgent(`对局已开始：${name} 🎮 ${teach}轮到你了就下，也可以随时问我“这步怎么走”。`, 'happy')
+        pushAgent(
+          `对局已开始：${name} 🎮 ${teach}${note}轮到你了就下，也可以随时问我“这步怎么走”。`,
+          'happy',
+        )
       } catch (err) {
         setError((err as Error).message)
         pushAgent(`开局失败：${(err as Error).message}`, 'sorry')
@@ -389,9 +401,18 @@ export function useChatRuntime(): ChatRuntime {
       const { intent, text, mood } = result
       const params = result.params ?? {}
       switch (intent) {
-        case 'play':
-          pushAgent(text, mood, 'play', { game_id: params.game_id })
+        case 'play': {
+          // 开局偏好来自 play_game 工具参数（params.config，后端已按注册表校验）；
+          // 用户没说的走默认值（= 旧配置卡初值）。前端不再有开局配置卡。
+          const gameId = String(params.game_id ?? '')
+          pushAgent(text, mood, 'play', { game_id: gameId, ...(params.config ? { config: params.config } : {}) })
+          if (!gameId) break
+          const game = gamesRef.current.find((g) => g.game_id === gameId) ?? null
+          const ignored = Array.isArray(params.config_ignored) ? (params.config_ignored as unknown[]) : []
+          const note = ignored.length ? `（已忽略本游戏不支持的偏好：${ignored.map(String).join('、')}）` : ''
+          await startSession(gameId, battleConfigFor(game, params.config), note)
           break
+        }
         case 'resume': {
           const gameId = String(params.game_id ?? '')
           if (!gameId) {
@@ -451,16 +472,15 @@ export function useChatRuntime(): ChatRuntime {
             pushAgent('现在没有可重开的对局。', 'neutral')
             break
           }
-          await startSession(gameId, {
-            playerPid: activeSession?.player_pid ?? 'random',
-            difficulty: activeSession?.difficulty ?? 'easy',
-            playerCount: games.find((g) => g.game_id === gameId)?.player_counts[0] ?? 2,
-            persona: 'gentle',
-            hintLevel: 'off',
-            pacing: 'standard',
-            adaptive: true,
-            teaching: activeSession?.teaching ?? false,
-          })
+          await startSession(
+            gameId,
+            battleConfigFor(gamesRef.current.find((g) => g.game_id === gameId) ?? null, {
+              // 重开沿用本局实际设置（旧的兜底 'easy' 与别处 'normal' 口径不一，一并统一）。
+              playerPid: activeSession?.player_pid,
+              difficulty: activeSession?.difficulty,
+              teaching: activeSession?.teaching,
+            }),
+          )
           break
         }
         case 'history': {
@@ -495,9 +515,30 @@ export function useChatRuntime(): ChatRuntime {
           }
           break
         }
-        case 'create':
+        case 'create': {
+          // 两种语义（见 chat.py 的意图契约）：
+          // - 带 params.game：create_game 工具已在对话里建好 → 刷新目录 + 提示下一句；
+          // - 无 params.game：无 LLM 兜底路径不臆造规则 → 切到平台创建游戏页。
+          const created = params.game as GameInfo | undefined
+          const createdId = String(params.game_id ?? '')
+          if (created && createdId) {
+            void refreshGames()
+            const name = String(created.display_name || createdId)
+            pushAgent(text, mood, 'create', {
+              game_id: createdId,
+              game: created,
+              ...(params.family ? { family: params.family } : {}),
+            })
+            pushAgent(`《${name}》已经建好，想马上来一局就说“玩${name}”。`, 'happy', 'chat', {
+              chips: [`玩${name}`],
+            })
+            break
+          }
           pushAgent(text, mood, 'create', {})
+          openPlatform()
+          window.location.hash = '#/create'
           break
+        }
         case 'settings':
           openPlatform()
           window.location.hash = '#/settings'
@@ -540,16 +581,7 @@ export function useChatRuntime(): ChatRuntime {
           break
       }
     },
-    [activeSession, fetchStats, pushAgent, refreshSession, startSession],
-  )
-
-  const notifyCreated = useCallback(
-    (game: GameInfo) => {
-      pushAgent(`《${game.display_name}》创建成功！想马上来一局？直接说“玩${game.display_name}”。`, 'happy', 'play', {
-        game_id: game.game_id,
-      })
-    },
-    [pushAgent],
+    [activeSession, fetchStats, pushAgent, refreshGames, refreshSession, startSession],
   )
 
   const send = useCallback(
@@ -597,13 +629,18 @@ export function useChatRuntime(): ChatRuntime {
         } else {
           draftTargetRef.current = null
           setMessages((prev) => prev.filter((m) => m.id !== draftId))
-          // description / aliases 供 WHAT_IS 知识回答与短名匹配（与后端对齐）。
+          // description / aliases 供 WHAT_IS 知识回答与短名匹配；可配置面供离线
+          // 开局偏好解析（battleConfig.parseBattleOptions）用（与后端对齐）。
           const local = classifyLocal(trimmed, {
             games: gamesRef.current.map((g) => ({
               game_id: g.game_id,
               display_name: g.display_name,
               description: g.description,
               aliases: g.aliases,
+              player_counts: g.player_counts,
+              difficulties: g.difficulties,
+              seat_options: g.seat_options,
+              variant_themes: g.variant_themes,
             })),
             activeGameId: activeSession?.game_id ?? null,
             activeDisplay: activeSession ? '' : null,
@@ -707,7 +744,7 @@ export function useChatRuntime(): ChatRuntime {
     send,
     moveAction,
     startSession,
-    notifyCreated,
+    refreshGames,
     clearSession,
     conversationId,
     conversations,

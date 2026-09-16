@@ -9,8 +9,7 @@
 // data/conversations/，刷新/重开页面自动恢复当前会话。
 
 import { useEffect, useRef, useState } from 'react'
-import type { ChatMessage, ConversationMeta, GameInfo, SocialSnapshot } from '../types'
-import type { BattleConfig } from '../components/BattleSetup'
+import type { ChatMessage, ConversationMeta, SocialSnapshot } from '../types'
 import { getConversation } from '../api/client'
 import { useChatRuntime } from './useChatRuntime'
 import { loadChatStore, openPlatform, saveChatStore } from './sessionStore'
@@ -54,7 +53,7 @@ function exportMarkdown(title: string, messages: ChatMessage[]): void {
 
 export default function ChatPage() {
   const rt = useChatRuntime()
-  const { messages, busy, error, games, activeSession, activeGameInfo, conversationId, conversations } = rt
+  const { messages, busy, error, activeSession, activeGameInfo, conversationId, conversations } = rt
   const [input, setInput] = useState('')
   // 「不想玩了 / 想专心聊」：收起对局界面（对局不结束、后台继续，随时展开）。
   // 选择持久化——刷新/恢复对局后仍尊重用户上次的取舍。
@@ -73,6 +72,13 @@ export default function ChatPage() {
     if (el) el.scrollTop = el.scrollHeight
   }, [messages])
 
+  // 对局变化（对话里说出「玩月亮棋」由 runtime 直接开局）→ 重新同步持久化的
+  // 收起状态：runtime 开出新局时把 boardCollapsed 置回 false（对话里开出新局
+  // 自动展开棋盘，与旧的开局配置卡路径一致），这里跟着展开。
+  useEffect(() => {
+    setBoardCollapsed(loadChatStore().boardCollapsed)
+  }, [activeSession?.game_id])
+
   const lastAgent = [...messages].reverse().find((m) => m.role === 'agent')
 
   function chips(): string[] {
@@ -88,11 +94,6 @@ export default function ChatPage() {
   function send(text: string) {
     if (!text.trim() || busy) return
     void rt.send(text)
-  }
-
-  function startInChat(gameId: string, config: BattleConfig) {
-    setBoardCollapsedPersist(false) // 对话里开出新局 → 自动展开棋盘（收起是用户主动的选择，新局默认看得见）
-    void rt.startSession(gameId, config)
   }
 
   // 对局点击（棋盘快路径，不经 LLM）
@@ -203,15 +204,7 @@ export default function ChatPage() {
     <div className="chat-scroll" ref={scrollRef}>
       {error && <div className="chat-error-banner">{error}</div>}
       {messages.map((m) => (
-        <MessageBubble
-          key={m.id}
-          msg={m}
-          games={games}
-          busy={busy}
-          onStart={startInChat}
-          onCreated={(g: GameInfo) => rt.notifyCreated(g)}
-          onChip={send}
-        />
+        <MessageBubble key={m.id} msg={m} busy={busy} onChip={send} />
       ))}
     </div>
   )

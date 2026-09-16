@@ -30,6 +30,28 @@ test('play：点名游戏 → intent play + game_id', () => {
   assert.equal(r.intent, 'play')
   assert.equal(r.params.game_id, 'moon_chess')
   assert.equal(r.mood, 'happy')
+  // 没带偏好 → 不产生 config 键（参数形状与旧版一致，后端按默认开局）。
+  assert.ok(!('config' in r.params))
+})
+
+test('play：一句话带偏好 → params.config（与后端 fallback 同一张表）', () => {
+  const games = [
+    {
+      game_id: 'undercover',
+      display_name: '谁是卧底',
+      description: '',
+      player_counts: [8, 4, 5, 6, 7, 9, 10, 11, 12],
+      difficulties: ['easy', 'normal', 'hard'],
+      variant_themes: ['fruit', 'food'],
+    },
+  ]
+  const r = classifyLocal('四个人、困难、教学对局，玩谁是卧底', {
+    games,
+    activeGameId: null,
+    activeDisplay: null,
+  })
+  assert.equal(r.intent, 'play')
+  assert.deepEqual(r.params.config, { playerCount: 4, difficulty: 'hard', teaching: true })
 })
 
 test('play：没点名 → clarify + chips（游戏目录前 8 个显示名）', () => {
@@ -65,7 +87,12 @@ test('restart：有活跃对局 → restart + game_id', () => {
 test('功能面板意图：history / review / create / settings / platform / benchmark / learning', () => {
   assert.equal(classifyLocal('看看我的战绩', NO_SESSION).intent, 'history')
   assert.equal(classifyLocal('复盘一下上一局', NO_SESSION).intent, 'review')
-  assert.equal(classifyLocal('创建一个新游戏', NO_SESSION).intent, 'create')
+  // create：卡片下线后兜底改为跳平台创建游戏页（对话内创建走 create_game 工具）。
+  const create = classifyLocal('创建一个新游戏', NO_SESSION)
+  assert.equal(create.intent, 'create')
+  assert.ok(create.text.includes('创建游戏页'))
+  // 口述规则的常见说法（“做一个…游戏”）同样路由到创建，而不是落默认闲聊。
+  assert.equal(classifyLocal('做一个 7x7 四连的游戏，叫四子棋', NO_SESSION).intent, 'create')
   assert.equal(classifyLocal('打开设置', NO_SESSION).intent, 'settings')
   assert.equal(classifyLocal('打开平台界面', NO_SESSION).intent, 'platform')
   assert.equal(classifyLocal('看评测中心', NO_SESSION).intent, 'benchmark')

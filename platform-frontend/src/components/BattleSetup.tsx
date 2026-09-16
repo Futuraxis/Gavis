@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { GameInfo, HintLevel, Pacing, PersonaKey } from '../types'
+import { defaultBattleConfig } from '../chat/battleConfig'
 
 export interface BattleConfig {
   playerPid: string
@@ -75,15 +76,18 @@ const RULES_SUMMARY: Record<string, string> = {
 }
 
 export default function BattleSetup({ game, busy, error, onStart }: Props) {
-  const [playerPid, setPlayerPid] = useState('random')
-  const [difficulty, setDifficulty] = useState('normal')
-  const [playerCount, setPlayerCount] = useState(game.player_counts[0] ?? 2)
-  const [theme, setTheme] = useState(game.variant_themes?.[0] ?? 'fruit')
-  const [persona, setPersona] = useState<PersonaKey>('gentle')
-  const [hintLevel, setHintLevel] = useState<HintLevel>('off')
-  const [pacing, setPacing] = useState<Pacing>('standard')
-  const [adaptive, setAdaptive] = useState(true)
-  const [teaching, setTeaching] = useState(false)
+  // 初值来自 chat/battleConfig（单一事实来源）——「对话里说一句开局」用同一份
+  // 默认值，两处不会各自漂移；本表单仍是改这些偏好的完整入口。
+  const defaults = defaultBattleConfig(game)
+  const [playerPid, setPlayerPid] = useState(defaults.playerPid)
+  const [difficulty, setDifficulty] = useState(defaults.difficulty)
+  const [playerCount, setPlayerCount] = useState(defaults.playerCount)
+  const [theme, setTheme] = useState(defaults.theme ?? 'fruit')
+  const [persona, setPersona] = useState<PersonaKey>(defaults.persona)
+  const [hintLevel, setHintLevel] = useState<HintLevel>(defaults.hintLevel)
+  const [pacing, setPacing] = useState<Pacing>(defaults.pacing)
+  const [adaptive, setAdaptive] = useState(defaults.adaptive)
+  const [teaching, setTeaching] = useState(defaults.teaching)
   const [showRules, setShowRules] = useState(false)
 
   // 座位按人数取前 N 个（麻将默认 4 人 → 显 p0-p3）——避免选到人数外的座位造成死局。

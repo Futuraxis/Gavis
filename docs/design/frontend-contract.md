@@ -18,7 +18,7 @@
 | `POST /api/match/start|move|state` | `session` | 对局快照 |
 | `POST /api/agent/say` | `message` | `{scenario, text, mood}` |
 | `POST /api/match/hint` | `hint` | `{level, direction, mechanical_text, hint}` |
-| `POST /api/chat` | `intent, text, mood, params` | 请求体 `{text, game_id?, history?}`；`history` 为之前若干轮 `{role: user\|assistant, content}`（最新在后），后端清洗并限长（24 条 / 6000 字符），system 由后端现构 |
+| `POST /api/chat` | `intent, text, mood, params` | 请求体 `{text, game_id?, history?}`；`history` 为之前若干轮 `{role: user\|assistant, content}`（最新在后），后端清洗并限长（24 条 / 6000 字符），system 由后端现构。`params` 随意图而定：`play` = `{game_id, config?, config_ignored?}`（`config` = 已按注册表校验的玩家偏好，前端不再有开局配置卡；`config_ignored` = 该游戏不支持、被丢弃的偏好项，前端必须在开局提示里说明）；`create` = `{game_id?, game?, ...}`（`game` = 已落盘的注册表条目，前端刷新目录 + 提示「玩X」；**无 `game`** 时前端打开平台创建游戏页） |
 
 **前端铁律：客户端函数必须解包命名 key，绝不允许把整个信封当业务对象存。**
 `apiGet<T>` 返回的是 `T & {ok}` 信封，业务类型应写成 `{ <key>: T }` 再解包。

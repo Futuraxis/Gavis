@@ -28,6 +28,7 @@ from layer4_interface.frontend.platform.chat import (
     chat_turn_stream,
     fallback_intent,
 )
+from layer4_interface.frontend.platform.custom_games import CustomGameRegistry, CustomGameStore
 from layer4_interface.frontend.platform.game_knowledge import game_knowledge_text
 from layer4_interface.frontend.platform.history import MatchHistory
 from layer4_interface.frontend.platform.platform_knowledge import (
@@ -97,6 +98,53 @@ class TestFallbackIntent:
         assert result.intent == "play"
         assert result.params["game_id"] == "moon_chess"
 
+    def test_play_with_preferences_carries_config(self, manager: PlayManager) -> None:
+        """一句话带偏好（无 LLM）：人数/主题/难度/教学落到 params.config。
+
+        与工具调用路径同一契约、同一套 ``_validated_play_config`` 校验——
+        前端没有开局配置卡了，"说一句话"就是配置界面。
+        """
+        games = [
+            {
+                "game_id": "undercover",
+                "display_name": "谁是卧底",
+                "description": "",
+                "kind": "uno",
+                "family": "social",
+                "player_counts": [8, 4, 5, 6, 7, 9, 10, 11, 12],
+                "difficulties": ["easy", "normal", "hard"],
+                "variant_themes": ["fruit", "food"],
+            }
+        ]
+        result = fallback_intent("四个人、水果主题、困难、教学对局，玩谁是卧底", games, None)
+        assert result.intent == "play"
+        assert result.params["config"] == {
+            "playerCount": 4,
+            "difficulty": "hard",
+            "teaching": True,
+            "theme": "fruit",
+        }
+        assert "config_ignored" not in result.params
+
+    def test_play_unsupported_preference_is_reported(self, manager: PlayManager) -> None:
+        """游戏不支持的偏好 → config_ignored（前端明说），合法项照常生效。"""
+        games = [
+            {
+                "game_id": "moon_chess",
+                "display_name": "月亮棋",
+                "description": "",
+                "kind": "board",
+                "family": "grid",
+                "player_counts": [2],
+                "difficulties": ["easy", "normal", "hard"],
+                "variant_themes": None,
+            }
+        ]
+        result = fallback_intent("九人局困难，玩月亮棋", games, None)
+        assert result.intent == "play"
+        assert result.params["config"] == {"difficulty": "hard"}
+        assert result.params["config_ignored"] == ["9人"]
+
     def test_play_without_name_clarifies(self, manager: PlayManager) -> None:
         result = fallback_intent("来一局", _games(manager), None)
         assert result.intent == "clarify"
@@ -107,7 +155,13 @@ class TestFallbackIntent:
         assert fallback_intent("复盘一下上一局", _games(manager), None).intent == "review"
 
     def test_create_settings_platform(self, manager: PlayManager) -> None:
-        assert fallback_intent("创建一个新游戏", _games(manager), None).intent == "create"
+        create = fallback_intent("创建一个新游戏", _games(manager), None)
+        assert create.intent == "create"
+        # 无 LLM 兜底不臆造规则：文案指向平台创建游戏页（对话内创建走 create_game 工具）。
+        assert "创建游戏页" in create.text
+        # 口述规则的常见说法（"做一个…游戏"）同样路由到创建，而不是落默认闲聊。
+        said = fallback_intent("做一个 7x7 四连的游戏，叫四子棋", _games(manager), None)
+        assert said.intent == "create"
         assert fallback_intent("打开设置", _games(manager), None).intent == "settings"
         assert fallback_intent("打开平台界面", _games(manager), None).intent == "platform"
 
@@ -239,6 +293,56 @@ class TestChatTurnLLM:
         result = chat_turn(manager, "我想玩德州扑克", llm=fake)
         assert result.intent == "play"
         assert result.params["game_id"] == "texas_holdem"
+        # 零偏好 → 不产生 config 键（参数形状与旧版一致；前端按默认开局）。
+        assert "config" not in result.params
+
+    def test_play_tool_call_carries_validated_preferences(self, manager: PlayManager) -> None:
+        """play_game 的偏好参数按注册表校验后进 params.config（前端没有配置卡了）。"""
+        fake = _FakeLLM(
+            tool_calls=(
+                (
+                    "play_game",
+                    {
+                        "game_id": "undercover",
+                        "player_count": 4,
+                        "difficulty": "hard",
+                        "teaching": True,
+                        "persona": "banter",
+                        "hint_level": "specific",
+                        "pacing": "fast",
+                        "adaptive": False,
+                    },
+                ),
+            )
+        )
+        result = chat_turn(manager, "四个人困难教学局，玩谁是卧底", llm=fake)
+        assert result.intent == "play"
+        assert result.params["config"] == {
+            "playerCount": 4,
+            "difficulty": "hard",
+            "teaching": True,
+            "persona": "banter",
+            "hintLevel": "specific",
+            "pacing": "fast",
+            "adaptive": False,
+        }
+        assert "config_ignored" not in result.params
+
+    def test_play_tool_call_reports_unsupported_preferences(self, manager: PlayManager) -> None:
+        """游戏不支持的偏好 → config_ignored（前端开局提示明说），其余照常生效。"""
+        fake = _FakeLLM(
+            tool_calls=(
+                (
+                    "play_game",
+                    {"game_id": "moon_chess", "player_count": 9, "difficulty": "insane", "theme": "fruit"},
+                ),
+            )
+        )
+        result = chat_turn(manager, "九人困难水果主题，玩月亮棋", llm=fake)
+        assert result.intent == "play"
+        assert "config" not in result.params
+        # 主题：月亮棋没声明主题 → 当"不支持"处理（给引擎塞非法变体会毁掉开局）
+        assert result.params["config_ignored"] == ["9人", "难度 insane", "主题 水果"]
 
     def test_play_unknown_game_clarifies(self, manager: PlayManager) -> None:
         fake = _FakeLLM(tool_calls=(("play_game", {"game_id": "no_such_game"}),))
@@ -289,6 +393,22 @@ class TestInfoTools:
         assert "describe_game" in names
         assert "list_games" in names
         assert "get_platform_help" in names  # 具体功能帮助工具常驻暴露
+
+    def test_build_tools_names_are_unique(self, manager: PlayManager) -> None:
+        """回归：工具名必须唯一 —— 端点会整包拒绝重复名，全量工具随之失效。
+
+        实测（DeepSeek，2026-09-16）：``create_game`` 被登记两次 → 每个聊天回合
+        都 400 ``Tool names must be unique`` → 静默掉进正则兜底（“能力收编进
+        Function Call”全部落空，用户看到的却是关键词答复）。
+        """
+        session = manager.start("moon_chess", "p_black", "easy")
+        for session_arg in (None, session):
+            tools = build_tools(games=_games(manager), session=session_arg, active=[])
+            names = [t["function"]["name"] for t in tools]
+            assert len(names) == len(set(names)), f"重复工具名: {sorted(names)}"
+            # 带参数的同名工具只应存在一份（create_game 是本地执行版）
+            assert names.count("create_game") == 1
+            assert names.count("play_game") == 1
 
     def test_describe_game_tool_loop(self, manager: PlayManager) -> None:
         fake = _ScriptedLLM(
@@ -435,6 +555,91 @@ class TestInfoTools:
         assert "在线学习" in tool_msgs[0]["content"]  # 总览索引含各主题
 
 
+# ── create_game：有副作用的本地工具 ────────────────────────────────
+
+
+class TestCreateGameTool:
+    """``create_game`` 在对话里直接把规则变成可对弈的游戏（无卡片、无跳转）。
+
+    与旧行为的差别：过去 ``create_game`` 是空参动作工具，只映射
+    ``intent=create`` 让前端展开一张创建表单卡；现在它带参数、就地执行
+    L1 翻译 + 校验 + 落盘，成功以 ``create`` 意图携带 ``params.game``
+    回前端（刷新目录 + 提示「玩X」），失败文本化上报（fail-soft）。
+    """
+
+    CONNECT4 = "connect4：7x7 棋盘，四连即胜"
+
+    def test_create_game_tool_creates_and_carries_entry(self, manager: PlayManager, tmp_path) -> None:
+        registry = CustomGameRegistry(CustomGameStore(tmp_path / "custom_games"))
+        fake = _ScriptedLLM(
+            [
+                ChatReply(
+                    text="",
+                    tool_calls=[
+                        ToolCall(
+                            "create_game",
+                            {"mode": "from_scratch", "rule_text": self.CONNECT4, "game_name": "connect4"},
+                            id="call_create",
+                        )
+                    ],
+                ),
+                ChatReply(text="已经建好《connect4》，想立刻试就说“玩connect4”。"),
+            ]
+        )
+        result = chat_turn(manager, "做一个 7x7 四连的游戏，叫 connect4", llm=fake, custom=registry)
+        assert result.intent == "create"
+        assert result.params["game_id"] == "connect4"
+        assert result.params["game"]["display_name"]
+        assert registry.has("connect4")  # 真的落盘了
+        # 工具结果以 role:"tool" 回传模型，模型据此讲解（不是空手回答）
+        tool_msgs = [m for m in fake.seen[1] if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0]["tool_call_id"] == "call_create"
+        assert "创建成功" in tool_msgs[0]["content"]
+
+    def test_create_game_missing_rule_text_fails_soft(self, manager: PlayManager, tmp_path) -> None:
+        """信息不足（模型没给规则）→ 文本化失败 + chat 意图，绝不抛异常。"""
+        registry = CustomGameRegistry(CustomGameStore(tmp_path / "custom_games"))
+        fake = _FakeLLM(tool_calls=(("create_game", {"mode": "from_scratch"}),))
+        result = chat_turn(manager, "创建游戏", llm=fake, custom=registry)
+        assert result.intent == "chat"
+        assert "创建失败" in result.text
+        assert result.params == {}
+
+    def test_create_game_without_registry_fails_soft(self, manager: PlayManager) -> None:
+        fake = _FakeLLM(tool_calls=(("create_game", {"mode": "from_scratch", "rule_text": self.CONNECT4}),))
+        result = chat_turn(manager, "创建游戏", llm=fake)
+        assert result.intent == "chat"
+        assert "注册表未启用" in result.text
+
+    def test_duplicate_create_in_one_batch_runs_once(self, manager: PlayManager, tmp_path) -> None:
+        """同一回合的并行重复调用只执行一次（create_game 有副作用）。"""
+        registry = CustomGameRegistry(CustomGameStore(tmp_path / "custom_games"))
+        fake = _ScriptedLLM(
+            [
+                ChatReply(
+                    text="",
+                    tool_calls=[
+                        ToolCall(
+                            "create_game",
+                            {"mode": "from_scratch", "rule_text": self.CONNECT4, "game_name": "connect4"},
+                            id="c1",
+                        ),
+                        ToolCall(
+                            "create_game",
+                            {"mode": "from_scratch", "rule_text": self.CONNECT4, "game_name": "connect4b"},
+                            id="c2",
+                        ),
+                    ],
+                ),
+                ChatReply(text="建好了。"),
+            ]
+        )
+        result = chat_turn(manager, "建两个游戏", llm=fake, custom=registry)
+        assert result.intent == "create"
+        assert len(registry.list_games()) == 1
+
+
 # ── Shared knowledge assembly (game_knowledge) ─────────────────────
 
 
@@ -446,6 +651,20 @@ class TestGameKnowledge:
         assert "月亮棋" in text
         assert "3×3" in text  # GameSpec.description
         assert "规则要点" in text  # docs/user/play_moon_chess.md 规则段
+
+    def test_knowledge_text_lists_declared_option_surface(self) -> None:
+        """可配置面由 GameSpec 现算：人数/难度档/主题 —— 模型据此填 play_game。
+
+        旧文案把难度写死成「简单/正常/困难」，注册表改了档位也不会同步；
+        现在读 ``difficulty_budgets`` 的键，主题读 ``variant_themes``。
+        """
+        chess = game_knowledge_text("moon_chess")
+        assert "支持人数: 2 人" in chess
+        assert "简单" in chess and "普通" in chess and "困难" in chess
+        undercover = game_knowledge_text("undercover")
+        assert "主题" in undercover
+        assert "水果" in undercover  # 中文标签
+        assert "fruit" in undercover  # 机器 id（play_game 要传的值）
 
     def test_unknown_game_returns_empty(self) -> None:
         """未知 / custom 游戏返回空串 —— 调用方各自 fail-soft。"""
@@ -885,6 +1104,53 @@ class TestChatTurnStream:
         assert intent["intent"] == "play"
         assert intent["params"] == {"game_id": "moon_chess"}
         assert intent["text"] == "好，来一局月亮棋！"
+
+    def test_action_tool_round_carries_preferences(self, manager: PlayManager) -> None:
+        """流式出口同样携带 play_game 的偏好（两个工具循环共用同一映射）。"""
+        fake = _StreamFakeLLM(
+            [
+                StreamChunk(
+                    text="好，四个人困难局！",
+                    tool_calls=[
+                        ToolCall("play_game", {"game_id": "undercover", "player_count": 4, "difficulty": "hard"})
+                    ],
+                    done=True,
+                )
+            ]
+        )
+        events = list(chat_turn_stream(manager, "四个人困难，玩谁是卧底", llm=fake))
+        intent = _event_tuples(events)[-2][1]
+        assert intent["intent"] == "play"
+        assert intent["params"]["config"] == {"playerCount": 4, "difficulty": "hard"}
+        assert intent["text"] == "好，四个人困难局！"
+
+    def test_create_game_tool_round_carries_entry(self, manager: PlayManager, tmp_path) -> None:
+        """流式出口：create_game 就地执行 → create 意图 + params.game。"""
+        registry = CustomGameRegistry(CustomGameStore(tmp_path / "custom_games"))
+        fake = _StreamFakeLLM(
+            [
+                StreamChunk(
+                    tool_calls=[
+                        ToolCall(
+                            "create_game",
+                            {
+                                "mode": "from_scratch",
+                                "rule_text": "connect4：7x7 棋盘，四连即胜",
+                                "game_name": "connect4",
+                            },
+                        )
+                    ],
+                    done=True,
+                ),
+                StreamChunk(text="已经建好《connect4》。", done=True),
+            ]
+        )
+        events = list(chat_turn_stream(manager, "做一个 7x7 四连的游戏", llm=fake, custom=registry))
+        intent = _event_tuples(events)[-2][1]
+        assert intent["intent"] == "create"
+        assert intent["params"]["game_id"] == "connect4"
+        assert len(fake.seen) == 2  # 工具轮 + 成文轮
+        assert fake.seen[1][-1]["role"] == "tool"
 
     def test_info_tool_loop_feeds_back_then_answers(self, manager: PlayManager) -> None:
         fake = _StreamFakeLLM(

@@ -50,6 +50,20 @@ DOCS_RULES_SECTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
 _RULES_TEXT_MAX = 900
 _RULES_TEXT_CACHE: dict[str, str] = {}
 
+#: 难度档中文标签（与前端 BattleSetup 的 DIFFICULTY_LABELS 同一口径；
+#: 未收录的档位原样输出，fail-soft）。
+DIFFICULTY_LABELS: dict[str, str] = {"easy": "简单", "normal": "普通", "hard": "困难"}
+
+#: 主题（variant_themes）中文标签（与前端 BattleSetup 的 THEME_LABELS 同一口径）。
+THEME_LABELS: dict[str, str] = {
+    "fruit": "水果",
+    "food": "美食",
+    "animal": "动物",
+    "object": "物品",
+    "place": "地点",
+    "plant": "植物",
+}
+
 #: game_id → 短名/别名（供「X 的规则/玩X」的子串匹配）。刻意只收
 #: 无歧义的用户口语短名；同一句里多个游戏命中时由最长匹配胜出
 #: （如「UNO 7-0」同时命中 uno 的 "UNO" 与 seven_zero 的 "UNO 7-0"，
@@ -110,8 +124,13 @@ def game_knowledge_text(game_id: str) -> str:
     """Assemble the authoritative knowledge text for one builtin game.
 
     ``describe_game`` 信息工具、无 LLM 兜底与陪伴对话注入共用本拼装：
-    名字（id）+ 一句话简介 + 支持人数 + docs 规则段。未知 game_id
-    （custom 游戏等）返回 ``""``，调用方各自 fail-soft。
+    名字（id）+ 一句话简介 + **可配置面**（支持人数 / 难度档 / 主题——
+    模型据此填 ``play_game`` 的玩家偏好参数，不必猜）+ docs 规则段。
+    未知 game_id（custom 游戏等）返回 ``""``，调用方各自 fail-soft。
+
+    难度档与主题都由 ``GameSpec`` 现算（``difficulty_budgets`` /
+    ``variant_themes``）：注册表增删档位即同步，不存在写死的"三档"文案
+    与实际可选档漂移的缺口。
     """
     spec = GAMES.get(game_id)
     if spec is None:
@@ -120,7 +139,11 @@ def game_knowledge_text(game_id: str) -> str:
     if spec.description:
         parts.append(spec.description)
     counts = "、".join(str(c) for c in spec.player_counts)
-    parts.append(f"支持人数: {counts} 人；难度: 简单/正常/困难")
+    tiers = "、".join(DIFFICULTY_LABELS.get(str(d), str(d)) for d in spec.difficulty_budgets)
+    parts.append(f"支持人数: {counts} 人；难度: {tiers or '简单/普通/困难'}")
+    if spec.variant_themes:
+        themes = "、".join(f"{THEME_LABELS.get(str(t), str(t))}({t})" for t in spec.variant_themes)
+        parts.append(f"主题: {themes}（开局传 variant_themes 里的英文 id）")
     rules_md = game_rules_text(game_id)
     if rules_md:
         parts.append("规则要点:\n" + rules_md)

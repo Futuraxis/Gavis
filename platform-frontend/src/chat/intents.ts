@@ -3,9 +3,23 @@
 // 路由到平台动作；也用于快速指令 chips 的本地预判。意图契约见 types.ts。
 
 import type { ChatIntent, ChatTurnResult } from '../types'
+// 显式 .ts 扩展：本模块会被 node --experimental-strip-types 直接跑（前端离线
+// 单测），extensionless specifier 在 Node ESM 下解析不到（Vite 侧无影响）。
+import { parseBattleOptions } from './battleConfig.ts'
 
 export interface LocalContext {
-  games: { game_id: string; display_name: string; description?: string; aliases?: string[] }[]
+  games: {
+    game_id: string
+    display_name: string
+    description?: string
+    aliases?: string[]
+    // 可配置面（可选：断连兜底时目录可能不全）。缺省则不做事后过滤，
+    // 交给后端校验——离线路径也要能听懂“三人局、困难、教学对局”。
+    player_counts?: number[]
+    difficulties?: string[]
+    seat_options?: string[]
+    variant_themes?: string[] | null
+  }[]
   activeGameId: string | null
   activeDisplay: string | null
 }
@@ -16,7 +30,9 @@ const RESTART_RE = /(?:再来一局|重来|重新|重开|换一局)/
 const RESUME_RE = /(?:继续|接着|恢复|回到) *(?:上一局|对战|对局|游戏)/
 const HISTORY_RE = /(?:战绩|历史|记录|胜率|输赢|数据)/
 const REVIEW_RE = /(?:复盘|回放|重看)/
-const CREATE_RE = /(?:创建|新建|自定义|设计一?个新?游戏)/
+// 「做一个…游戏 / 写个…游戏」与「创建」等价（口述规则的常见说法；
+// 与后端 chat.py 的 _CREATE_RE 同表）。
+const CREATE_RE = /(?:创建|新建|自定义|设计一?个新?游戏|(?:做|写|弄|生成|搞)一?(?:个|款|套).{0,12}游戏)/
 const SETTINGS_RE = /(?:设置|性格|声音|主题|偏好|选项)/
 const PLATFORM_RE = /(?:平台界面|完整界面|平台模式|打开平台|回去|回平台)/
 const BENCHMARK_RE = /(?:评测|benchmark|模拟对局|求解器对比)/
@@ -32,7 +48,7 @@ const HELP_TEXT = [
   '· “继续上一局” —— 恢复进行中的对局',
   '· 对局中：“这步怎么走” / “提示我”',
   '· “看战绩” / “复盘上一局”',
-  '· “创建一个新游戏” —— 用自然语言写规则',
+  '· “创建一个新游戏” —— 直接说规则，我帮你生成（也可进「创建游戏」页）',
   '· “打开平台界面” —— 切回完整界面',
   '· “设置” / “评测中心” / “在线学习” —— 各功能面板',
 ].join('\n')
@@ -90,7 +106,7 @@ const HELP_TOPICS: HelpTopic[] = [
   {
     key: 'create',
     keywords: ['怎么创建', '如何创建', '创建游戏', '新建游戏', '自定义游戏', '写规则', '规则翻译', '如何自定义'],
-    text: '说“创建一个新游戏”或进顶部「创建游戏」：自然语言写规则→翻译→校验→规则族识别→直接可对弈；也可用模板给基础游戏改变体；识别不了的规则会明确提示而不是静默失败。',
+    text: '对话里直接描述规则（“做一个 8×8 四子连珠的游戏，叫四子棋”）即可建好，成功后可立刻说“玩四子棋”；也可进顶部「创建游戏」页用表单（含模板变体、LLM 翻译开关与自定义游戏管理）。走法仍是：翻译→校验→规则族识别→直接可对弈；识别不了的规则会明确提示而不是静默失败。',
   },
   {
     key: 'settings',
@@ -190,7 +206,18 @@ export function classifyLocal(text: string, ctx: LocalContext): ChatTurnResult {
   }
 
   if (game && PLAY_RE.test(text)) {
-    return { intent: 'play', text: `好，来一局${game.display_name}！对局正在创建…`, mood: 'happy', params: { game_id: game.game_id } }
+    // 开局偏好：与后端 fallback_intent 同一张表（battleConfig.parseBattleOptions）
+    // —— 断连时“三人局、困难、教学对局”同样落到 params.config。
+    const config = parseBattleOptions(text, game)
+    return {
+      intent: 'play',
+      text: `好，来一局${game.display_name}！对局正在创建…`,
+      mood: 'happy',
+      params: {
+        game_id: game.game_id,
+        ...(Object.keys(config).length > 0 ? { config } : {}),
+      },
+    }
   }
   if (HINT_RE.test(text) && hasSession) {
     return { intent: 'hint', text: '这一步的思路是…', mood: 'thinking', params: {} }
@@ -199,7 +226,8 @@ export function classifyLocal(text: string, ctx: LocalContext): ChatTurnResult {
     return { intent: 'platform', text: '已为你打开完整平台界面 👇', mood: 'neutral', params: {} }
   }
   if (CREATE_RE.test(text)) {
-    return { intent: 'create', text: '创建游戏面板已为你展开 👇', mood: 'neutral', params: {} }
+    // 无 LLM 兜底不臆造规则：切到平台创建游戏页（对话里的创建由 create_game 工具完成）。
+    return { intent: 'create', text: '已为你打开创建游戏页 👇', mood: 'neutral', params: {} }
   }
   if (REVIEW_RE.test(text)) {
     return { intent: 'review', text: '复盘已为你展开 👇', mood: 'neutral', params: {} }

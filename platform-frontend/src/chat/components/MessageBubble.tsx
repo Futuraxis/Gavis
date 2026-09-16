@@ -1,14 +1,14 @@
-// MessageBubble — 单条聊天消息；agent 消息按意图内联卡片（开局卡/创建卡/战绩/复盘/进度）。
+// MessageBubble — 单条聊天消息；agent 消息按意图内联**只读**卡片（战绩/复盘/进度）。
 // 对局面板不挂消息上——由 ChatPage 钉在输入框上方（InlineBoard），消息里只留文字与卡片。
+// 「开局配置卡」「创建游戏表单卡」已下线：开局偏好由 play_game 工具参数带过来
+// （后端 → params.config），建游戏由 create_game 工具在对话里直接执行，因此消息里
+// 不再需要多步点选的表单（本组件只剩只读卡片 + 快捷 chips）。
 // 思维链（reasoning）折叠块仅在调试模式打开时渲染（getStoredDebug）；
 // 后端照常产出/透传 reasoning，默认隐藏，避免把模型思考过程暴露给玩家。
 
-import type { ChatMessage, GameInfo } from '../../types'
-import type { BattleConfig } from '../../components/BattleSetup'
+import type { ChatMessage } from '../../types'
 import type { StatsData, BenchmarkJob, LearningItem } from '../useChatRuntime'
 import { getStoredDebug } from '../../settings'
-import SetupCard from './SetupCard'
-import CreateCard from './CreateCard'
 import StatsCard from './StatsCard'
 import ReviewCard from './ReviewCard'
 import ProgressCard from './ProgressCard'
@@ -16,24 +16,15 @@ import Chips from './Chips'
 
 interface Props {
   msg: ChatMessage
-  games: GameInfo[]
   busy: boolean
-  onStart: (gameId: string, config: BattleConfig) => void
-  onCreated: (game: GameInfo) => void
   onChip: (chip: string) => void
 }
 
-export default function MessageBubble({ msg, games, busy, onStart, onCreated, onChip }: Props) {
+export default function MessageBubble({ msg, busy, onChip }: Props) {
   const params = msg.params ?? {}
 
   function inlineCard() {
     switch (msg.intent) {
-      case 'play': {
-        const game = games.find((g) => g.game_id === params.game_id)
-        return game ? <SetupCard game={game} busy={busy} onStart={(c) => onStart(game.game_id, c)} /> : null
-      }
-      case 'create':
-        return <CreateCard onCreated={onCreated} />
       case 'history':
         return (
           <StatsCard
