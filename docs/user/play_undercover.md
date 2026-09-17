@@ -47,9 +47,13 @@ GameSpec(
   与**难度/节奏**（平台统一 3×3 网格）。主题决定词对类别，难度决定词对相似度档
   （详见下文「难度与节奏」）。词对在 `rules/undercover.json` 的 `variants.options`
   声明，平台按 `{theme}_{tier}` 拼 variant 开局，每局再从该档词池**随机抽一对**。
-- **AI**：每个 AI 座位一个独立求解器 —— 本地 Ollama 可用时走大模型发言
-  （快照 `ai_mode=ollama`），否则随机策略（`ai_mode=random`，页面如实标注
-  「本地大模型 / 随机策略」）；即使 Ollama 中途失败也会如实降级标注并随机兜底。
+- **AI**：每个 AI 座位一个独立求解器 —— 平台 LLM 配置的端点可用时走大模型
+  发言（快照 `ai_mode=ollama`；`ollama` 是**历史求解器名**，语义＝「OpenAI
+  兼容端点可用」，云端 DeepSeek/GLM 与本地 Ollama 同样命中），否则随机策略
+  （`ai_mode=random`）。页面如实标注**实际调用的模型与端点**：快照带
+  `ai_model` / `ai_endpoint`（`local` / `remote`）/ `ai_base_url`，右上角显示
+  「云端大模型（deepseek-v4-flash）」「本地大模型（qwen3:8b）」或「随机策略」
+  （鼠标悬浮可见实际 base_url）；即使大模型中途失败也会如实降级标注并随机兜底。
 - **实时动态（全游戏通用）**：开局与每一步都走 SSE 流式——AI 每次发言/行动
   落地即推一帧玩家投影快照，发言逐条上屏（「谁在说话」的座位名牌与打字
   动画同步切换），人类自己的发言/投票也立即回显。

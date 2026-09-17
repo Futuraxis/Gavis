@@ -73,8 +73,11 @@ $$\\langle N, S, A, T, O, R \\rangle$$
   经 `SolverProvider.create_solver(..., player_id=<seat>)` 现造——每个 agent
   只从**自己的投影**推理（狼人杀 9 座、卧底 4–12 座每个 AI 都只看自己的
   `my_role` / `my_word`）。
-- **求解器种类探测**：开局一次：Ollama 可用 → `ollama`（本地大模型发言），
-  否则 `random`；快照 `ai_mode` 如实记录，LLM 实际调用失败也降级标注。
+- **求解器种类探测**：开局一次：OpenAI 兼容 LLM 端点可用 → `ollama`
+  （历史求解器名，云端/本地同命中）否则 `random`；快照 `ai_mode` 如实记录，
+  并附 `ai_model`/`ai_endpoint`/`ai_base_url` 供前端标注**实际调用的模型**
+  （不能把 `ollama` 译成「本地大模型」——平台配 DeepSeek 时曾误标）；
+  LLM 实际调用失败也降级标注。
 - **发言驱动 `_run_ai`**：`while` 循环驱动每个 AI 座位直到人类回合或终局；
   每个座位决策 → `speak` 兜底通稿（不含词本身/身份标签，守卧底红线与
   快照红线）→ `apply_action` → 前滚 chance → 下一座位。

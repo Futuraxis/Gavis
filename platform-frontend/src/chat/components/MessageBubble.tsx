@@ -46,9 +46,12 @@ export default function MessageBubble({ msg, busy, onChip }: Props) {
     }
   }
 
-  // clarify 追问选项与 chat 知识回答的“来一局”快捷 chips 复用同一组件。
+  // clarify 追问选项、chat 知识回答的“来一局”快捷 chips、settings 的
+  // 风格选项/“打开设置页”复用同一组件。
   const chips =
-    msg.intent === 'clarify' || msg.intent === 'chat' ? ((params.chips ?? []) as string[]) : []
+    msg.intent === 'clarify' || msg.intent === 'chat' || msg.intent === 'settings'
+      ? ((params.chips ?? []) as string[])
+      : []
 
   return (
     <div className={`chat-msg ${msg.role === 'player' ? 'chat-msg-player' : 'chat-msg-agent'}`}>

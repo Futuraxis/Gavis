@@ -1,25 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, getReview } from '../api/client'
+import { difficultyLabel, gameLabel, matchResult, movesLabel, seatLabel } from '../history'
 import { MOCK_MATCH_LOG, MOCK_REVIEW } from '../mock'
-import type { BoardSnapshot, KeyNode, MahjongSnapshot, MatchLog, PokerSnapshot, ReviewReport, SocialSnapshot } from '../types'
+import type { BoardSnapshot, KeyNode, MahjongSnapshot, MatchLog, PokerSnapshot, ReviewReport } from '../types'
 import GomokuBoard from '../components/boards/GomokuBoard'
 import MahjongTable from '../components/boards/MahjongTable'
 import MoonBoard from '../components/boards/MoonBoard'
 import PokerTable from '../components/boards/PokerTable'
 import { FAMILY_BOARDS } from '../components/boards/familyBoards'
-
-const GAME_LABELS: Record<string, string> = {
-  moon_chess: '月亮棋',
-  stochastic_gomoku: '随机五子棋',
-  texas_holdem: '德州扑克',
-  mahjong_guangdong: '广东麻将',
-  mahjong_hongzhong: '红中麻将',
-  mahjong_blood: '血流成河',
-  mahjong_sichuan: '四川麻将（血战到底）',
-  mahjong_changsha: '长沙麻将（258将）',
-  mahjong_taiwan: '台湾麻将（16张）',
-}
 
 const KIND_LABELS: Record<KeyNode['kind'], string> = {
   turning_point: '转折点',
@@ -65,16 +54,10 @@ export default function ReviewPage() {
   const entry = entries[idx]
   const snapshot = entry?.snapshot
   const lastIdx = entries.length - 1
-  // 玩家视角胜负：优先后端已解析的 match.won；缺省时回退 pid 比较（旧记录），
-  // 再用终局快照 final_roles 做阵营比对——社交游戏 winner=undercover 等阵营
-  // 胜者必须归到对应身份，否则卧底获胜被误标「失败」（实测 e7deb84b）。
-  const finalSnap = entries.length > 0 ? (entries[entries.length - 1].snapshot as SocialSnapshot | undefined) : undefined
-  const myFinalRole = finalSnap?.final_roles?.find((r) => r.pid === match.player_pid)?.role ?? null
-  const won =
-    match.won ??
-    (match.winner != null &&
-      (match.winner === match.player_pid || (myFinalRole != null && myFinalRole === match.winner)))
-  const title = match.winner == null ? '🤝 平局' : won ? '🎉 胜利' : '😢 失败'
+  // 玩家视角胜负：统一走 src/history.ts 的 matchResult（后端已解析的 won 优先，
+  // 阵营胜者归边；旧记录回退 pid 比较）——与对局记录页同一口径，不再各写一遍。
+  const result = matchResult(match)
+  const title = result.label
   const currentKey = entry ? keyNodesByStep.get(entry.step) : undefined
   // 复盘快照渲染: 优先按 match.family 经 FAMILY_BOARDS（带 stepKey 的组件传 idx），
   // 缺失时回退现有 game_id 判断; 其余不动。
@@ -83,9 +66,9 @@ export default function ReviewPage() {
   const downloadReport = () => {
     if (!review) return
     const lines: string[] = [
-      `Gavis 复盘报告 — ${GAME_LABELS[match.game_id] ?? match.game_id}`,
+      `Gavis 复盘报告 — ${gameLabel(match.game_id)}`,
       `时间: ${new Date(match.started_at).toLocaleString('zh-CN')}`,
-      `结果: ${match.winner == null ? '平局' : won ? '胜利' : '失败'}`,
+      `结果: ${result.label}`,
       `总步数: ${entries.length}`,
       '',
       `【摘要】${review.summary}`,
@@ -110,13 +93,11 @@ export default function ReviewPage() {
         <div className="success-banner">演示数据 — 后端 /history 或 /review 尚未接线。</div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
-        <h1 className="page-title">复盘 · {GAME_LABELS[match.game_id] ?? match.game_id}</h1>
-        <span className={`badge ${match.winner == null ? '' : won ? 'win' : 'lose'}`}>{title}</span>
+        <h1 className="page-title">复盘 · {gameLabel(match.game_id)}</h1>
+        <span className={`badge ${result.badge}`}>{title}</span>
       </div>
       <p className="page-sub">
-        你执 {match.seat_names?.[match.player_pid] ?? match.player_pid} ·{' '}
-        {match.adaptive ? `自适应难度 ⚙ 强度 ${match.ai_strength ?? '—'}` : `难度 ${match.difficulty}`} · 共{' '}
-        {entries.length} 步
+        你执 {seatLabel(match, match.player_pid)} · 难度 {difficultyLabel(match)} · 共 {movesLabel(match)}
       </p>
 
       <div className="review-layout">

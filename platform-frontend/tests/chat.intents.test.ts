@@ -94,13 +94,51 @@ test('功能面板意图：history / review / create / settings / platform / ben
   // 口述规则的常见说法（“做一个…游戏”）同样路由到创建，而不是落默认闲聊。
   assert.equal(classifyLocal('做一个 7x7 四连的游戏，叫四子棋', NO_SESSION).intent, 'create')
   assert.equal(classifyLocal('打开设置', NO_SESSION).intent, 'settings')
+  // 只有明确“打开设置”才切页面（params.open_page）；偏好变更不带它。
+  assert.equal(classifyLocal('打开设置', NO_SESSION).params.open_page, true)
   assert.equal(classifyLocal('打开平台界面', NO_SESSION).intent, 'platform')
   assert.equal(classifyLocal('看评测中心', NO_SESSION).intent, 'benchmark')
   assert.equal(classifyLocal('在线学习状态', NO_SESSION).intent, 'learning')
 })
 
-test('help：问到能力 → help 且带帮助长文案', () => {
-  const r = classifyLocal('你能做什么', NO_SESSION)
+test('settings：「换个风格」给选项，绝不静默跳设置页（UX 事故回归）', () => {
+  const r = classifyLocal('你能换个风格吗？', NO_SESSION)
+  assert.equal(r.intent, 'clarify')
+  assert.deepEqual(r.params.chips, [
+    '换成温柔陪伴',
+    '换成认真教学',
+    '换成轻松吐槽',
+    '换成高冷竞技',
+    '打开设置页',
+  ])
+  assert.ok(!r.params.open_page)
+  assert.ok(!r.params.applied)
+})
+
+test('settings：说出取值 → applied（runtime 写 /api/profile 并回执）且不跳页', () => {
+  const cold = classifyLocal('换成高冷竞技', NO_SESSION)
+  assert.equal(cold.intent, 'settings')
+  assert.deepEqual(cold.params.applied, { default_persona: 'cold' })
+  assert.ok(!cold.params.open_page)
+  assert.ok(cold.text.includes('高冷竞技'))
+  // 直接表态（没提“风格”二字）同样认出取值
+  assert.deepEqual(classifyLocal('温柔一点', NO_SESSION).params.applied, { default_persona: 'gentle' })
+  // 主题是另一族：先给主题选项，说出取值才落 applied
+  const themeAsk = classifyLocal('我想换个主题', NO_SESSION)
+  assert.equal(themeAsk.intent, 'clarify')
+  assert.deepEqual(themeAsk.params.chips, ['换成深色主题', '换成浅色主题', '打开设置页'])
+  assert.deepEqual(classifyLocal('换成浅色主题', NO_SESSION).params.applied, { theme: 'light' })
+})
+
+test('settings：含改动词的闲聊不得被当成改偏好', () => {
+  for (const text of ['换一局', '改天再玩', '你好呀']) {
+    const r = classifyLocal(text, NO_SESSION)
+    assert.ok(!r.params.applied, text)
+    assert.notEqual(r.intent, 'settings', text)
+  }
+})
+
+test('help：问到能力 → help 且带帮助长文案', () => {  const r = classifyLocal('你能做什么', NO_SESSION)
   assert.equal(r.intent, 'help')
   assert.ok(r.text.includes('玩月亮棋'))
 })

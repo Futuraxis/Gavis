@@ -35,6 +35,44 @@ const REVIEW_RE = /(?:复盘|回放|重看)/
 const CREATE_RE = /(?:创建|新建|自定义|设计一?个新?游戏|(?:做|写|弄|生成|搞)一?(?:个|款|套).{0,12}游戏)/
 const SETTINGS_RE = /(?:设置|性格|声音|主题|偏好|选项)/
 const PLATFORM_RE = /(?:平台界面|完整界面|平台模式|打开平台|回去|回平台)/
+// 「换风格 / 改设置」——与后端 chat.py 的 `_preference_result` 同表同口径：
+// 明确说出取值 → settings + params.applied（useChatRuntime 写档案并回执，
+// **不跳页**）；只说要换、没说成哪种 → clarify + 选项 chips。绝不替用户猜，
+// 也绝不把人从对话里静默甩到设置页。
+const OPEN_SETTINGS_RE = /(?:打开|进入|去|切到|回到|看看)\s*(?:一下)?\s*(?:设置|偏好)页?/
+const PREFERENCE_CHANGE_RE = /(?:换|改|调|变|设置|来)(?:成|一个|个|一下|点)?/
+const PERSONA_WORDS = ['性格', '人设', '风格', '语气', '口气', '人格', '说话方式']
+const THEME_WORDS = ['主题', '外观', '配色']
+const PERSONA_ASK_RE = /(?:温柔|贴心|陪玩|吐槽|幽默|搞笑|高冷|严肃|竞技|认真|老师).{0,2}(?:点|一点|一些|些)/
+// 人格取值识别（“认真/教学”先判，避免“认真温柔”这类叠加句落到 gentle）。
+const PERSONA_VALUE_RULES: [string, RegExp][] = [
+  ['teacher', /(?:认真|教学|老师|讲道理)/],
+  ['gentle', /(?:温柔|贴心|陪玩)/],
+  ['banter', /(?:吐槽|幽默|搞笑)/],
+  ['cold', /(?:高冷|严肃|竞技)/],
+]
+const THEME_VALUE_RULES: [string, RegExp][] = [
+  ['dark', /(?:深色|暗色|夜间|黑夜|黑色主题|黑主题)/],
+  ['light', /(?:浅色|亮色|日间|白色主题|白主题)/],
+]
+// 选项 chips（点一下 = 当作一句话发回来 → 命中上面的取值规则）。
+const PERSONA_STYLE_CHIPS = ['换成温柔陪伴', '换成认真教学', '换成轻松吐槽', '换成高冷竞技']
+const THEME_CHIPS = ['换成深色主题', '换成浅色主题']
+const OPEN_SETTINGS_CHIP = '打开设置页'
+const PREFERENCE_CLARIFY_TEXT = '想换成哪种？挑一个我立刻改；也可以直接打开设置页自己调。'
+// profile 字段 → 中文名 / 取值显示名（回执文案与后端 `_settings_applied_result` 同形）。
+const SETTING_FIELD_LABELS: Record<string, string> = {
+  default_persona: '助手性格',
+  hint_level: '提示档',
+  default_difficulty: 'AI 难度',
+  theme: '界面主题',
+}
+const SETTING_VALUE_LABELS: Record<string, Record<string, string>> = {
+  default_persona: { gentle: '温柔陪伴', teacher: '认真教学', banter: '轻松吐槽', cold: '高冷竞技' },
+  hint_level: { off: '关闭', direction: '方向提示', specific: '具体建议', demo: '演示' },
+  default_difficulty: { easy: '简单', normal: '普通', hard: '困难', adaptive: '自适应' },
+  theme: { light: '浅色', dark: '深色' },
+}
 const BENCHMARK_RE = /(?:评测|benchmark|模拟对局|求解器对比)/
 const LEARNING_RE = /(?:在线学习|学习状态|自动学习)/
 const HELP_RE = /(?:帮助|能做什么|怎么用|你有什么功能|你会什么)/
@@ -49,6 +87,7 @@ const HELP_TEXT = [
   '· 对局中：“这步怎么走” / “提示我”',
   '· “看战绩” / “复盘上一局”',
   '· “创建一个新游戏” —— 直接说规则，我帮你生成（也可进「创建游戏」页）',
+  '· “换个风格” / “换成高冷竞技” —— 换助手性格（立刻生效）',
   '· “打开平台界面” —— 切回完整界面',
   '· “设置” / “评测中心” / “在线学习” —— 各功能面板',
 ].join('\n')
@@ -111,7 +150,7 @@ const HELP_TOPICS: HelpTopic[] = [
   {
     key: 'settings',
     keywords: ['怎么改难度', '如何改难度', '难度设置', '改变难度', '调难度', '难度', '声音', '主题设置', '怎么调设置'],
-    text: '「设置」页可调 AI 难度（简单/正常/困难；麻将当前为固定启发式强度三档暂无差异）、自适应难度、声音/主题、教练开关；LLM 端点/模型/密钥在侧边栏「LLM 配置」。',
+    text: '助手性格可以直接在对话里换：说“换成温柔陪伴/认真教学/轻松吐槽/高冷竞技”（或“换个风格”让平台给选项）立刻生效并写进你的档案。说“打开设置”或进顶部「设置」页：可调 AI 难度（简单/正常/困难；麻将当前为固定启发式强度三档暂无差异）、自适应难度、声音/主题、教练开关；LLM 端点/模型/密钥在侧边栏「LLM 配置」。',
   },
   {
     key: 'platform',
@@ -181,6 +220,52 @@ function findGame(text: string, games: LocalContext['games']): LocalContext['gam
   return best
 }
 
+/** 已校验的偏好变更 → settings 意图（runtime 写档案 + 回执，不跳页）. */
+function appliedResult(applied: Record<string, string>): ChatTurnResult {
+  const detail = Object.entries(applied)
+    .map(([field, value]) => {
+      const label = SETTING_FIELD_LABELS[field] ?? field
+      const shown = SETTING_VALUE_LABELS[field]?.[value] ?? value
+      return `${label}改成「${shown}」`
+    })
+    .join('、')
+  const lines = [`好，${detail} ✓`]
+  if (applied.default_persona) lines.push('以后我说话就按这个风格来。')
+  return {
+    intent: 'settings',
+    text: lines.join('\n'),
+    mood: 'happy',
+    params: { applied, chips: [OPEN_SETTINGS_CHIP] },
+  }
+}
+
+/**
+ * 「换风格 / 改设置」类表达 → 真改偏好 / 给选项；与偏好无关返回 null。
+ *
+ * 修复的 UX 事故：问「你能换个风格吗」时旧逻辑命中 `SETTINGS_RE` 的
+ * `性格`/`主题` 关键词 → 直接切到平台设置页，问题没回答、设置一个没改。
+ * 现在先说清"换成哪种"，用户点一下 chips 才真正落变更。
+ */
+function preferenceResult(text: string): ChatTurnResult | null {
+  if (OPEN_SETTINGS_RE.test(text)) {
+    return { intent: 'settings', text: '设置面板已为你展开 👇', mood: 'neutral', params: { open_page: true } }
+  }
+  const change = PREFERENCE_CHANGE_RE.test(text)
+  const personaValue = PERSONA_VALUE_RULES.find(([, re]) => re.test(text))?.[0] ?? ''
+  const themeValue = THEME_VALUE_RULES.find(([, re]) => re.test(text))?.[0] ?? ''
+  const wantsPersona =
+    PERSONA_WORDS.some((w) => text.includes(w)) || PERSONA_ASK_RE.test(text) || (change && personaValue !== '')
+  const wantsTheme = THEME_WORDS.some((w) => text.includes(w)) || (change && themeValue !== '')
+  if (!wantsPersona && !wantsTheme) return null
+  const applied: Record<string, string> = {}
+  if (wantsPersona && personaValue) applied.default_persona = personaValue
+  if (wantsTheme && themeValue) applied.theme = themeValue
+  if (Object.keys(applied).length > 0) return appliedResult(applied)
+  const chips = wantsPersona ? [...PERSONA_STYLE_CHIPS] : [...THEME_CHIPS]
+  chips.push(OPEN_SETTINGS_CHIP)
+  return { intent: 'clarify', text: PREFERENCE_CLARIFY_TEXT, mood: 'thinking', params: { chips } }
+}
+
 export function classifyLocal(text: string, ctx: LocalContext): ChatTurnResult {
   const game = findGame(text, ctx.games)
   const hasSession = Boolean(ctx.activeGameId)
@@ -235,8 +320,10 @@ export function classifyLocal(text: string, ctx: LocalContext): ChatTurnResult {
   if (HISTORY_RE.test(text)) {
     return { intent: 'history', text: '这是你最近的战绩 👇', mood: 'neutral', params: {} }
   }
+  const preference = preferenceResult(text)
+  if (preference) return preference
   if (SETTINGS_RE.test(text)) {
-    return { intent: 'settings', text: '设置面板已为你展开 👇', mood: 'neutral', params: {} }
+    return { intent: 'settings', text: '设置面板已为你展开 👇', mood: 'neutral', params: { open_page: true } }
   }
   if (BENCHMARK_RE.test(text)) {
     return { intent: 'benchmark', text: '评测中心已为你展开 👇', mood: 'neutral', params: {} }

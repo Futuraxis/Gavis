@@ -11,10 +11,17 @@ human seat vs an arbitrary number of AI seats:
   reasons only from its own partial projection — the archived
   play_werewolf app built one solver per seat the same way
   (``archive/legacy_play_apps/play_werewolf/session.py``);
-- the solver kind is probed once at session start: ``ollama`` when the
-  local Ollama server answers ``OllamaClient.available()``, else
+- the solver kind is probed once at session start: ``ollama`` when an
+  OpenAI-compatible LLM endpoint answers ``LLMClient.available()``, else
   ``random`` — the snapshot's ``ai_mode`` records which one is live;
-  ``allow_unknown=True`` because the custom game id is unregistered;
+  ``allow_unknown=True`` because the custom game id is unregistered.
+  ``ollama`` is the **historical solver-kind name**, not "a local model":
+  the probe and the solver both read the platform LLM settings (persisted
+  config → ``LLM_BASE_URL``/``LLM_MODEL`` env bridge), so a cloud endpoint
+  (DeepSeek / GLM / …) is a perfectly normal ``ai_mode=ollama`` session.
+  The snapshot therefore also carries ``ai_model`` / ``ai_endpoint`` /
+  ``ai_base_url`` (display-only, no key) so the UI can name the model it
+  actually talks to instead of hard-coding 「本地大模型」;
 - snapshots are built **only** from ``engine.project_observation`` (the
   visibility-projected partial view), ``engine.get_legal_actions`` and
   public env fields — the hidden-information red line: another player's
@@ -32,13 +39,15 @@ solver package name in this module finds nothing by construction).
 
 from __future__ import annotations
 
+import os
 import random
 import re
 from dataclasses import replace
 from typing import TYPE_CHECKING, Callable
+from urllib.parse import urlsplit
 
 from layer2_engine.core.engine import GameEngine
-from layer2_engine.core.llm import LLMClient
+from layer2_engine.core.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, LLMClient
 from layer2_engine.core.state_graph import ActionInstance
 
 from ....solver_provider import SolverHandle, SolverProvider
@@ -110,6 +119,30 @@ def _player_counts(rules: dict, seats: tuple[str, ...]) -> tuple[int, ...]:
     return tuple(counts)
 
 
+#: 视为「本机端点」的主机名（Ollama / 本地 vLLM）；其余一律按远程/云端标注。
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+
+def _llm_endpoint_info() -> tuple[str, str, str]:
+    """Resolve the LLM endpoint the social solvers actually call.
+
+    Precedence mirrors ``train-cli/games.py::_make_ollama`` (the assembly
+    point that builds the per-seat solver): ``LLM_MODEL``/``LLM_BASE_URL``
+    env — mirrored from the platform LLM settings page by
+    ``llm_settings.sync_env`` — else the built-in default.  Read at session
+    start only, for **display**: no request, no key, no behaviour change.
+
+    Returns:
+        ``(model, endpoint, base_url)`` with ``endpoint`` ``"local"`` when
+        the host is the loopback machine (Ollama convention) else
+        ``"remote"`` (cloud / LAN endpoint).
+    """
+    base_url = os.environ.get("LLM_BASE_URL", "").strip() or DEFAULT_BASE_URL
+    model = os.environ.get("LLM_MODEL", "").strip() or DEFAULT_MODEL
+    host = (urlsplit(base_url).hostname or "").lower()
+    return model, ("local" if host in _LOCAL_HOSTS else "remote"), base_url
+
+
 def _target_id_of(params: dict) -> str | None:
     """Normalize a target param to its id.
 
@@ -175,6 +208,9 @@ class _SocialSolverAssembly:
         seats: tuple[str, ...],
         difficulty: str = "normal",
         pacing: str = "standard",
+        ai_model: str | None = None,
+        ai_endpoint: str | None = None,
+        ai_base_url: str | None = None,
     ) -> None:
         self.provider = provider
         self.game_id = game_id
@@ -183,6 +219,12 @@ class _SocialSolverAssembly:
         self.budget = budget
         self.mode = mode
         self.seats = seats
+        # 展示用 LLM 描述（真实模型 / 端点位置 / base_url；无密钥）——`mode`
+        # 的取值 ``"ollama"`` 是历史求解器名（语义＝「OpenAI 兼容端点可用」），
+        # 云端 LLM 也是 ``ollama``，前端据此标注模型而非硬编码「本地大模型」。
+        self.ai_model = ai_model
+        self.ai_endpoint = ai_endpoint
+        self.ai_base_url = ai_base_url
         # 难度两维(与平台 difficulty×pacing 3×3 契约对齐):透传给每个 AI 座位
         # 的 OllamaConfig——difficulty 选 ROLE_GUIDE 策略档 + 卧底词对档,
         # pacing 调发言温度。random 模式忽略(solvent stateless)。
@@ -352,6 +394,12 @@ def _build_snapshot(session: GameSession) -> dict:
     # ai_mode 优先读 latest 决策标注（_run_ai 每步写入；LLM 实际失败时如实
     # 降级为 "random"），未跑过 AI 的新会话回退到探测时的 assembly.mode。
     ai_mode = session.last_ai_info.get("ai_mode") or (assembly.mode if assembly is not None else "random")
+    # 展示字段（仅 mode=ollama 时有值）：实际调用的模型/端点/base_url，让前端
+    # 说清「用的是哪个大模型」而不是硬编码「本地大模型」——``ollama`` 是历史
+    # 求解器名，语义为「OpenAI 兼容端点」，云端 DeepSeek 配置同样命中它。
+    ai_model = getattr(assembly, "ai_model", None)
+    ai_endpoint = getattr(assembly, "ai_endpoint", None)
+    ai_base_url = getattr(assembly, "ai_base_url", None)
 
     phase = obs_env.get("phase", env.get("phase"))
 
@@ -407,6 +455,9 @@ def _build_snapshot(session: GameSession) -> dict:
         "winners": list(obs_env.get("winners") or []),
         "legal": legal,
         "ai_mode": ai_mode,
+        "ai_model": ai_model,
+        "ai_endpoint": ai_endpoint,
+        "ai_base_url": ai_base_url,
         "final_roles": final_roles,
     }
 
@@ -445,10 +496,24 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
         provider: SolverProvider, engine: GameEngine, seed: int, budget: int, **kw: object
     ) -> SolverHandle:
         mode = "ollama" if LLMClient.available() else "random"
+        # 只有真的选中 LLM 时才报告模型/端点（random 模式下没有在用的大模型，
+        # 不给出会被误读为「已连上」的字段）。
+        ai_model = ai_endpoint = ai_base_url = None
+        if mode == "ollama":
+            ai_model, ai_endpoint, ai_base_url = _llm_endpoint_info()
         assembly = _SocialSolverAssembly(
-            provider, game_id, engine, seed, budget, mode, seats,
+            provider,
+            game_id,
+            engine,
+            seed,
+            budget,
+            mode,
+            seats,
             difficulty=str(kw.get("difficulty") or "normal"),
             pacing=str(kw.get("pacing") or "standard"),
+            ai_model=ai_model,
+            ai_endpoint=ai_endpoint,
+            ai_base_url=ai_base_url,
         )
         return _SocialSolverHandle(assembly)
 

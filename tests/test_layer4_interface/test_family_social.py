@@ -58,6 +58,9 @@ SOCIAL_CONTRACT_KEYS = frozenset(
         "winners",
         "legal",
         "ai_mode",
+        "ai_model",
+        "ai_endpoint",
+        "ai_base_url",
         "final_roles",
     }
 )
@@ -397,8 +400,45 @@ class TestOllamaProbe:
         session = manager.start("undercover", "p0", "easy", player_count=8)
         result = manager.move(session.game_id, {"type": "speak", "text": "大家好"})
         assert result["ai_mode"] == "random"
+        # random 模式没有在用的大模型——展示字段为 None，不谎称「已连上」。
+        assert result["ai_model"] is None
+        assert result["ai_endpoint"] is None
+        assert result["ai_base_url"] is None
         assert provider.calls
         assert all(call["name"] == "random" for call in provider.calls)
+
+    def test_snapshot_names_the_configured_llm(self, tmp_path, monkeypatch):
+        """平台 LLM 配置（env 桥）指向云端端点时，快照如实给出模型/端点。
+
+        ``ai_mode='ollama'`` 只是历史求解器名（语义＝OpenAI 兼容端点可用），
+        云端 DeepSeek 配置同样命中它——所以展示必须靠 ``ai_model`` /
+        ``ai_endpoint``，否则前端会把云端局标注成「本地大模型」。
+        """
+        monkeypatch.setattr(LLMClient, "available", staticmethod(lambda: True))
+        monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
+        monkeypatch.setenv("LLM_MODEL", "deepseek-v4-flash")
+        provider = _RecordingProvider()
+        manager = PlayManager(provider=provider, seed=42, custom=_registry(tmp_path, "undercover"))
+        session = manager.start("undercover", "p0", "easy", player_count=8)
+        snap = session.snapshot()
+        assert snap["ai_mode"] == "ollama"
+        assert snap["ai_model"] == "deepseek-v4-flash"
+        assert snap["ai_endpoint"] == "remote"
+        assert snap["ai_base_url"] == "https://api.deepseek.com"
+
+    def test_snapshot_marks_default_endpoint_local(self, tmp_path, monkeypatch):
+        """未配置平台 LLM 时，端点回退内置默认（本机 Ollama）→ local。"""
+        monkeypatch.setattr(LLMClient, "available", staticmethod(lambda: True))
+        monkeypatch.delenv("LLM_BASE_URL", raising=False)
+        monkeypatch.delenv("LLM_MODEL", raising=False)
+        provider = _RecordingProvider()
+        manager = PlayManager(provider=provider, seed=42, custom=_registry(tmp_path, "undercover"))
+        session = manager.start("undercover", "p0", "easy", player_count=8)
+        snap = session.snapshot()
+        assert snap["ai_mode"] == "ollama"
+        assert snap["ai_endpoint"] == "local"
+        assert snap["ai_model"]  # 内置默认模型名（qwen3:8b）
+        assert snap["ai_base_url"]
 
     def test_ollama_degraded_reports_random_mode(self, tmp_path, monkeypatch):
         """审查（LLM 兜底系统性排查）：探测通过（mode=ollama）但求解器实际

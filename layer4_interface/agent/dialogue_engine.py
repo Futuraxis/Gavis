@@ -189,7 +189,13 @@ class DialogueEngine:
     ) -> tuple[str, str]:
         """LLM 成文，失败或无 LLM 时回退兜底台词；返回 ``(text, reasoning)``."""
         if self.llm is not None:
-            system = self._system_prompt(teaching=teaching, adversarial=adversarial)
+            # 按**规则族**换用事实措辞：牌面/下注是扑克的话术，套到棋类上
+            # 会让模型真的去谈手牌（实测月亮棋对手回“我先看看手牌成色…想下注就下”）。
+            system = self._system_prompt(
+                teaching=teaching,
+                adversarial=adversarial,
+                family=_payload_family(ctx, game_id),
+            )
             user = self._user_prompt(ctx, scenario, game_id)
             try:
                 reply = self.llm.complete_chat_reply(system, user, self.max_tokens)
@@ -216,40 +222,33 @@ class DialogueEngine:
                 logger.warning("对话 LLM 未产出内容（空回复），回退兜底台词")
         return self._pick_fallback(scenario, avoid=None), ""
 
-    def _system_prompt(self, *, teaching: bool = False, adversarial: bool = False) -> str:
+    def _system_prompt(self, *, teaching: bool = False, adversarial: bool = False, family: str = "") -> str:
         identity = persona_identity_block(self.persona)
+        context = _family_context(family)
         if teaching:
             return (
                 f"你是 Gavis 教练 Agent（教学对局）。{identity}\n"
                 "用中文回复，简洁，符合你的性格。"
-                "教学对局：你能看到玩家自己的牌（与玩家所见完全一致），"
+                "教学对局：你能看到玩家自己的信息（与玩家所见完全一致），"
                 "可以并且应该围绕它讲解思路、点评玩家刚才的打法。"
-                "红线：绝不提及或猜测任何对手/其他玩家的未公开信息"
-                "（手牌、身份、底牌、未翻开的牌等）——你也看不到它们。"
+                f"{context['coach']}"
                 "游戏规则只依据资料栏，资料没有的细节不要编造。"
             )
         if adversarial:
             return (
                 f"你是 Gavis 对手 Agent（二人非教练对局）。{identity}\n"
                 "用中文回复，简洁，符合你的性格。"
-                "你是玩家的座内对手：你能看到**自己**的手牌/底牌（仅供你判断"
-                "牌力、决定下注与是否虚张声势），可以围绕**牌力强弱**讲思路、"
-                "对玩家刚才的公开动作做合理推断（读人）。"
-                "红线一：绝不提及或猜测玩家的未公开信息（玩家的底牌、手牌、"
-                "身份等）——你也看不到它们；只能基于玩家公开的下注/弃牌/"
-                "摸打序列推断意图，不要报玩家未公开牌面。"
-                "红线二：绝不报出**你自己**底牌的具体花色与点数（如「黑桃4」"
-                "「♠A」「s10」），只能说「这手还行」「牌不大」「一对K」这类"
-                "模糊牌力——报出具体牌面等于明牌，会直接毁掉这局。"
-                "终局 showdown 揭底后双方牌公开，可做完整复盘式点评。"
+                "你是玩家的座内对手，可以基于玩家**公开**的动作做合理推断（读人）、"
+                "并围绕自己的判断讲思路。"
+                f"{context['opponent']}"
+                "终局揭底后双方信息公开，可做完整复盘式点评。"
                 "游戏规则只依据资料栏，资料没有的细节不要编造。"
             )
         return (
             f"你是 Gavis 陪玩 Agent。{identity}\n"
             "用中文回复，简洁，符合你的性格。"
-            "红线：不得编造任何对手/其他玩家的未公开信息"
-            "（手牌、身份、底牌、未翻开的牌等）；"
             "需要局面细节时依据机械事实与玩家自己可见的信息。"
+            f"{context['companion']}"
             "提到当前游戏的规则/玩法时，只依据资料栏给出的内容，资料没有的细节不要编造。"
         )
 
@@ -283,6 +282,62 @@ class DialogueEngine:
     def _clean_reasoning(self, reasoning: str) -> str:
         """思维链清洗：剔控制字符 + 上限（与前端展示/存档预算对齐）。"""
         return sanitize_text(reasoning, _REASONING_MAX).strip()
+
+
+#: 各规则族的「什么是私有信息 / 红线怎么表述」——陪伴、教练、对手三态共用一套
+#: 事实，语气已按身份调好。**不能**把扑克话术（手牌/底牌/下注/筹码）套到棋类上：
+#: 实测（2026-09-16）月亮棋对手 Agent 的提示词只说「你的手牌/底牌」，模型据此
+#: 回出「我先看看手牌成色…想下注就下」——规则里根本没有手牌与下注。
+#: 注意：棋类措辞**刻意不复述**这些牌桌词（复述本身就会把模型往牌桌上带），
+#: 只说"双方信息对等、盘面公开"。
+_FAMILY_CONTEXT: dict[str, dict[str, str]] = {
+    "grid": {
+        "companion": "这是棋类对局：盘面与落子都是公开信息。"
+        "红线：不得编造盘面之外的未公开信息，点评与建议只依据公开盘面与公开落子，不要使用牌桌术语。",
+        "coach": "棋盘与落子都是公开信息：点评只依据公开盘面与玩家的落子，不要编造盘面之外的未公开信息。",
+        "opponent": "这是棋类对局：双方看的是**同一张公开棋盘**，你与玩家的信息完全对等，没有需要隐藏的信息。"
+        "红线：不得编造盘面之外的未公开信息，点评与读人只依据公开落子，不要使用牌桌术语。",
+    },
+    "poker": {
+        "companion": "红线：不得编造玩家或对手的未公开信息（底牌、未翻开的牌），需要局面细节时依据机械事实。",
+        "coach": "红线：绝不提及或猜测对手（AI）的未公开信息（底牌与未翻开的牌）——你也看不到；玩家自己的底牌就是你能看到的信息。",
+        "opponent": "你能看到**自己**的底牌（仅供你判断牌力、决定下注与是否虚张声势）。"
+        "红线：绝不提及或猜测玩家的未公开信息（底牌、手牌）；绝不报出自己底牌的具体花色与点数"
+        "（如「黑桃4」「♠A」），只能说「这手还行」「牌不大」这类模糊牌力——报出具体牌面等于明牌。",
+    },
+    "mahjong": {
+        "companion": "红线：不得编造别人手牌、牌墙等未公开信息，需要局面细节时依据机械事实。",
+        "coach": "红线：绝不提及或猜测别人（AI）的未公开信息（手牌与牌墙）——你也看不到；玩家自己的手牌就是你能看到的信息。",
+        "opponent": "你能看到**自己**的手牌与牌河（可谈牌型、进张的模糊判断）。"
+        "红线：绝不报出自己手牌的具体牌面（如「三条」「五万」），也绝不提及或猜测别人的未公开信息（手牌与牌墙）。",
+    },
+    "uno": {
+        "companion": "红线：不得编造别人手牌等未公开信息，需要局面细节时依据机械事实。",
+        "coach": "红线：绝不提及或猜测别人的未公开信息（手牌）——你也看不到；玩家自己的手牌就是你能看到的信息。",
+        "opponent": "你能看到**自己**的手牌与牌堆顶牌（可谈「手里不多了」这类模糊情况）。"
+        "红线：绝不报出自己手牌的具体牌面（如「红5」「蓝禁止」），也绝不提及或猜测别人的未公开信息（手牌）。",
+    },
+    "social": {
+        "companion": "红线：不得编造别人的身份、词语等未公开信息，需要局面细节时依据机械事实。",
+        "coach": "红线：绝不透露其他玩家的未公开信息（身份与词语）——你也看不到；玩家自己的身份与词语就是你能看到的信息。",
+        "opponent": "你知道**自己**的身份与词语（不能说破，可含糊表态）。"
+        "红线：绝不透露自己或别人的未公开信息（身份与词语），也不得编造他人的未公开发言。",
+    },
+}
+
+#: 自定义 / 未知族：不预设任何游戏特有名词（既不说牌面也不过问盘面），
+#: 只保留「不编造未公开信息」这条通用红线。
+_FAMILY_CONTEXT_DEFAULT: dict[str, str] = {
+    "companion": "红线：不得编造未公开信息，点评与建议只依据机械事实与玩家自己可见的信息，也不要使用与本游戏无关的术语。",
+    "coach": "红线：绝不提及或猜测任何对手/其他玩家的未公开信息，也不要使用与本游戏无关的术语。",
+    "opponent": "红线：绝不提及或猜测玩家的未公开信息，也不要使用与本游戏无关的术语。",
+}
+
+
+def _family_context(family: str) -> dict[str, str]:
+    """取该规则族的措辞（未知族回退通用版；未知键回退通用版同名字段）。"""
+    context = _FAMILY_CONTEXT.get(str(family or ""), {})
+    return {key: context.get(key) or value for key, value in _FAMILY_CONTEXT_DEFAULT.items()}
 
 
 def _state_hash(ctx: SkillContext) -> str:

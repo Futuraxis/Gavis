@@ -37,6 +37,13 @@ export default function InlineBoard({ snapshot, game, busy, onMove, onRestart }:
   const family = resolveBoardFamily(snapshot, game)
   const Board = FAMILY_BOARDS[family]
   const myTurn = !snapshot.over && snapshot.turn === snapshot.player_pid && !busy
+  // 正在行动的 AI 座位：流式进度帧每推一帧都会刷新 turn，所以「谁在发言/
+  // 落子」跟着一起动——这是「轮不到自己也不像卡死」的关键读据。私密阶段
+  // （狼人杀夜晚等）后端把非本人 turn 脱敏为 null，这里自然回退到泛化文案，
+  // 不会把夜间行动者泄漏出来。
+  const actingSeat =
+    !snapshot.over && snapshot.turn != null && snapshot.turn !== snapshot.player_pid ? snapshot.turn : null
+  const actingLabel = actingSeat ? (game?.seat_names?.[actingSeat] ?? actingSeat) : null
   // 终局胜负（头部口径）：社交阵营胜者（winner=undercover 等）按终局身份表
   // 归边——否则卧底获胜被误标「AI 赢了」（实测 e7deb84b）；其余回退 pid 比较。
   const myFinalRole = (snapshot as SocialSnapshot).final_roles?.find((r) => r.pid === snapshot.player_pid)?.role ?? null
@@ -93,7 +100,9 @@ export default function InlineBoard({ snapshot, game, busy, onMove, onRestart }:
                 ? `${factionLabel(snapshot.winner) ?? game?.seat_names?.[snapshot.winner] ?? 'AI'} 赢了`
                 : '平局'
             : busy
-              ? 'AI 思考中…'
+              ? actingLabel
+                ? `${actingLabel} 行动中…`
+                : 'AI 思考中…'
               : myTurn
                 ? (snapshot as MahjongSnapshot).phase === 'claim'
                   ? // claim 是响应别人打出的牌，不是你的出牌回合。

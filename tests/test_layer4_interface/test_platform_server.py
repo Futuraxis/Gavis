@@ -301,6 +301,220 @@ class TestMatch:
         assert exc.value.code == 400
 
 
+class TestHistoryQuery:
+    """`/api/history` 的筛选 / 分页 / 元数据契约（平台「对局记录」页的数据源）。
+
+    回归背景：对局记录页从「一屏只读表格」升级为专业用户的元数据视图后，
+    后端必须支撑 offset 分页与 result/q/since 服务端筛选，并在 meta 里补出
+    seed / family / custom / player_count / variant；同时 `?limit=abc` 之类
+    脏参数要宽容解析（旧实现 `int()` 直转 → 500）。这里锁定这些契约。
+    """
+
+    @pytest.fixture
+    def seeded_url(self, tmp_path: pytest.TempPathFactory) -> Generator[str, None, None]:
+        """带 4 条人造对局记录的服务器（历史页筛选/分页用例专用）。"""
+        history = MatchHistory(tmp_path / "matches")
+        manager = PlayManager(provider=default_provider, history=history, seed=42)
+        benchmark = BenchmarkRunner(provider=default_provider, seed=42)
+        records = [
+            {
+                "match_id": "hist_oldest",
+                "game_id": "moon_chess",
+                "player_pid": "p_black",
+                "ai_pid": "p_white",
+                "difficulty": "easy",
+                "winner": "p_white",
+                "won": False,
+                "started_at": "2026-01-01T10:00:00+08:00",
+                "finished_at": "2026-01-01T10:01:00+08:00",
+                "over": True,
+                "moves": [
+                    {"step": 0, "snapshot": {"pids": ["p_black", "p_white"]}},
+                ],
+            },
+            {
+                # 旧记录：无 won / seed / family / teaching / ai_strength / variant；
+                # 且胜者是**阵营名**（社交族），只有读末手快照的 final_roles 才能
+                # 判出玩家视角胜负——正是 `_handle_history_list` 回填 won 的场景。
+                "match_id": "hist_legacy",
+                "game_id": "stochastic_gomoku",
+                "player_pid": "p0",
+                "ai_pid": "p1",
+                "difficulty": "normal",
+                "winner": "civilian",
+                "started_at": "2026-02-01T10:00:00+08:00",
+                "over": True,
+                "moves": [
+                    {
+                        "step": 0,
+                        "snapshot": {
+                            "pids": ["p0", "p1"],
+                            "base_variant": "classic",
+                            "winner": "civilian",
+                            "final_roles": [{"pid": "p0", "role": "civilian"}, {"pid": "p1", "role": "undercover"}],
+                        },
+                    },
+                ],
+            },
+            {
+                # 最旧的记录：连 moves 都没有（更早期的落盘格式）→ 新元数据全缺失，
+                # 记录页必须按「缺就不显示」处理，服务端不得报错。
+                "match_id": "hist_empty",
+                "game_id": "moon_chess",
+                "player_pid": "p_black",
+                "ai_pid": "p_white",
+                "difficulty": "easy",
+                "winner": "p_black",
+                "started_at": "2025-12-01T10:00:00+08:00",
+                "over": True,
+            },
+            {
+                "match_id": "hist_draw",
+                "game_id": "werewolf",
+                "player_pid": "p0",
+                "ai_pid": "p1",
+                "difficulty": "normal",
+                "winner": None,
+                "won": None,
+                "started_at": "2026-03-01T10:00:00+08:00",
+                "finished_at": "2026-03-01T10:30:00+08:00",
+                "over": True,
+                "moves": [],
+            },
+            {
+                "match_id": "hist_custom",
+                "game_id": "my_custom_game",
+                "player_pid": "p0",
+                "ai_pid": "p1",
+                "difficulty": "hard",
+                "winner": "p0",
+                "won": True,
+                "started_at": "2026-04-01T10:00:00+08:00",
+                "finished_at": "2026-04-01T10:05:00+08:00",
+                "over": True,
+                "seed": 43,
+                "family": "grid",
+                "custom": True,
+                "persona": "gentle",
+                "hinted": True,
+                "teaching": False,
+                "ai_strength": 300,
+                "adaptive": False,
+                "moves": [
+                    {"step": 0, "snapshot": {"pids": ["p0", "p1"], "variant": "four_in_row"}},
+                ],
+            },
+        ]
+        for record in records:
+            history.record(record)
+        httpd = ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            make_handler(manager, history, benchmark, dist_dir=tmp_path / "no-dist"),
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        yield f"http://127.0.0.1:{httpd.server_address[1]}"
+        httpd.shutdown()
+        httpd.server_close()
+
+    def test_list_envelope_and_newest_first(self, seeded_url: str):
+        data = _get(seeded_url + "/api/history?limit=1")
+        assert data["ok"] is True
+        assert data["total"] == 5
+        assert data["has_more"] is True
+        assert [m["match_id"] for m in data["matches"]] == ["hist_custom"]
+        # 元数据补全：顶层 seed/family/custom 进 meta，末手快照给出人数与变体。
+        custom = data["matches"][0]
+        assert custom["seed"] == 43
+        assert custom["family"] == "grid"
+        assert custom["custom"] is True
+        assert custom["player_count"] == 2
+        assert custom["variant"] == "four_in_row"
+        assert custom["seat_names"] == {}
+
+    def test_meta_backfills_seed_names_and_player_won(self, seeded_url: str):
+        data = _get(seeded_url + "/api/history?limit=500")
+        by_id = {m["match_id"]: m for m in data["matches"]}
+        # 注册表游戏的座位称呼由服务端按 game_id 现算注入。
+        assert by_id["hist_oldest"]["seat_names"]["p_black"] == "黑棋"
+        # 旧记录缺 won 且胜者是阵营名（civilian）→ 只有末手快照的 final_roles
+        # 能判出玩家视角胜负；回填后必须为 True。
+        assert by_id["hist_legacy"]["won"] is True
+        # 旧记录缺新字段 → 一律 None，前端按「缺就不显示」处理。
+        assert by_id["hist_legacy"]["seed"] is None
+        assert by_id["hist_legacy"]["family"] is None
+        # 没有 variant 键时回退读快照的 base_variant。
+        assert by_id["hist_legacy"]["variant"] == "classic"
+        # 末手快照给了座位表（pids / hand_counts 任一）→ 人数可推。
+        assert by_id["hist_oldest"]["player_count"] == 2
+        assert by_id["hist_legacy"]["player_count"] == 2
+        # 连 moves 都没有的更旧记录：不得报错，新字段全缺失、won 仍能按 pid 回填。
+        empty = by_id["hist_empty"]
+        assert empty["player_count"] is None
+        assert empty["variant"] is None
+        assert empty["family"] is None
+        assert empty["seed"] is None
+        assert empty["won"] is True  # 胜者即玩家本人 → 胜
+
+    def test_offset_pagination_never_repeats(self, seeded_url: str):
+        first = _get(seeded_url + "/api/history?limit=2&offset=0")
+        second = _get(seeded_url + "/api/history?limit=2&offset=2")
+        first_ids = {m["match_id"] for m in first["matches"]}
+        second_ids = {m["match_id"] for m in second["matches"]}
+        assert len(first_ids) == 2 and len(second_ids) == 2
+        assert not (first_ids & second_ids)
+        assert first["total"] == second["total"] == 5
+        assert second["has_more"] is True
+        # 越过末尾 → 空页，但仍然如实报告总数（前端据此停「加载更多」）。
+        tail = _get(seeded_url + "/api/history?limit=2&offset=99")
+        assert tail["matches"] == []
+        assert tail["total"] == 5
+        assert tail["has_more"] is False
+
+    def test_dirty_pagination_params_are_tolerated(self, seeded_url: str):
+        # 旧实现 `int(query["limit"])` 直转 → 这两个请求都会 500。
+        fallback = _get(seeded_url + "/api/history?limit=abc&offset=xyz")
+        assert fallback["ok"] is True
+        assert fallback["total"] == 5
+        assert len(fallback["matches"]) == 5
+        clamped = _get(seeded_url + "/api/history?limit=99999&offset=-5")
+        assert clamped["ok"] is True
+        assert len(clamped["matches"]) == 5
+
+    def test_result_filter_uses_player_perspective(self, seeded_url: str):
+        wins = _get(seeded_url + "/api/history?result=win")
+        assert wins["total"] == 3
+        assert {m["match_id"] for m in wins["matches"]} == {"hist_legacy", "hist_custom", "hist_empty"}
+        loses = _get(seeded_url + "/api/history?result=lose")
+        assert {m["match_id"] for m in loses["matches"]} == {"hist_oldest"}
+        draws = _get(seeded_url + "/api/history?result=draw")
+        assert {m["match_id"] for m in draws["matches"]} == {"hist_draw"}
+        # 三态互斥且并集等于全集（前端胜率统计依赖这一点）。
+        assert wins["total"] + loses["total"] + draws["total"] == 5
+        # 非法结果值 → 忽略该筛选（不 400、不返回空）。
+        bogus = _get(seeded_url + "/api/history?result=maybe")
+        assert bogus["total"] == 5
+
+    def test_keyword_and_since_filters(self, seeded_url: str):
+        by_seat = _get(seeded_url + "/api/history?q=" + urllib.parse.quote("红中"))
+        assert by_seat["total"] == 0  # 未注册/无座位称呼的游戏不会伪造命中
+        by_game = _get(seeded_url + "/api/history?q=werewolf")
+        assert {m["match_id"] for m in by_game["matches"]} == {"hist_draw"}
+        future = _get(seeded_url + "/api/history?since=2099-01-01")
+        assert future["total"] == 0
+        assert future["matches"] == []
+        # 非法日期 → 忽略筛选而不是报错。
+        bad = _get(seeded_url + "/api/history?since=not-a-date")
+        assert bad["total"] == 5
+        recent = _get(seeded_url + "/api/history?since=2026-03-01")
+        assert {m["match_id"] for m in recent["matches"]} == {"hist_draw", "hist_custom"}
+
+    def test_game_id_filter_still_works(self, seeded_url: str):
+        data = _get(seeded_url + "/api/history?game_id=moon_chess")
+        assert data["total"] == 2
+        assert {m["match_id"] for m in data["matches"]} == {"hist_oldest", "hist_empty"}
+
+
 class TestBenchmark:
     def test_benchmark_flow(self, base_url: str):
         data = _post(
@@ -454,6 +668,11 @@ class TestCompanionIntegration:
             put = json.loads(resp.read().decode("utf-8"))
         assert put["ok"] is True
         assert put["profile"]["theme"] == "dark"
+        # 对话里改偏好走的就是「只提交变更字段」的部分写（chat 的
+        # params.applied → 前端 PUT /api/profile）：必须与既有字段合并，
+        # 绝不能整体覆盖掉昵称/性格。
+        assert put["profile"]["nickname"] == "阿远"
+        assert put["profile"]["default_persona"] == "teacher"
         cleared = _post(companion_url + "/api/profile/clear", {})
         assert cleared["ok"] is True
         assert cleared["profile"]["nickname"] == ""
@@ -572,6 +791,26 @@ class TestChatEndpoint:
         assert data["ok"] is True
         assert data["intent"] == "chat"
 
+    def test_chat_style_change_carries_applied_patch(self, base_url: str):
+        """HTTP 端到端：「换个风格」给选项、「换成高冷竞技」带 applied 补丁。
+
+        这条链路曾是 UX 事故：`/api/chat` 回 `intent=settings` + 空 params →
+        前端直接切到 #/settings 且吞掉回复。现在取值走 `applied`（前端写档案
+        并回执、不跳页），没取值走 `clarify` + chips。
+        """
+        applied = _post(base_url + "/api/chat", {"text": "换成高冷竞技"})
+        assert applied["intent"] == "settings"
+        assert applied["params"]["applied"] == {"default_persona": "cold"}
+        assert "open_page" not in applied["params"]
+        ask = _post(base_url + "/api/chat", {"text": "你能换个风格吗？"})
+        assert ask["intent"] == "clarify"
+        assert "换成温柔陪伴" in ask["params"]["chips"]
+        assert "open_page" not in ask["params"]
+        opened = _post(base_url + "/api/chat", {"text": "打开设置"})
+        assert opened["intent"] == "settings"
+        assert opened["params"]["open_page"] is True
+        assert "applied" not in opened["params"]
+
     def test_chat_sse_accept_event_stream(self, base_url: str):
         """Accept: text/event-stream → SSE 帧序列（intent 收口 + done 结尾）。"""
         content_type, body = _post_stream(base_url + "/api/chat", {"text": "我想玩月亮棋"}, accept=True)
@@ -678,6 +917,90 @@ class TestMatchStream:
         parsed = json.loads(body.decode("utf-8"))
         assert parsed["ok"] is True
         assert parsed["session"]["game_id"] == session_id
+
+
+class TestSoftSseEmitter:
+    """``_soft_emitter``：客户端断开后推帧必须变成空操作，绝不能中断对局。
+
+    回归背景（2026-09 卧底「轮不到自己就卡死」）：``on_progress`` 直接在
+    ``GameSession.run_ai`` 的 AI 循环体内写 SSE。玩家刷新/关页后 socket 已断，
+    ``wfile.write`` 抛 ``BrokenPipeError``/``ConnectionResetError``（均为
+    ``OSError``）——异常穿过 ``run_ai`` 会**打断 AI 循环**：人类行动已落地、
+    AI 只走了半步，会话停在「当前行动者是某个 AI 座位」上，玩家回来再也走不动
+    （``_parse_human_action`` 抛「还没轮到你」）。杀掉这条异常路径后，对局照常
+    跑完，状态始终自洽。
+    """
+
+    def test_emit_swallows_broken_pipe_and_stops_writing(self):
+        from layer4_interface.frontend.platform.server import _soft_emitter
+
+        writes: list[str] = []
+
+        class _DeadSocket:
+            def write(self, frame: bytes) -> None:
+                writes.append(frame.decode("utf-8"))
+                raise BrokenPipeError(32, "Broken pipe")
+
+            def flush(self) -> None:  # pragma: no cover — write 先炸，不会走到
+                raise AssertionError("flush 不应被调用")
+
+        class _Handler:
+            pass
+
+        handler = _Handler()
+        handler.wfile = _DeadSocket()  # type: ignore[attr-defined]
+        handler.send_response = lambda *a, **k: None  # type: ignore[attr-defined]
+        handler.send_header = lambda *a, **k: None  # type: ignore[attr-defined]
+
+        emit = _soft_emitter(handler)  # type: ignore[arg-type]
+        emit("progress", {"session": {"game_id": "g"}})  # 不抛
+        emit("progress", {"session": {"game_id": "g"}})  # 断管后应短路
+        emit("done", {})
+        assert len(writes) == 1, "客户端断开后必须停止推帧，而不是继续写死 socket"
+
+    def test_emit_swallows_connection_reset(self):
+        from layer4_interface.frontend.platform.server import _soft_emitter
+
+        class _Handler:
+            def write(self, frame: bytes) -> None:
+                raise ConnectionResetError(10054, "Connection reset by peer")
+
+            def flush(self) -> None:
+                return None
+
+            send_response = staticmethod(lambda *a, **k: None)
+            send_header = staticmethod(lambda *a, **k: None)
+
+        handler = _Handler()
+        handler.wfile = handler  # type: ignore[attr-defined]
+        emit = _soft_emitter(handler)  # type: ignore[arg-type]
+        emit("progress", {})  # 不抛
+
+    def test_emit_writes_every_event_for_a_live_client(self):
+        from layer4_interface.frontend.platform.server import _soft_emitter
+
+        frames: list[str] = []
+
+        class _LiveSocket:
+            def write(self, frame: bytes) -> None:
+                frames.append(frame.decode("utf-8"))
+
+            def flush(self) -> None:
+                return None
+
+        class _Handler:
+            send_response = staticmethod(lambda *a, **k: None)
+            send_header = staticmethod(lambda *a, **k: None)
+
+        handler = _Handler()
+        handler.wfile = _LiveSocket()  # type: ignore[attr-defined]
+        emit = _soft_emitter(handler)  # type: ignore[arg-type]
+        emit("progress", {"session": {"game_id": "g"}})
+        emit("snapshot", {"session": {"game_id": "g"}})
+        emit("done", {})
+        assert len(frames) == 3
+        assert frames[0].startswith("event: progress\n")
+        assert frames[2] == "event: done\ndata: {}\n\n"
 
 
 @pytest.fixture

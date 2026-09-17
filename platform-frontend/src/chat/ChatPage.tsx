@@ -190,7 +190,15 @@ export default function ChatPage() {
       if (won) return '你赢了 🎉'
       return activeSession.winner ? '这一局输了' : '平局'
     }
-    if (busy) return 'AI 思考中…'
+    // 流式期间快照每帧都带当前行动座位 —— 收起界面后提示条也要说清「谁在动」，
+    // 而不是一句静止的「AI 思考中…」（社交游戏一整轮 AI 发言可达数十秒）。
+    if (busy) {
+      const seat = activeSession.turn
+      if (seat != null && seat !== activeSession.player_pid) {
+        return `${activeGameInfo?.seat_names?.[seat] ?? seat} 行动中…`
+      }
+      return 'AI 思考中…'
+    }
     // claim 是响应别人打出的牌（碰/杠/过），不是出牌回合 —— 不显示「轮到你了」。
     if (activeSession.turn === activeSession.player_pid) {
       const phase = (activeSession as { phase?: string | null }).phase

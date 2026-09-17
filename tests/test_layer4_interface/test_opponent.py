@@ -317,6 +317,49 @@ class TestDialogueOpponent:
             assert message.text in persona.fallback_lines["opp_read"]
 
 
+class TestDialogueFamilyWording:
+    """陪伴/教练/对手提示词按**规则族**给事实（2026-09-16 实测回归）。
+
+    旧提示词不分族地写「你的手牌/底牌、下注/弃牌」——月亮棋对手 Agent 据此
+    回出「我先看看手牌成色…想下注就下，想跟就跟」（棋类根本没有手牌与下注）。
+    现在棋类明确「同一张公开棋盘、没有手牌/底牌/下注」，牌类才用牌桌术语。
+    """
+
+    _CARD_WORDS = ("手牌", "底牌", "下注", "弃牌", "筹码")
+
+    def _capture(self, game_id: str, *, seat: str = "p_black", other: str = "p_white", persona: str = "gentle"):
+        llm = _RecordingLLM("好。")
+        engine = engine_from_rules(game_id, seed=42)
+        state = resolve_all_chance(engine, engine.create_initial_state())
+        ctx = Opponent.build(state, seat, other, engine, [])
+        DialogueEngine(PERSONAS[persona], llm=llm).reply(ctx, "opp_read", game_id=game_id)
+        assert llm.system is not None
+        return llm.system
+
+    def test_grid_opponent_prompt_has_no_card_vocabulary(self):
+        system = self._capture("moon_chess")
+        assert "公开棋盘" in system
+        assert "未公开信息" in system  # 红线仍在
+        for word in self._CARD_WORDS:
+            assert word not in system, f"棋类提示词不该出现牌桌术语: {word}"
+
+    def test_poker_opponent_prompt_keeps_card_red_lines(self):
+        system = self._capture("texas_holdem", seat="p_bb", other="p_sb")
+        assert "底牌" in system
+        assert "花色" in system  # 具体花色点数照旧禁止
+        assert "未公开信息" in system
+
+    def test_unknown_family_prompt_is_game_neutral(self):
+        """自定义/未知族不预设任何游戏名词，只保留通用红线。"""
+        from layer4_interface.agent.dialogue_engine import _family_context
+
+        neutral = _family_context("unknown")
+        assert "未公开信息" in neutral["opponent"]
+        for word in self._CARD_WORDS:
+            assert word not in neutral["opponent"]
+        assert "与本游戏无关的术语" in neutral["opponent"]
+
+
 # ── LLM token budget decoupling (reasoning-model empty-content fix) ──
 
 

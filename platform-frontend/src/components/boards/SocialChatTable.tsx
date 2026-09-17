@@ -52,6 +52,24 @@ const ACTION_LABELS: Record<string, string> = {
   pass: '过',
 }
 
+/**
+ * AI 模式标签：如实显示**实际调用**的大模型。
+ *
+ * ``ai_mode='ollama'`` 是历史求解器名，语义实为「OpenAI 兼容 LLM 端点可用」
+ * ——它既可能是本机 Ollama，也可能是平台 LLM 配置里的云端端点
+ * （DeepSeek / GLM / …）。所以这里按后端回报的 ``ai_model`` / ``ai_endpoint``
+ * 标注，而不是把 ``ollama`` 硬编码成「本地大模型」（曾把云端 DeepSeek 局
+ * 显示成「本地大模型」）。旧后端不带这两个字段时退化为「大模型（模型名）」
+ * 或「大模型」，绝不谎称本地。
+ */
+function aiModeLabel(snapshot: SocialSnapshot): string {
+  if (snapshot.ai_mode !== 'ollama') return '随机策略'
+  const model = snapshot.ai_model ? `（${snapshot.ai_model}）` : ''
+  if (snapshot.ai_endpoint === 'local') return `本地大模型${model}`
+  if (snapshot.ai_endpoint === 'remote') return `云端大模型${model}`
+  return `大模型${model}`
+}
+
 function Discourse({ snapshot }: { snapshot: SocialSnapshot }) {
   const mine = snapshot.player_pid
   return (
@@ -237,8 +255,8 @@ export default function SocialChatTable({ snapshot, interactive, onMove }: Props
             {snapshot.my_word && (
               <span className="social-my-role">你的词：{snapshot.my_word}</span>
             )}
-            <span className="social-ai-mode">
-              AI 模式：{snapshot.ai_mode === 'ollama' ? '本地大模型' : '随机策略'}
+            <span className="social-ai-mode" title={snapshot.ai_base_url ?? undefined}>
+              AI 模式：{aiModeLabel(snapshot)}
             </span>
           </>
         )}

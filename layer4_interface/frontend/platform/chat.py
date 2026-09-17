@@ -64,7 +64,12 @@ create     ``{game_id?, game?, family?, diff_summary?, validation?}``
                                    → 创建结果通知（``game`` = 注册表条目）；
                                      **无 ``game``** 时前端打开创建游戏页
                                      （无 LLM 兜底路径：不臆造规则）
-settings   ``{}``                   → 前端展示设置
+settings   ``{applied?, open_page?, chips?}``
+                                   → 偏好已按白名单校验（``applied`` = profile
+                                     字段 → 取值，前端写 ``/api/profile`` 并回执，
+                                     **不跳页**）；``open_page=true`` = 用户明确
+                                     要求打开设置页（此时才切页面）；
+                                     什么都没说清时走 ``clarify`` + 风格 chips
 platform   ``{}``                   → 前端切回完整平台界面
 benchmark  ``{}``                   → 前端展示评测中心
 learning   ``{}``                   → 前端展示在线学习
@@ -158,7 +163,9 @@ _INFO_TOOLS = (
 #: 就地执行的工具全集 = 只读信息工具 + 有副作用的本地工具。工具循环用
 #: 它挑「动作工具」（其余才算映射意图的一次性动作）；``create_game``
 #: 因此不再走 ``_intent_from_tool`` 的空参映射，而是真正执行创建。
-_LOCAL_TOOLS = (*_INFO_TOOLS, "create_game")
+#: ``update_settings`` 同理：它要按白名单校验取值、并在「用户没说要改成
+#: 哪种」时给出选项（空参映射会把这两种情况都压成同一句空话）。
+_LOCAL_TOOLS = (*_INFO_TOOLS, "create_game", "update_settings")
 
 #: get_match_state 的载荷预算（字符）。玩家投影快照除头部/棋盘/噪音
 #: 字段外逐 key 序列化，超预算截断（fail-soft，宁缺毋滥）。
@@ -237,6 +244,7 @@ _HELP_TEXT = (
     "· 对局中：“下第2行第3列” / “这步怎么走” / “提示我”\n"
     "· “看战绩” / “复盘上一局”\n"
     "· “创建一个新游戏” —— 直接说规则，我帮你生成（也可进「创建游戏」页）\n"
+    "· “换个风格” / “换成高冷竞技” —— 换助手性格（立刻生效）\n"
     "· “打开平台界面” —— 切回完整界面\n"
     "· “设置” / “评测中心” / “在线学习” —— 各功能面板"
 )
@@ -259,6 +267,62 @@ _HELP_RE = re.compile(r"(?:帮助|能做什么|怎么用|你有什么功能|你�
 _GRID_MOVE_RE = re.compile(r"(?:下|放|走)(?:第)?(\d{1,2})\s*行\s*(?:第)?(\d{1,2})\s*列")
 _GRID_CELL_RE = re.compile(r"(?:下|放|走)\s*(?:第)?(\d{1,2})\s*(?:格|格位置|个空位)")
 _CENTER_RE = re.compile(r"(?:中间|正中|中心)")
+
+# ── 对话里改偏好（“换个风格” / “改设置”）────────────────────────
+# 与前端 ``intents.ts`` 同表同口径。契约：明确说出取值 → ``settings`` +
+# ``params.applied``（前端写档案并回执，**不跳页**）；只说要换、没说成哪种
+# → ``clarify`` + 选项 chips。绝不替用户猜，也绝不把人从对话里静默甩到
+# 设置页。触发词只认「性格/风格/主题」类名词与明确改动词，闲聊不误伤。
+
+#: 用户明确要求打开设置页（只切页面，不改偏好）。
+_OPEN_SETTINGS_RE = re.compile(r"(?:打开|进入|去|切到|回到|看看)\s*(?:一下)?\s*(?:设置|偏好)页?")
+#: 改动词（“换/改/调/变…”）—— 与取值词同时出现才算改偏好请求。
+_PREFERENCE_CHANGE_RE = re.compile(r"(?:换|改|调|变|设置|来)(?:成|一个|个|一下|点)?")
+#: 性格/风格类名词。
+_PERSONA_WORDS = ("性格", "人设", "风格", "语气", "口气", "人格", "说话方式")
+#: 主题/外观类名词。
+_THEME_WORDS = ("主题", "外观", "配色")
+#: “温柔一点/高冷点”这类直接表态、没提名词的说法。
+_PERSONA_ASK_RE = re.compile(r"(?:温柔|贴心|陪玩|吐槽|幽默|搞笑|高冷|严肃|竞技|认真|老师).{0,2}(?:点|一点|一些|些)")
+#: 人格取值识别（“认真/教学”先判，避免“认真温柔”这类叠加句落到 gentle）。
+_PERSONA_VALUE_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("teacher", re.compile(r"(?:认真|教学|老师|讲道理)")),
+    ("gentle", re.compile(r"(?:温柔|贴心|陪玩)")),
+    ("banter", re.compile(r"(?:吐槽|幽默|搞笑)")),
+    ("cold", re.compile(r"(?:高冷|严肃|竞技)")),
+)
+#: 界面主题取值识别。
+_THEME_VALUE_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("dark", re.compile(r"(?:深色|暗色|夜间|黑夜|黑色主题|黑主题)")),
+    ("light", re.compile(r"(?:浅色|亮色|日间|白色主题|白主题)")),
+)
+#: 没说成哪种时的选项 chips（点一下 = 当作一句话发回来 → 命中上面的取值规则）。
+_PERSONA_STYLE_CHIPS = ("换成温柔陪伴", "换成认真教学", "换成轻松吐槽", "换成高冷竞技")
+_THEME_CHIPS = ("换成深色主题", "换成浅色主题")
+_OPEN_SETTINGS_CHIP = "打开设置页"
+_PREFERENCE_CLARIFY_TEXT = "想换成哪种？挑一个我立刻改；也可以直接打开设置页自己调。"
+
+#: update_settings 工具参数名 → profile 字段名。
+_SETTING_ARG_FIELDS = {
+    "persona": "default_persona",
+    "hint_level": "hint_level",
+    "difficulty": "default_difficulty",
+    "theme": "theme",
+}
+#: profile 字段 → 合法取值 → 中文显示名（工具参数白名单 + 回执文案共用）。
+_SETTING_VALUE_LABELS: dict[str, dict[str, str]] = {
+    "default_persona": {"gentle": "温柔陪伴", "teacher": "认真教学", "banter": "轻松吐槽", "cold": "高冷竞技"},
+    "hint_level": {"off": "关闭", "direction": "方向提示", "specific": "具体建议", "demo": "演示"},
+    "default_difficulty": {"easy": "简单", "normal": "普通", "hard": "困难", "adaptive": "自适应"},
+    "theme": {"light": "浅色", "dark": "深色"},
+}
+#: profile 字段 → 中文名（回执文案）。
+_SETTING_FIELD_LABELS = {
+    "default_persona": "助手性格",
+    "hint_level": "提示档",
+    "default_difficulty": "AI 难度",
+    "theme": "界面主题",
+}
 
 #: 无 LLM 兜底的开局偏好解析（与前端 ``intents.ts::parseBattleOptions`` 同表）。
 #: 每条 = ``(play_game 参数名, 取值, 触发正则)``，按序覆盖（同键后命中者胜）。
@@ -1100,8 +1164,9 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
     + **可配置面**), ``get_platform_help`` (per-feature platform help docs
     — answers “具体功能怎么用” from authoritative data),
     ``get_match_review`` (latest match timeline + key nodes),
-    ``create_game`` (自然语言规则/模板变体 → 真正落盘的自定义游戏) and,
-    mid-match, ``get_match_state`` (the player-projected live snapshot)
+    ``create_game`` (自然语言规则/模板变体 → 真正落盘的自定义游戏),
+    ``update_settings`` (对话里说清的偏好 → 白名单校验过的变更 / 选项)
+    and, mid-match, ``get_match_state`` (the player-projected live snapshot)
     + ``ask_hint`` (the mechanical hint).
 
     ``play_game`` 带**偏好参数**：模型从用户那句话里取（“三人局、困难、
@@ -1165,6 +1230,38 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
                         "use_llm": {"type": "boolean", "description": "是否用 LLM 翻译规则（默认 false）"},
                     },
                     "required": ["mode"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_settings",
+                "description": (
+                    "把用户在对话里**明确说出**的平台偏好改成对应取值并回执：persona 助手性格、"
+                    "hint_level 提示档、difficulty AI 难度、theme 界面主题。"
+                    "取值必须来自用户那句话/上文明确点到的那个（“换成高冷一点”→cold）；"
+                    "**不要替用户猜**：只说“换个风格/改设置”而没说成哪种时，仍然调用本工具但不要填任何"
+                    "偏好参数——平台会给出选项让用户挑。"
+                    "用户明确要求“打开设置页/进设置”时用 open_page=true（只切页面、不改偏好）。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "persona": {
+                            "type": "string",
+                            "enum": ["gentle", "teacher", "banter", "cold"],
+                            "description": "助手/陪玩性格：gentle 温柔陪伴、teacher 认真教学、banter 轻松吐槽、cold 高冷竞技",
+                        },
+                        "hint_level": {"type": "string", "enum": ["off", "direction", "specific", "demo"]},
+                        "difficulty": {"type": "string", "enum": ["easy", "normal", "hard", "adaptive"]},
+                        "theme": {"type": "string", "enum": ["light", "dark"]},
+                        "open_page": {
+                            "type": "boolean",
+                            "description": "用户明确要求打开「设置」页时设为 true（不改任何偏好）",
+                        },
+                    },
+                    "required": [],
                 },
             },
         },
@@ -1328,8 +1425,11 @@ def build_tools(*, games: list[dict], session: Any, active: list[dict]) -> list[
         # 这里绝不能再登记一次——工具名重复会被端点的 schema 校验整包拒绝
         # （DeepSeek：400 Tool names must be unique），全量工具随之失效、
         # 每个聊天回合都掉进正则兜底。见 test_build_tools_names_are_unique。
-        ("update_settings", "用户想改设置/性格/主题时调用"),
-        ("open_platform", "用户想回到完整平台界面时调用"),
+        (
+            "open_platform",
+            "用户想回到完整平台界面（大厅/对局/战绩等）时调用；"
+            "用户只是要打开「设置」页时改用 update_settings(open_page=true)。",
+        ),
         ("run_benchmark", "用户想看评测/求解器对比时调用"),
         ("show_learning", "用户想看在线学习状态时调用"),
         (
@@ -1472,6 +1572,9 @@ def _execute_local_tool(
             # 同回合并发重复调用：已经有创建在执行，别再建第二个。
             return ChatTurnResult(intent="chat", text="（同一回合只执行一次创建。）", mood="thinking", params={})
         return _create_game_result(arguments, custom)
+    if name == "update_settings":
+        # 对话里改偏好：白名单校验 + 回执（applied / open_page / 选项 chips）。
+        return _update_settings_result(arguments)
     return ChatTurnResult(intent="chat", text="", params={})
 
 
@@ -1680,7 +1783,10 @@ def _intent_from_tool(
         # 仍然落到打开创建游戏页，而不是无声丢弃。
         return ChatTurnResult(intent="create", text=_FALLBACK_REPLIES["create"], params={})
     if name == "update_settings":
-        return ChatTurnResult(intent="settings", text=_FALLBACK_REPLIES["settings"], params={})
+        # 正常不会走到：update_settings 是就地执行的本地工具（``_LOCAL_TOOLS``），
+        # 由 ``_update_settings_result`` 按参数白名单执行。这里只为工具名/
+        # 形状万一变化时留同一口径的 fail-soft 出口（绝不静默跳页）。
+        return _update_settings_result(arguments)
     if name == "open_platform":
         return ChatTurnResult(intent="platform", text=_FALLBACK_REPLIES["platform"], params={})
     if name == "run_benchmark":
@@ -1739,6 +1845,87 @@ def _parse_battle_options(text: str) -> dict[str, Any]:
         if pattern.search(text):
             out[key] = value
     return out
+
+
+def _settings_applied_result(patch: dict[str, str]) -> ChatTurnResult:
+    """已校验的偏好变更 → ``settings`` 意图（前端写档案 + 回执，不跳页）."""
+    detail = "、".join(
+        f"{_SETTING_FIELD_LABELS.get(profile_key, profile_key)}改成"
+        f"「{_SETTING_VALUE_LABELS.get(profile_key, {}).get(value, value)}」"
+        for profile_key, value in patch.items()
+    )
+    lines = [f"好，{detail} ✓"]
+    if "default_persona" in patch:
+        lines.append("以后我说话就按这个风格来。")
+    return ChatTurnResult(
+        intent="settings",
+        text="\n".join(lines),
+        mood="happy",
+        params={"applied": patch, "chips": [_OPEN_SETTINGS_CHIP]},
+    )
+
+
+def _update_settings_result(arguments: dict[str, Any]) -> ChatTurnResult:
+    """Execute ``update_settings``: 对话里说清的偏好 → 白名单校验过的变更.
+
+    三个出口：``open_page``（用户明确要打开设置页）只切页面；给出了合法取值
+    → ``settings`` + ``params.applied``（前端写档案并回执）；什么都没说清 →
+    ``clarify`` + 选项 chips。
+
+    「打开设置页」曾经是唯一出口：模型把「你能换个风格吗」也映射成它，于是页面
+    跳走、话没回、设置一个没改——记在这里，别再退回那种行为。
+    """
+    if bool(arguments.get("open_page")):
+        return ChatTurnResult(intent="settings", text=_FALLBACK_REPLIES["settings"], params={"open_page": True})
+    patch: dict[str, str] = {}
+    for arg_key, profile_key in _SETTING_ARG_FIELDS.items():
+        value = arguments.get(arg_key)
+        if isinstance(value, str) and value in _SETTING_VALUE_LABELS.get(profile_key, {}):
+            patch[profile_key] = value
+    if not patch:
+        return ChatTurnResult(
+            intent="clarify",
+            text=_PREFERENCE_CLARIFY_TEXT,
+            mood="thinking",
+            params={"chips": [*_PERSONA_STYLE_CHIPS, _OPEN_SETTINGS_CHIP]},
+        )
+    return _settings_applied_result(patch)
+
+
+def _preference_result(text: str) -> ChatTurnResult | None:
+    """正则兜底：从一句话里抠出“改成哪种偏好”；与偏好无关的提问返回 ``None``.
+
+    与前端 ``intents.ts::preferenceResult`` 同表同口径——断连时前端给出同一套
+    chips 与同一份 ``applied`` 契约，两条路径的 UX 一致。
+    """
+    if _OPEN_SETTINGS_RE.search(text):
+        return ChatTurnResult(intent="settings", text=_FALLBACK_REPLIES["settings"], params={"open_page": True})
+    change = bool(_PREFERENCE_CHANGE_RE.search(text))
+    persona_value = next((value for value, pattern in _PERSONA_VALUE_RULES if pattern.search(text)), "")
+    theme_value = next((value for value, pattern in _THEME_VALUE_RULES if pattern.search(text)), "")
+    wants_persona = (
+        any(word in text for word in _PERSONA_WORDS)
+        or bool(_PERSONA_ASK_RE.search(text))
+        or (change and bool(persona_value))
+    )
+    wants_theme = any(word in text for word in _THEME_WORDS) or (change and bool(theme_value))
+    if not wants_persona and not wants_theme:
+        return None
+    patch: dict[str, str] = {}
+    if wants_persona and persona_value:
+        patch["default_persona"] = persona_value
+    if wants_theme and theme_value:
+        patch["theme"] = theme_value
+    if patch:
+        return _settings_applied_result(patch)
+    chips = [*_PERSONA_STYLE_CHIPS] if wants_persona else [*_THEME_CHIPS]
+    chips.append(_OPEN_SETTINGS_CHIP)
+    return ChatTurnResult(
+        intent="clarify",
+        text=_PREFERENCE_CLARIFY_TEXT,
+        mood="thinking",
+        params={"chips": chips},
+    )
 
 
 def fallback_intent(text: str, games: list[dict], session: Any) -> ChatTurnResult:
@@ -1802,8 +1989,13 @@ def fallback_intent(text: str, games: list[dict], session: Any) -> ChatTurnResul
         return ChatTurnResult(intent="review", text=_FALLBACK_REPLIES["review"], params={})
     if _HISTORY_RE.search(text):
         return ChatTurnResult(intent="history", text=_FALLBACK_REPLIES["history"], params={})
+    # 「换风格/改设置」：能识别取值就直接改（settings + params.applied），
+    # 只说要换没说成哪种就给选项；只有明确“打开设置页”才切页面。
+    preference = _preference_result(text)
+    if preference is not None:
+        return preference
     if _SETTINGS_RE.search(text):
-        return ChatTurnResult(intent="settings", text=_FALLBACK_REPLIES["settings"], params={})
+        return ChatTurnResult(intent="settings", text=_FALLBACK_REPLIES["settings"], params={"open_page": True})
     if _BENCHMARK_RE.search(text):
         return ChatTurnResult(intent="benchmark", text=_FALLBACK_REPLIES["benchmark"], params={})
     if _LEARNING_RE.search(text):

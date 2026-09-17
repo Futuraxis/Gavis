@@ -163,7 +163,46 @@ class TestFallbackIntent:
         said = fallback_intent("做一个 7x7 四连的游戏，叫四子棋", _games(manager), None)
         assert said.intent == "create"
         assert fallback_intent("打开设置", _games(manager), None).intent == "settings"
+        # 只有明确“打开设置页”才切页面（params.open_page），偏好变更不带它。
+        opened = fallback_intent("打开设置", _games(manager), None)
+        assert opened.params["open_page"] is True
         assert fallback_intent("打开平台界面", _games(manager), None).intent == "platform"
+
+    def test_style_request_asks_instead_of_teleporting(self, manager: PlayManager) -> None:
+        """回归（UX 事故）：问“你能换个风格吗”必须给选项，而不是静默跳设置页。
+
+        旧路径：`_SETTINGS_RE` 命中「性格/主题」→ settings 意图 → 前端
+        `openPlatform()` + `#/settings`，回复文案被吞掉、设置一个没改。
+        """
+        result = fallback_intent("你能换个风格吗？", _games(manager), None)
+        assert result.intent == "clarify"
+        chips = result.params["chips"]
+        assert chips[:4] == ["换成温柔陪伴", "换成认真教学", "换成轻松吐槽", "换成高冷竞技"]
+        assert chips[-1] == "打开设置页"
+        assert "open_page" not in result.params
+        assert "applied" not in result.params
+
+    def test_style_change_carries_validated_preference(self, manager: PlayManager) -> None:
+        """说出取值 → settings + params.applied（前端写档案），且不跳页。"""
+        result = fallback_intent("换成高冷竞技", _games(manager), None)
+        assert result.intent == "settings"
+        assert result.params["applied"] == {"default_persona": "cold"}
+        assert "open_page" not in result.params
+        assert "高冷竞技" in result.text  # 回执文案带上中文显示名
+        # 直接表态（没提“风格”二字）同样认出取值
+        assert fallback_intent("温柔一点", _games(manager), None).params["applied"] == {"default_persona": "gentle"}
+        # 主题是另一族：认不出取值时给主题选项而不是性格选项
+        assert fallback_intent("换成浅色主题", _games(manager), None).params["applied"] == {"theme": "light"}
+        theme_ask = fallback_intent("我想换个主题", _games(manager), None)
+        assert theme_ask.intent == "clarify"
+        assert theme_ask.params["chips"][:2] == ["换成深色主题", "换成浅色主题"]
+
+    def test_change_verbs_without_style_words_stay_untouched(self, manager: PlayManager) -> None:
+        """“换一局/改天再说”这类含改动词的闲聊不得被当成改偏好。"""
+        for text in ("换一局", "改天再玩", "你好呀"):
+            result = fallback_intent(text, _games(manager), None)
+            assert "applied" not in result.params, text
+            assert result.intent != "settings", text
 
     def test_resume_with_active_session(self, manager: PlayManager) -> None:
         session = manager.start("moon_chess", "p_black", "easy")
@@ -379,6 +418,48 @@ class TestChatTurnLLM:
         fake = _FakeLLM(tool_calls=(("resume_session", {}),))
         result = chat_turn(manager, "继续", llm=fake, game_id=session.game_id)
         assert result.intent == "resume"
+
+    def test_update_settings_without_value_asks(self, manager: PlayManager) -> None:
+        """模型只说“用户想改设置”而没给出取值 → 给选项，绝不替用户猜。"""
+        fake = _FakeLLM(tool_calls=(("update_settings", {}),))
+        result = chat_turn(manager, "你能换个风格吗？", llm=fake)
+        assert result.intent == "clarify"
+        assert result.params["chips"][0] == "换成温柔陪伴"
+        assert "open_page" not in result.params
+
+    def test_update_settings_applies_explicit_value(self, manager: PlayManager) -> None:
+        """有取值 → settings + params.applied（前端据此写 /api/profile）。"""
+        fake = _FakeLLM(tool_calls=(("update_settings", {"persona": "banter"}),))
+        result = chat_turn(manager, "换成轻松吐槽", llm=fake)
+        assert result.intent == "settings"
+        assert result.params["applied"] == {"default_persona": "banter"}
+        assert "open_page" not in result.params
+        assert "轻松吐槽" in result.text  # 模型读到的工具结果也是中文显示名
+
+    def test_update_settings_rejects_unknown_value(self, manager: PlayManager) -> None:
+        """白名单外的取值（模型编的 persona）不得写进档案 → 退回给选项。"""
+        fake = _FakeLLM(tool_calls=(("update_settings", {"persona": "sassy"}),))
+        result = chat_turn(manager, "换个风格", llm=fake)
+        assert result.intent == "clarify"
+        assert "applied" not in result.params
+
+    def test_update_settings_open_page_is_explicit(self, manager: PlayManager) -> None:
+        fake = _FakeLLM(tool_calls=(("update_settings", {"open_page": True}),))
+        result = chat_turn(manager, "打开设置页", llm=fake)
+        assert result.intent == "settings"
+        assert result.params["open_page"] is True
+        assert "applied" not in result.params
+
+    def test_build_tools_update_settings_has_parameters(self, manager: PlayManager) -> None:
+        """回归：带参数的 update_settings 只能登记一份（重复名会让端点拒绝整包工具）。"""
+        tools = build_tools(games=_games(manager), session=None, active=[])
+        names = [t["function"]["name"] for t in tools]
+        assert names.count("update_settings") == 1
+        props = next(t for t in tools if t["function"]["name"] == "update_settings")["function"]["parameters"][
+            "properties"
+        ]
+        assert props["persona"]["enum"] == ["gentle", "teacher", "banter", "cold"]
+        assert props["theme"]["enum"] == ["light", "dark"]
 
 
 # ── Info tools (describe_game / list_games) ────────────────────────
