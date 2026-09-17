@@ -37,6 +37,12 @@ export interface CustomCreateResult {
   family: string
   diff_summary?: string
   validation: ValidationInfo
+  /**
+   * LLM 翻译降级说明（后端 llm_fallback）：勾了「LLM 生成」但端点不可达 /
+   * 翻译失败，已改用确定性模板生成近似规则 —— 页面必须醒目提示，别让用户
+   * 以为这是 LLM 按描述翻译的结果。
+   */
+  llm_fallback?: { used: boolean; reason: string } | null
 }
 
 // ── 快照 (snapshot) ────────────────────────────────────────────
@@ -183,6 +189,19 @@ export interface SocialSnapshot {
   winners: string[]
   legal: { type: string; text?: string; target?: string; guess?: string }[]
   ai_mode: 'ollama' | 'random'
+  /**
+   * 实际调用的大模型名（后端按 平台 LLM 配置 > 环境变量 > 默认 解析；
+   * 仅 `ai_mode='ollama'` 时有值，随机模式为 null）。
+   *
+   * 注意 `ai_mode='ollama'` 是历史求解器名，语义＝「OpenAI 兼容 LLM 端点
+   * 可用」——云端端点（DeepSeek/GLM）同样命中，所以展示必须用 `ai_model` /
+   * `ai_endpoint`，不能把 `ollama` 当作「本地大模型」。
+   */
+  ai_model?: string | null
+  /** 端点位置：local＝本机（Ollama 等），remote＝云端/局域网；随机模式 null。 */
+  ai_endpoint?: 'local' | 'remote' | null
+  /** 实际调用的端点 base_url（无密钥，仅展示/排查用；悬浮提示）。 */
+  ai_base_url?: string | null
   /** 终局全场身份揭晓（含存活者）；undercover 另带 word，werewolf 只有 role。 */
   final_roles?: { pid: string; role: string | null; word?: string | null }[]
 }
@@ -283,6 +302,16 @@ export interface MatchMeta {
   teaching?: boolean | null
   /** 自适应难度局标记（旧记录缺省 undefined）。 */
   adaptive?: boolean
+  /** 本局随机种子（后端 meta.seed；旧记录缺省）。 */
+  seed?: number | null
+  /** 规则族 grid/poker/mahjong/social/uno（后端 meta.family；旧记录缺省）。 */
+  family?: string | null
+  /** 自定义游戏对局（后端 meta.custom；旧记录缺省）。 */
+  custom?: boolean | null
+  /** 本局人数（后端从末手快照 pids 推导；旧记录缺省）。 */
+  player_count?: number | null
+  /** 本局变体名（后端从末手快照取；旧记录/无变体缺省）。 */
+  variant?: string | null
   /** 座位 pid → 中文称呼（后端 /api/history 注入；旧记录缺省 → 前端兜底 pid）。 */
   seat_names?: Record<string, string>
 }

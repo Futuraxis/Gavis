@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createCustomGame, deleteCustomGame, listCustomGames } from '../api/client'
+import { createCustomGameStream, deleteCustomGame, listCustomGames } from '../api/client'
 import type { CustomCreateResult, GameInfo } from '../types'
 
 /** 变体翻译的 base 模板（layer1_translator TEMPLATE_FILES 对应规则 id）。 */
@@ -15,6 +15,18 @@ const BASE_TEMPLATES = [
 
 const FAMILY_LABELS: Record<string, string> = { grid: '网格', poker: '扑克', mahjong: '麻将', social: '社交' }
 
+/** 后端 stage 事件 → 中文阶段名（进度面板用）。 */
+const STAGE_LABELS: Record<string, string> = {
+  translate: '翻译规则',
+  validate: '校验规则',
+  register: '注册到大厅',
+}
+
+function stageLabel(stage?: string): string {
+  if (!stage) return '准备中'
+  return STAGE_LABELS[stage] ?? stage
+}
+
 type Mode = 'from_scratch' | 'variant'
 
 export default function CreateGamePage() {
@@ -27,6 +39,11 @@ export default function CreateGamePage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<CustomCreateResult | null>(null)
+  // 创建过程可见性：阶段文案（后端 stage 事件）+ 已等待秒数。LLM 翻译要跑
+  // 1-3 分钟，没有这两样用户只能盯着转圈猜「是不是卡死了」。
+  const [stage, setStage] = useState<{ stage: string; detail: string } | null>(null)
+  const [elapsed, setElapsed] = useState(0)
+  const timerRef = useRef<number | null>(null)
   const navigate = useNavigate()
 
   // ── 我的自定义游戏（含变体）管理列表 ────────────────────────────
@@ -66,27 +83,49 @@ export default function CreateGamePage() {
   const requiredText = mode === 'from_scratch' ? ruleText : changeText
   const canSubmit = requiredText.trim().length > 0 && !busy
 
+  function stopTimer() {
+    if (timerRef.current != null) {
+      window.clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+  }
+
+  useEffect(() => stopTimer, [])
+
   async function submit() {
     if (!canSubmit) return
     setBusy(true)
     setError(null)
     setResult(null)
+    setStage({
+      stage: 'translate',
+      detail: useLlm ? '正在准备 LLM 翻译（推理模型通常需要 1-3 分钟，请勿关闭页面）' : '正在按模板翻译规则',
+    })
+    setElapsed(0)
+    const startedAt = Date.now()
+    stopTimer()
+    timerRef.current = window.setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000)
     try {
-      const res = await createCustomGame({
-        mode,
-        rule_text: mode === 'from_scratch' ? ruleText : undefined,
-        base_game_id: mode === 'variant' ? baseGameId : undefined,
-        change_text: mode === 'variant' ? changeText : undefined,
-        game_name: gameName.trim() || undefined,
-        source_lang: 'zh',
-        use_llm: useLlm,
-      })
+      const res = await createCustomGameStream(
+        {
+          mode,
+          rule_text: mode === 'from_scratch' ? ruleText : undefined,
+          base_game_id: mode === 'variant' ? baseGameId : undefined,
+          change_text: mode === 'variant' ? changeText : undefined,
+          game_name: gameName.trim() || undefined,
+          source_lang: 'zh',
+          use_llm: useLlm,
+        },
+        { onStage: (s) => setStage(s) },
+      )
       setResult(res)
       await loadCustomGames() // 新游戏/变体创建成功 → 刷新管理列表
     } catch (err) {
       setError((err as Error).message)
     } finally {
+      stopTimer()
       setBusy(false)
+      setStage(null)
     }
   }
 
@@ -166,7 +205,7 @@ export default function CreateGamePage() {
           <label>LLM 生成:</label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} />
-            <span>使用 LLM 翻译规则（需本地模型可用，否则自动回落确定性翻译）</span>
+            <span>使用 LLM 翻译规则（更贴合描述；推理模型约 1-3 分钟，端点不可用时自动回落确定性模板）</span>
           </label>
         </div>
 
@@ -179,6 +218,18 @@ export default function CreateGamePage() {
             '创建游戏'
           )}
         </button>
+        {busy && (
+          <div className="create-progress" style={{ marginTop: 10 }}>
+            <div style={{ fontWeight: 600 }}>
+              {stage?.detail ?? '正在创建…'}
+              <span style={{ color: 'var(--muted)', fontWeight: 400 }}> （已等 {elapsed}s）</span>
+            </div>
+            <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 4 }}>
+              阶段：{stageLabel(stage?.stage)}
+              {useLlm && elapsed >= 30 ? ' · LLM 还在生成，请不要关闭或刷新本页' : ''}
+            </div>
+          </div>
+        )}
         {!canSubmit && !busy && (
           <p className="hint" style={{ marginTop: 8 }}>
             {mode === 'from_scratch' ? '请先填写规则描述' : '请先填写变更描述'}
@@ -191,6 +242,12 @@ export default function CreateGamePage() {
           <div className="success-banner" style={{ marginBottom: 0 }}>
             🎉 创建成功 — 游戏 id: <strong>{result.game_id}</strong>
           </div>
+          {result.llm_fallback?.used && (
+            <div className="warning-banner" style={{ marginTop: 10 }}>
+              ⚠️ 这次没有用上 LLM 翻译（{result.llm_fallback.reason}），已用确定性模板生成近似规则 ——
+              玩法细节可能与你的描述不完全一致，可改法再建一次。
+            </div>
+          )}
           <div className="create-kv">
             <span>
               族: <span className="badge accent">{FAMILY_LABELS[result.family] ?? result.family}</span>

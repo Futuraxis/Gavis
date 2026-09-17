@@ -1,6 +1,7 @@
 // API 客户端 — 解包 {"ok": ...} 信封, 失败时抛出 ApiError
 
 import { SseParser, type SseEvent } from '../chat/sse.ts'
+import { buildHistoryQuery, type ResultKind } from '../history.ts'
 
 const BASE = '/api'
 
@@ -254,6 +255,43 @@ export function matchMoveStream(
   )
 }
 
+/**
+ * 流式对局请求 + 旧后端回退（``/match/start`` 与 ``/match/move`` 共用）。
+ *
+ * 为什么必须走流式：非流式请求要等服务端把整轮 AI 循环跑完才返回一次快照。
+ * 谁是卧底 8 人桌一轮 describe 有 7 个 AI 座位，每位一次 LLM 调用（实测单次
+ * 1~20s，取决于模型是否已加载）——整轮下来数十秒里前端**一帧都拿不到**，
+ * 表现就是「轮不到自己发言，界面一直卡着」。流式下人类行动落地即一帧、
+ * AI 每走一步再一帧，界面全程在动。
+ *
+ * 回退红线（**只有一帧都没收到就失败**才回退一次性 JSON 请求）：旧后端不认
+ * SSE / 中间层吞流 / 连接建不起来时，退回原来的 JSON 信封保证还能玩；但一旦
+ * 已经推进过任何一帧，说明服务端状态已经变了，此时再发一次同样的动作会把
+ * 人类行动重复落地（本该走一步的回合走两步），所以宁可把错误抛给上层。
+ *
+ * @param stream  流式请求（``matchStartStream`` / ``matchMoveStream`` 的绑定）。
+ * @param fallback 无帧可得时的 JSON 兜底请求。
+ * @param onProgress 每帧进度快照回调（逐帧上屏）。
+ */
+export async function matchStreamOrFallback(
+  stream: (handlers: MatchStreamHandlers) => Promise<{ session: import('../types').Snapshot }>,
+  fallback: () => Promise<{ session: import('../types').Snapshot }>,
+  onProgress: (session: import('../types').Snapshot) => void,
+): Promise<{ session: import('../types').Snapshot }> {
+  let progressed = false
+  try {
+    return await stream({
+      onProgress: (session) => {
+        progressed = true
+        onProgress(session)
+      },
+    })
+  } catch (err) {
+    if (progressed) throw err
+    return await fallback()
+  }
+}
+
 export function apiPut<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, {
     method: 'PUT',
@@ -357,6 +395,14 @@ export function saveProfile(profile: import('../types').Profile): Promise<import
   return apiPut<{ profile: import('../types').Profile }>('/profile', { profile }).then((d) => d.profile)
 }
 
+// 只提交变更字段 —— 后端以 `{**load(), **patch}` 合并，所以对话里改偏好
+// （"换成高冷竞技"）可以只写 `{default_persona: 'cold'}`，不必先读全量档案。
+export function patchProfile(
+  patch: Partial<import('../types').Profile>,
+): Promise<import('../types').Profile> {
+  return apiPut<{ profile: import('../types').Profile }>('/profile', { profile: patch }).then((d) => d.profile)
+}
+
 export function clearProfile(): Promise<{ ok: boolean }> {
   return apiPost<{ ok: boolean }>('/profile/clear', {})
 }
@@ -400,6 +446,46 @@ export function getReview(matchId: string): Promise<import('../types').ReviewRep
   return apiGet<import('../types').ReviewReport>(`/review/${matchId}`)
 }
 
+// ── 对局记录 API（平台「对局记录」页）────────────────────────────
+// 后端 GET /api/history 契约（见 layer4_interface/frontend/platform/server.py）：
+//   {ok, matches, total, has_more}；matches 为 meta 列表（含注入的 seat_names），
+//   limit 默认 100、上限 500，offset 分页，其余筛选参数非法时后端按默认值处理。
+// 与 client 内其他函数一致：内部解包命名 key，调用方只拿业务对象。
+
+export interface HistoryQueryParams {
+  gameId?: string | null
+  /** 玩家视角结果过滤（win/lose/draw）；空 = 全部。 */
+  result?: ResultKind | '' | null
+  /** 关键字（匹配游戏名 / 座位称呼）。 */
+  q?: string | null
+  /** ISO-8601 起始日期（含）。 */
+  since?: string | null
+  limit?: number
+  offset?: number
+}
+
+export interface HistoryPage {
+  matches: import('../types').MatchMeta[]
+  total: number
+  has_more: boolean
+}
+
+export function listHistory(params: HistoryQueryParams = {}): Promise<HistoryPage> {
+  const query = buildHistoryQuery({
+    gameId: params.gameId,
+    result: params.result,
+    q: params.q,
+    since: params.since,
+    limit: params.limit,
+    offset: params.offset,
+  })
+  return apiGet<HistoryPage>(`/history${query ? `?${query}` : ''}`).then((d) => ({
+    matches: d.matches ?? [],
+    total: typeof d.total === 'number' ? d.total : (d.matches ?? []).length,
+    has_more: d.has_more === true,
+  }))
+}
+
 // ── 自定义游戏 API (A2 后端契约 / A3 前端) ──────────────────────
 
 export interface CustomCreateBody {
@@ -437,12 +523,91 @@ export async function createCustomGame(body: CustomCreateBody): Promise<import('
     throw new ApiError(`服务器返回异常 (HTTP ${resp.status})`)
   }
   if (!data.ok) {
-    const err = data as CustomCreateErrorBody
-    const validationErrors = err.validation?.errors ?? []
-    const detail = validationErrors.length > 0 ? `：${validationErrors.join('；')}` : ''
-    throw new ApiError(`${err.error ?? `请求失败 (HTTP ${resp.status})`}${detail}`)
+    throw new ApiError(customCreateErrorText(data as CustomCreateErrorBody, `请求失败 (HTTP ${resp.status})`))
   }
   return data as import('../types').CustomCreateResult
+}
+
+/** 创建失败的展示文案：主原因 + 校验错误明细（后端已给中文原因）。 */
+function customCreateErrorText(err: CustomCreateErrorBody, fallback: string): string {
+  const validationErrors = err.validation?.errors ?? []
+  const detail = validationErrors.length > 0 ? `：${validationErrors.join('；')}` : ''
+  return `${err.error ?? fallback}${detail}`
+}
+
+export interface CustomCreateStage {
+  stage: string
+  detail: string
+}
+
+export interface CustomCreateStreamHandlers {
+  /** 创建阶段进度（正在模板翻译 / 正在用 LLM 翻译 / 校验 / 注册）。 */
+  onStage?: (stage: CustomCreateStage) => void
+}
+
+/**
+ * 流式创建自定义游戏（SSE）——创建过程对用户可见。
+ *
+ * 为什么必须走流式：勾选「LLM 生成」后一次翻译要跑 1-3 分钟（推理模型还要
+ * 先想再答），非流式请求在这段时间里**一帧都拿不到**，用户看到的就是
+ * 「等了半天，什么也没出现」。流式下服务端每个阶段推一条 ``stage``，
+ * 创建页据此显示「正在用 LLM 翻译…（已等 42s）」，最后以 ``result`` 收口。
+ *
+ * 旧后端（不认 SSE）回退到一次性 JSON 请求：创建是幂等的「新建一局」动作，
+ * 没有「重复落子」那种回退红线（失败即失败，不会产生半成品）。
+ */
+export async function createCustomGameStream(
+  body: CustomCreateBody,
+  handlers: CustomCreateStreamHandlers = {},
+): Promise<import('../types').CustomCreateResult> {
+  let resp: Response
+  try {
+    resp = await fetch(BASE + '/custom/games?stream=1', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    return createCustomGame(body)
+  }
+  const contentType = resp.headers.get('Content-Type') ?? ''
+  if (!resp.ok || !resp.body || !contentType.includes('text/event-stream')) {
+    // 旧后端 / 非流式响应：直接按 JSON 路径解析（复用同一份错误文案）。
+    if (resp.ok) return createCustomGame(body)
+    let detail = `服务器返回异常 (HTTP ${resp.status})`
+    try {
+      const data = (await resp.json()) as CustomCreateErrorBody
+      detail = customCreateErrorText(data, detail)
+    } catch {
+      /* 保持默认文案 */
+    }
+    throw new ApiError(detail)
+  }
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  const parser = new SseParser()
+  let result: import('../types').CustomCreateResult | null = null
+  let streamError: string | null = null
+  const handle = (ev: SseEvent): void => {
+    if (ev.event === 'stage') {
+      const d = JSON.parse(ev.data) as CustomCreateStage
+      handlers.onStage?.({ stage: d.stage ?? '', detail: d.detail ?? '' })
+    } else if (ev.event === 'result') {
+      result = JSON.parse(ev.data) as import('../types').CustomCreateResult
+    } else if (ev.event === 'error') {
+      const d = JSON.parse(ev.data) as CustomCreateErrorBody
+      streamError = customCreateErrorText(d, '创建失败')
+    }
+  }
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    for (const ev of parser.push(decoder.decode(value, { stream: true }))) handle(ev)
+  }
+  for (const ev of parser.finish()) handle(ev)
+  if (result) return result
+  throw new ApiError(streamError ?? '创建流意外结束（未收到结果）')
 }
 
 export function listCustomGames(): Promise<{ games: import('../types').GameInfo[] }> {

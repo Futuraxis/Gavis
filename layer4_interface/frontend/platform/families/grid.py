@@ -30,6 +30,7 @@ from .helpers import (
     declared_player_counts,
     engine_from_rules_dict,
     normalize_players,
+    resolve_all_chance,
     rules_board_size,
 )
 
@@ -40,6 +41,19 @@ FAMILY_ID = "grid"
 
 #: 族默认难度预算（与平台既有 board 游戏同一量级）。
 DIFFICULTY_BUDGETS = {"easy": 200, "normal": 800, "hard": 2000}
+
+#: 每步搜索的**时间上限**（秒）。迭代预算管不住墙钟：MCTS 每次迭代都要在
+#: 每个 rollout 层枚举**全部合法动作**，成本 ∝ 棋盘面积 × 迭代数。实测自定义
+#: 规则走纯解释器路径（`allow_codegen=False`，安全红线）：
+#:   - 16×16（256 格）easy=200 次迭代 ≈ **13.7s**；
+#:   - 8×8（64 格）                 ≈ 9s；
+#:   - 3×3 月亮棋                   < 0.2s。
+#: 玩家点一下等十几秒 = 「创建好了玩不了」，所以给自定义网格游戏加时间闸：
+#: 迭代预算与时间上限**先到先停**（小板照旧跑满预算，大板自动变浅但立刻响应）。
+MOVE_TIME_LIMIT_S = {"easy": 1.5, "normal": 3.0, "hard": 6.0, "adaptive": 3.0}
+
+#: 难度缺省/未知时的时间上限。
+DEFAULT_MOVE_TIME_LIMIT_S = 3.0
 
 _CELL_ID_RE = re.compile(r"^cell_(\d+)_(\d+)$")
 
@@ -54,6 +68,46 @@ def detect(rules: dict) -> bool:
     if cell_from.get("type") != "grid":
         return False
     return "board" in rules.get("groundState", {})
+
+
+def probe_playable(rules: dict) -> list[str]:
+    """Family-level playability probe (empty list = the platform can drive it).
+
+    ``detect()`` + L2 smoke validation only prove the rules are *loadable*; they
+    say nothing about whether the platform's human-move path works.  A game
+    that boots but whose placement action cannot be resolved to a board cell
+    is exactly "创建成功了，点哪都没反应/非法" — this probe turns that into a
+    creation-time error instead of a broken game in the lobby.
+
+    Checks (grid family):
+      1. ``constants.board_size`` is a positive int (cell math + snapshot);
+      2. the initial position (after any chance nodes) has legal actions;
+      3. at least one legal action resolves to a board cell via
+         :func:`action_cell_index` — the same helper ``parse_human_action`` uses.
+    """
+    problems: list[str] = []
+    board_size = rules_board_size(rules)
+    if not board_size:
+        problems.append("constants.board_size 缺失或不是正整数（网格族按它换算落子坐标）")
+        return problems
+    try:
+        engine = engine_from_rules_dict(rules, seed=42)
+        state = resolve_all_chance(engine, engine.create_initial_state())
+        if engine.get_node_type(state) != "player":
+            problems.append("初始局面不在等待玩家行动的状态（回合/阶段声明有问题）")
+            return problems
+        actions = list(engine.get_legal_actions(state))
+        if not actions:
+            problems.append("初始局面没有任何合法落子（首个玩家无棋可走）")
+            return problems
+        if not any(action_cell_index(action, board_size) >= 0 for action in actions):
+            problems.append(
+                "落子动作无法换算成棋盘格位：placeholder 动作参数没有绑定到格子视图"
+                '（应形如 {"cell": {"view": "cell", "domain": {"ref": "empty_cells"}}}）'
+            )
+    except Exception as exc:  # noqa: BLE001 — 探针异常按不可玩处理，绝不注册坏游戏
+        problems.append(f"初始局面构造失败: {type(exc).__name__}: {exc}")
+    return problems
 
 
 def build_spec(game_id: str, rules: dict) -> GameSpec:
@@ -76,8 +130,22 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
     def _create_engine(seed: int, player_count: int = 2, **_: object) -> GameEngine:
         return engine_from_rules_dict(rules, seed, player_count=player_count)
 
-    def _create_solver(provider: SolverProvider, engine: GameEngine, seed: int, budget: int, **_: object) -> SolverHandle:
-        return provider.create_solver(game_id, "mcts", engine, seed, budget, allow_unknown=True)
+    def _create_solver(
+        provider: SolverProvider,
+        engine: GameEngine,
+        seed: int,
+        budget: int,
+        *,
+        difficulty: str = "normal",
+        **_: object,
+    ) -> SolverHandle:
+        # 时间闸 + 迭代预算双保险：迭代预算管不住墙钟——MCTS 每次迭代都要在
+        # 每个 rollout 层枚举全部合法动作，成本 ∝ 棋盘面积 × 迭代数。实测
+        # 自定义规则（纯解释器路径）16×16 板 normal=800 次要 ~55s、easy=200
+        # 次要 ~14s；玩家等的是「界面出不来 / 点一下半天不动」。时间上限让
+        # 大板自动变浅但立刻响应，小板照旧跑满预算（先到先停）。
+        time_limit = MOVE_TIME_LIMIT_S.get(difficulty, DEFAULT_MOVE_TIME_LIMIT_S)
+        return provider.create_solver(game_id, "mcts", engine, seed, budget, allow_unknown=True, time_limit=time_limit)
 
     def _resolve_start(session: GameSession) -> None:
         pass
@@ -194,4 +262,4 @@ def build_spec(game_id: str, rules: dict) -> GameSpec:
     )
 
 
-__all__ = ["FAMILY_ID", "detect", "build_spec"]
+__all__ = ["FAMILY_ID", "build_spec", "detect", "probe_playable"]

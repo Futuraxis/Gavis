@@ -80,4 +80,24 @@ def detect_family(rules: dict) -> FamilyModule | None:
     return None
 
 
-__all__ = ["FamilyModule", "FAMILY_IDS", "detect_family"]
+def probe_playable(family: Any, rules: dict) -> list[str]:
+    """Run a family's optional playability probe; returns problem messages.
+
+    A family may expose ``probe_playable(rules) -> list[str]`` to check that
+    the platform can actually *drive* the rules (human move parsing, initial
+    legal action, …) — ``detect`` + L2 smoke only prove the rules load.  A
+    missing hook means "no extra checks" (``[]``); a probe that raises is
+    reported as a problem rather than crashing creation.
+    """
+    probe = getattr(family, "probe_playable", None)
+    if not callable(probe):
+        return []
+    try:
+        problems = probe(rules)
+    except Exception as exc:  # noqa: BLE001 — 探针异常按不可玩处理
+        logger.warning("自定义游戏可玩性探针异常: %s: %s", getattr(family, "FAMILY_ID", family), exc)
+        return [f"可玩性探针异常: {type(exc).__name__}: {exc}"]
+    return [str(item) for item in problems] if problems else []
+
+
+__all__ = ["FAMILY_IDS", "FamilyModule", "detect_family", "probe_playable"]

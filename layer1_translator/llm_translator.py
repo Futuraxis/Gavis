@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from .engine_validator import EngineValidator
-from .local_client import RULE_LLM_TEMPERATURE, LLMClient, LLMTranslatorError, RuleLLMClient, complete_with_retry
+from .local_client import (
+    RULE_LLM_MAX_TOKENS,
+    RULE_LLM_TEMPERATURE,
+    LLMTranslatorError,
+    RuleLLMClient,
+    build_rule_llm_client,
+    complete_with_retry,
+    rule_llm_deadline_s,
+    rule_llm_max_tokens,
+    rule_llm_timeout_s,
+)
 from .prompt_builder import CONTROL_CHARS_RE, RulePromptBuilder
 from .protocol import TranslateRequest, TranslateResponse, ValidationResult
 from .schema_validator import SchemaValidator
@@ -33,7 +44,7 @@ class LLMRuleTranslator:
         run_engine_validation: bool = True,
         fallback: TemplateTranslator | None = None,
         max_repair_attempts: int = 1,
-        max_tokens: int = 8192,
+        max_tokens: int | None = None,
         strict_llm: bool = False,
         prompt_builder: RulePromptBuilder | None = None,
     ) -> None:
@@ -42,30 +53,42 @@ class LLMRuleTranslator:
         self.run_engine_validation = run_engine_validation
         self.fallback = fallback
         self.max_repair_attempts = max(0, max_repair_attempts)
-        self.max_tokens = max_tokens
+        #: None → 按 ``LLM_MAX_TOKENS`` 环境变量 / RULE_LLM_MAX_TOKENS 解析
+        #: （推理模型需要给思维链留预算，见 local_client 注释）。
+        self.max_tokens = max_tokens if max_tokens is not None else RULE_LLM_MAX_TOKENS
         self.strict_llm = strict_llm
         self.prompt_builder = prompt_builder or RulePromptBuilder()
         self.engine_validator = EngineValidator()
 
     def translate(self, request: TranslateRequest) -> TranslateResponse:
-        """Return LLM-generated rules JSON, optionally falling back to templates."""
+        """Return LLM-generated rules JSON, optionally falling back to templates.
+
+        总时长受 :func:`rule_llm_deadline_s` 约束（默认 300s，含修复重试）：
+        单次超时 300s + 一次修复重试 = 最坏 10 分钟，端点抽风时用户就是
+        「等了半天什么也没有」。超预算即停止重试、走模板兜底，把时间还给用户。
+        """
         warnings: list[str] = []
         # P2-22 修复：规则翻译必须确定性 —— 默认客户端固定 temperature=0
         # （统一客户端默认 0.2 会让同一规则文本跨次产出不同 rules.json）。
         # strict_llm=True 时默认客户端 fail_hard：API 4xx/5xx、端点不可达等
         # 一律抛 LLMClientError，由 complete_with_retry 捕获并带真实原因
         # 进入 _fallback_or_error 的 strict 分支（不模板兜底、错误上浮）。
-        client = self.client or LLMClient(
-            model=self.llm_model, temperature=RULE_LLM_TEMPERATURE, fail_hard=self.strict_llm
-        )
+        deadline_s = rule_llm_deadline_s()
+        started = time.monotonic()
         messages = self.prompt_builder.build_initial_messages(request)
         attempts = self.max_repair_attempts + 1
         last_validation = ValidationResult(valid=False, errors=["LLM 未返回可验证的 rules JSON"])
 
         for attempt in range(attempts):
+            remaining = deadline_s - (time.monotonic() - started)
+            if attempt > 0 and remaining <= 1.0:
+                warnings.append(f"LLM 修复重试超出总预算（{deadline_s:.0f}s），停止重试，改用模板兜底")
+                break
+            # 每次调用只拿剩余预算做超时（注入的 client 由调用方负责）。
+            client = self._client_for(remaining)
             # P2-23 修复：传输失败/空回复先立即重试一次（冷启动 Ollama 的
             # 典型形态），持久失败才走模板兜底；"校验失败"仍进修复循环。
-            raw, transport_error = complete_with_retry(client, messages, self.max_tokens)
+            raw, transport_error = complete_with_retry(client, messages, rule_llm_max_tokens())
             if transport_error is not None:
                 last_validation = ValidationResult(valid=False, errors=[str(transport_error)])
                 warnings.append("LLM 生成失败（已重试），尝试模板兜底")
@@ -97,6 +120,21 @@ class LLMRuleTranslator:
             return fallback_response
         merged = self._merged_failure_validation(last_validation, fallback_response, warnings)
         return TranslateResponse(rules_json={}, confidence=0.0, validation=merged)
+
+    def _client_for(self, remaining_s: float) -> RuleLLMClient:
+        """注入的客户端原样返回；否则按剩余预算构造默认客户端。
+
+        超时必须**每次**算：第二次（修复）调用只该拿剩余时间，否则总时长
+        会翻倍（用户「等了半天」的直接来源）。
+        """
+        if self.client is not None:
+            return self.client
+        return build_rule_llm_client(
+            model=self.llm_model,
+            temperature=RULE_LLM_TEMPERATURE,
+            fail_hard=self.strict_llm,
+            timeout_s=min(rule_llm_timeout_s(), max(1.0, remaining_s)),
+        )
 
     @staticmethod
     def _merged_failure_validation(

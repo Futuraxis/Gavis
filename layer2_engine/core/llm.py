@@ -64,6 +64,11 @@ DEFAULT_TIMEOUT_S = 30.0
 _PROBE_TIMEOUT_S = 1.0
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
+#: ``max_tokens`` 被端点拒绝（HTTP 400）时回退的保守预算。云端老模型
+#: （如 deepseek-chat）上限就是 8192，而不带思考的普通模型 8192 足够产出
+#: 一份 rules.json —— 与其把「预算太大」变成一次硬失败，不如自动降档重试。
+_FALLBACK_MAX_TOKENS = 8192
+
 
 def _env_or(name: str) -> str | None:
     """Strip-whitespace env read; unset/blank yields ``None`` (falls through)."""
@@ -669,6 +674,42 @@ class LLMClient:
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> ChatReply:
+        """One non-streaming completion, with a budget-downshift retry.
+
+        端点以 HTTP 400 拒绝 ``max_tokens``（老云端模型上限 8192）时，自动
+        用 :data:`_FALLBACK_MAX_TOKENS` 重试一次 —— 规则翻译为推理模型留了
+        大预算（思维链也算在输出预算里），但普通模型的接口并不接受它；
+        与其把「预算太大」变成一次硬失败，不如降档重试。
+        """
+        budgets: list[int | None] = [max_tokens]
+        if max_tokens is not None and max_tokens > _FALLBACK_MAX_TOKENS:
+            budgets.append(_FALLBACK_MAX_TOKENS)
+        reply = ChatReply(text="", tool_calls=[])
+        for index, budget in enumerate(budgets):
+            reply, budget_rejected = self._chat_once(messages, tools=tools, max_tokens=budget, temperature=temperature)
+            if not budget_rejected:
+                return reply
+            if index < len(budgets) - 1:
+                logger.info("LLM 端点拒绝 max_tokens=%s，改用 %s 重试", budget, budgets[index + 1])
+                continue
+            # 降档后仍被拒：按普通 API 失败收尾（fail_hard 抛错，fail-soft 空串）。
+            recorded = self.last_error
+            return self._fail(str(recorded) if recorded is not None else "LLM 请求失败（max_tokens 被端点拒绝）", None)
+        return reply
+
+    def _chat_once(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None,
+        max_tokens: int | None,
+        temperature: float | None,
+    ) -> tuple[ChatReply, bool]:
+        """Single request attempt → ``(reply, budget_rejected)``.
+
+        ``budget_rejected=True`` 表示失败原因是端点不接受本次 ``max_tokens``
+        （调用方可用更小的预算重试），此时不抛 ``fail_hard``。
+        """
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -696,19 +737,25 @@ class LLMClient:
             with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
                 raw = resp.read(_MAX_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as exc:
-            return self._fail(f"LLM API 错误 HTTP {exc.code} {exc.reason}{self._http_error_detail(exc)}", exc)
+            detail = self._http_error_detail(exc)
+            message = f"LLM API 错误 HTTP {exc.code} {exc.reason}{detail}"
+            if self._rejects_token_budget(exc.code, detail):
+                self._set_last_error(LLMClientError(message))
+                return ChatReply(text="", tool_calls=[]), True
+            return self._fail(message, exc), False
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            return self._fail(f"LLM 端点不可达/超时: {exc}", exc)
+            return self._fail(f"LLM 端点不可达/超时: {exc}", exc), False
         if len(raw) > _MAX_RESPONSE_BYTES:
-            return self._fail(f"LLM 响应超过 {_MAX_RESPONSE_BYTES} 字节上限", None)
+            return self._fail(f"LLM 响应超过 {_MAX_RESPONSE_BYTES} 字节上限", None), False
         try:
             body = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
-            return self._fail(f"LLM 响应不是有效 JSON: {exc}", exc)
+            return self._fail(f"LLM 响应不是有效 JSON: {exc}", exc), False
         try:
-            message = body["choices"][0]["message"]
+            choice = body["choices"][0]
+            message = choice["message"]
         except (KeyError, IndexError, TypeError) as exc:
-            return self._fail("LLM 响应缺少 choices[0].message 结构", exc)
+            return self._fail("LLM 响应缺少 choices[0].message 结构", exc), False
         text, reasoning = _extract_reasoning(message)
         text = sanitize_text(text)
         reasoning = sanitize_text(reasoning)
@@ -725,7 +772,38 @@ class LLMClient:
                 args = {}
             if isinstance(args, dict):
                 tool_calls.append(ToolCall(name=name, arguments=args, id=str(call.get("id") or "")))
-        return ChatReply(text=text, tool_calls=tool_calls, reasoning=reasoning)
+        if not text and not tool_calls:
+            # 推理模型把整个输出预算烧在思维链上时，正文是空的且
+            # ``finish_reason == "length"`` —— 调用方只会看到「LLM 未返回
+            # 内容」。这里把真实原因（预算被思维链吃掉 / 长度截断）写进
+            # last_error，让「规则翻译失败」的报错可操作。
+            finish_reason = str(choice.get("finish_reason") or "")
+            return self._fail(self._empty_reply_reason(reasoning, finish_reason, body), None), False
+        return ChatReply(text=text, tool_calls=tool_calls, reasoning=reasoning), False
+
+    @staticmethod
+    def _rejects_token_budget(code: int, detail: str) -> bool:
+        """端点是否因 ``max_tokens`` 取值被拒（可降档重试）。"""
+        if code not in (400, 422):
+            return False
+        lowered = detail.lower()
+        return "max_tokens" in lowered or "max_completion_tokens" in lowered
+
+    @staticmethod
+    def _empty_reply_reason(reasoning: str, finish_reason: str, body: dict[str, Any]) -> str:
+        """正文为空的中文原因（区分「预算被思维链吃光」与普通空回复）。"""
+        usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+        details = usage.get("completion_tokens_details") if isinstance(usage, dict) else None
+        reasoning_tokens = details.get("reasoning_tokens") if isinstance(details, dict) else None
+        if reasoning or finish_reason == "length":
+            spent = f"，合计输出 {usage.get('completion_tokens')} tokens"
+            if isinstance(reasoning_tokens, int) and reasoning_tokens:
+                spent += f"（其中思维链 {reasoning_tokens}）"
+            return (
+                f"LLM 未返回正文：输出预算被思维链/长度截断耗尽（finish_reason={finish_reason or 'unknown'}{spent}）。"
+                "请提高输出预算（环境变量 LLM_MAX_TOKENS，规则翻译默认 32768）或改用非推理模型。"
+            )
+        return "LLM 返回了空内容（端点可用但该次请求没有正文输出）"
 
 
 __all__ = [

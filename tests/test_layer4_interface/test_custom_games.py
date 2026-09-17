@@ -506,3 +506,353 @@ class TestLayerContract:
                 if pattern.match(line):
                     hits.append(f"{path.relative_to(root)}: {line.strip()}")
         assert not hits, "layer4_interface 内出现 layer3_solvers 导入:\n" + "\n".join(hits)
+
+
+# ── 创建了却玩不了：可玩性探针 + 参数名容错 ────────────────────────
+
+
+def _grid_rules_with_param(param_name: str, param_spec: dict) -> dict:
+    """stochastic_gomoku 参考规则，把落子参数改名为 ``param_name``。
+
+    平台网格族按 ``cell`` 参数定位格位；LLM 生成的规则可能叫 ``square`` /
+    ``pos`` —— 这正是「创建成功但点哪都非法」的真实成因。
+    """
+    rules = load_rules("stochastic_gomoku")
+    rules["actions"][0]["params"] = {param_name: param_spec}
+    return rules
+
+
+class TestActionCellIndexRobustness:
+    """落子参数名容错：模型自创参数名也要能换算成格位."""
+
+    def test_foreign_param_name_resolves(self) -> None:
+        from layer2_engine.core.state_graph import ActionInstance
+        from layer4_interface.frontend.platform.families.helpers import action_cell_index
+
+        action = ActionInstance(
+            template_id="place",
+            type="move",
+            actor_id="p_black",
+            params={"square": {"_index": 10, "id": "cell_1_1", "occupant": None}},
+            canonical_key="place:1,1",
+        )
+        assert action_cell_index(action, 9) == 10
+
+    def test_cell_id_fallback_without_index(self) -> None:
+        from layer2_engine.core.state_graph import ActionInstance
+        from layer4_interface.frontend.platform.families.helpers import action_cell_index
+
+        action = ActionInstance(
+            template_id="place",
+            type="move",
+            actor_id="p_black",
+            params={"pos": {"id": "cell_2_3"}},
+            canonical_key="place:2,3",
+        )
+        assert action_cell_index(action, 9) == 2 * 9 + 3
+
+    def test_unresolvable_params_yield_minus_one(self) -> None:
+        from layer2_engine.core.state_graph import ActionInstance
+        from layer4_interface.frontend.platform.families.helpers import action_cell_index
+
+        action = ActionInstance(
+            template_id="place", type="move", actor_id="p_black", params={"amount": 30}, canonical_key="raise:30"
+        )
+        assert action_cell_index(action, 9) == -1
+
+
+class TestPlayabilityProbe:
+    """注册前探针：能开局、有人类可执行的落子，否则拒绝注册（不产废游戏）."""
+
+    def test_probe_accepts_renamed_cell_param(self) -> None:
+        from layer4_interface.frontend.platform.families import detect_family, probe_playable
+
+        rules = _grid_rules_with_param("square", {"view": "cell", "domain": {"ref": "empty_cells"}})
+        family = detect_family(rules)
+        assert family is not None
+        assert probe_playable(family, rules) == []
+
+    def test_probe_rejects_unusable_placement_param(self) -> None:
+        from layer4_interface.frontend.platform.families import detect_family, probe_playable
+
+        rules = _grid_rules_with_param("square", {"type": "int"})
+        family = detect_family(rules)
+        assert family is not None
+        assert probe_playable(family, rules), "无法换算格位的规则必须被判不可玩"
+
+    def test_probe_rejects_missing_board_size(self) -> None:
+        from layer4_interface.frontend.platform.families import detect_family, probe_playable
+
+        rules = load_rules("stochastic_gomoku")
+        rules["constants"].pop("board_size")
+        family = detect_family(rules)
+        assert family is not None
+        assert any("board_size" in problem for problem in probe_playable(family, rules))
+
+    def test_unknown_family_probe_is_noop(self) -> None:
+        from layer4_interface.frontend.platform.families import probe_playable
+
+        class NoProbe:
+            FAMILY_ID = "stub"
+
+        assert probe_playable(NoProbe(), {}) == []
+
+    def test_create_rejects_unplayable_llm_rules(self, tmp_path) -> None:
+        """LLM 产出的规则若平台驱动不了，创建阶段就报错而不是落盘废游戏。"""
+        registry = CustomGameRegistry(CustomGameStore(tmp_path / "custom_games"))
+        rules = _grid_rules_with_param("square", {"type": "int"})
+
+        class FakeClient:
+            def complete(self, messages, max_tokens=None):  # noqa: ANN001
+                return json.dumps(rules, ensure_ascii=False)
+
+        with pytest.raises(CustomGameError, match="无法对弈") as exc:
+            registry.create(
+                mode="from_scratch",
+                rule_text="9x9 棋盘，五子连珠获胜",
+                game_name="坏棋盘",
+                use_llm=True,
+                llm_client=FakeClient(),
+            )
+        assert exc.value.validation is not None
+        assert exc.value.validation.errors
+        assert registry.list_games() == []  # 废游戏绝不落盘
+
+    def test_created_game_with_renamed_param_is_playable(self, tmp_path) -> None:
+        """参数名不是 cell 也能开局 + 人类落子（修复前：点哪都非法）。"""
+        registry = CustomGameRegistry(CustomGameStore(tmp_path / "custom_games"))
+        rules = _grid_rules_with_param("square", {"view": "cell", "domain": {"ref": "empty_cells"}})
+        rules["effectors"]["do_place"]["ops"] = [
+            op
+            for op in rules["effectors"]["do_place"]["ops"]
+            if op.get("op") != "setIndex" or op.get("array") != "board"
+        ]
+
+        class FakeClient:
+            def complete(self, messages, max_tokens=None):  # noqa: ANN001
+                return json.dumps(rules, ensure_ascii=False)
+
+        entry = registry.create(
+            mode="from_scratch",
+            rule_text="9x9 棋盘，五子连珠获胜",
+            game_name="改名棋盘",
+            use_llm=True,
+            llm_client=FakeClient(),
+        )
+        spec = registry.spec_for(entry["game_id"])
+        session = PlayManager(provider=default_provider, history=None, seed=42, custom=registry).start(
+            entry["game_id"], spec.seat_options[0], "easy"
+        )
+        legal = session.engine.get_legal_actions(session.state)
+        first = next(a for a in legal if a.params)
+        from layer4_interface.frontend.platform.families.helpers import action_cell_index
+
+        index = action_cell_index(first, entry["board_size"])
+        assert index >= 0
+        # 人类落子经 spec.parse_human_action 走通（不再抛「非法落子」）
+        action = spec.parse_human_action(session, {"cell_index": index})
+        assert action is not None
+
+
+class TestCreateStageProgress:
+    """创建过程必须报阶段（前端据此显示「在做什么 + 等了多久」）."""
+
+    def test_stages_reported_in_order(self, tmp_path) -> None:
+        registry = CustomGameRegistry(CustomGameStore(tmp_path / "custom_games"))
+        seen: list[tuple[str, str]] = []
+        registry.create(
+            mode="from_scratch",
+            rule_text=CONNECT4_TEXT,
+            game_name="staged",
+            on_stage=lambda stage, detail: seen.append((stage, detail)),
+        )
+        assert [stage for stage, _ in seen] == ["translate", "validate", "register"]
+        assert all(detail for _, detail in seen)
+
+
+# ── 创建体验：SSE 阶段进度 + LLM 失败不再空手而归 ──────────────────
+
+
+def _post_sse(url: str, payload: dict) -> list[tuple[str, dict]]:
+    """POST ``?stream=1`` 并解析 SSE 事件（event, data）序列。"""
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+    )
+    events: list[tuple[str, dict]] = []
+    with _NO_PROXY_OPENER.open(req) as resp:
+        event = ""
+        for raw in resp:
+            line = raw.decode("utf-8").strip()
+            if line.startswith("event:"):
+                event = line[len("event:") :].strip()
+            elif line.startswith("data:"):
+                events.append((event, json.loads(line[len("data:") :].strip())))
+    return events
+
+
+class TestCreateStreamHttp:
+    """创建页走 SSE：阶段进度可见，失败带原因（不再「等半天什么都没有」）."""
+
+    def test_stream_reports_stages_then_result(self, base_url: str) -> None:
+        events = _post_sse(
+            base_url + "/api/custom/games?stream=1",
+            {"mode": "from_scratch", "rule_text": CONNECT4_TEXT, "game_name": "streamed"},
+        )
+        names = [name for name, _ in events]
+        assert "stage" in names and names[-1] == "done"
+        stages = [data["stage"] for name, data in events if name == "stage"]
+        assert stages == ["translate", "validate", "register"]
+        result = next(data for name, data in events if name == "result")
+        assert result["ok"] is True
+        assert result["game_id"] == "streamed"
+        assert result["validation"]["valid"] is True
+
+    def test_stream_failure_reports_validation_error(self, base_url: str) -> None:
+        events = _post_sse(
+            base_url + "/api/custom/games?stream=1",
+            {"mode": "from_scratch", "rule_text": "石头剪刀布，三局两胜", "game_name": "rps"},
+        )
+        error = next(data for name, data in events if name == "error")
+        assert error["ok"] is False
+        assert error["validation"]["errors"]
+        assert [name for name, _ in events][-1] == "done"
+
+
+class TestCreateWithLlmFallback:
+    """勾了 LLM 也绝不空手而归：端点不可达 / 翻译失败 → 确定性模板 + 醒目告警."""
+
+    def _registry(self, tmp_path) -> CustomGameRegistry:
+        return CustomGameRegistry(CustomGameStore(tmp_path / "custom_games"))
+
+    def test_unreachable_endpoint_falls_back_with_warning(self, tmp_path, monkeypatch) -> None:
+        from layer4_interface.frontend.platform import server as server_mod
+
+        monkeypatch.setattr(server_mod, "_llm_preflight_error", lambda: "LLM 端点不可达（stub）")
+        entry = server_mod._create_custom_game(
+            self._registry(tmp_path),
+            {"mode": "from_scratch", "rule_text": CONNECT4_TEXT, "game_name": "fallback"},
+            use_llm=True,
+        )
+        assert entry["llm_fallback"]["used"] is True
+        assert "LLM 端点不可达（stub）" in entry["llm_fallback"]["reason"]
+        assert entry["validation"]["warnings"][0].startswith("⚠️ LLM 翻译未生效")
+        assert entry["validation"]["valid"] is True
+
+    def test_llm_failure_falls_back_to_template(self, tmp_path, monkeypatch) -> None:
+        from layer4_interface.frontend.platform import server as server_mod
+
+        monkeypatch.setattr(server_mod, "_llm_preflight_error", lambda: "")
+
+        class DeadClient:
+            def complete(self, messages, max_tokens=None):  # noqa: ANN001
+                raise ConnectionError("boom")
+
+        registry = self._registry(tmp_path)
+        entry = server_mod._create_custom_game(
+            registry,
+            {
+                "mode": "from_scratch",
+                "rule_text": CONNECT4_TEXT,
+                "game_name": "fallback2",
+                "llm_client": DeadClient(),
+            },
+            use_llm=True,
+        )
+        assert entry["llm_fallback"]["used"] is True
+        assert "boom" in entry["llm_fallback"]["reason"]
+
+    def test_both_paths_failing_reports_both_reasons(self, tmp_path, monkeypatch) -> None:
+        from layer4_interface.frontend.platform import server as server_mod
+
+        monkeypatch.setattr(server_mod, "_llm_preflight_error", lambda: "LLM 端点不可达（stub）")
+        with pytest.raises(CustomGameError, match="LLM 翻译失败") as exc:
+            server_mod._create_custom_game(
+                self._registry(tmp_path),
+                {"mode": "from_scratch", "rule_text": "石头剪刀布，三局两胜", "game_name": "rps"},
+                use_llm=True,
+            )
+        assert "确定性模板也生成不了" in str(exc.value)
+
+    def test_use_llm_false_stays_deterministic(self, tmp_path) -> None:
+        from layer4_interface.frontend.platform import server as server_mod
+
+        entry = server_mod._create_custom_game(
+            self._registry(tmp_path),
+            {"mode": "from_scratch", "rule_text": CONNECT4_TEXT, "game_name": "plain"},
+            use_llm=False,
+        )
+        assert entry.get("llm_fallback") is None
+
+# ── 自定义游戏开局的三个红线（对话里「界面调不出来」的真凶）──────────
+
+
+class TestCustomGameStartRedLines:
+    """自定义游戏在平台开局路径上的红线：默认自适应不能炸、界面要立刻出现、AI 不能想太久.
+
+    真凶（实测用户自定义 16×16 三子棋）：
+    1. 对话开局的默认配置带 ``adaptive=true``（``battleConfig.ts`` 表单初值），
+       而 ``AdaptiveController`` 的预算表只登记内置 ``GAMES``，对自定义 id 抛
+       ``ValueError("未知游戏: …")`` → ``/match/start`` 直接失败 → 前端只显示
+       「对局正在创建…」，棋盘界面永远出不来（用户原话「对话里调不出来界面」）。
+    2. 流式开局的**第一帧**原本要等 AI 先手算完才推 —— 大棋盘上就是几十秒的
+       空白对话页，棋盘区根本不渲染。
+    3. 迭代预算管不住墙钟：16×16 板 normal=800 次要 ~55s，easy=200 次也要 ~14s。
+    """
+
+    @pytest.fixture
+    def manager(self, tmp_path) -> PlayManager:
+        from layer4_interface.difficulty.adaptive import AdaptiveController
+
+        registry = CustomGameRegistry(CustomGameStore(tmp_path / "custom_games"))
+        registry.create(mode="from_scratch", rule_text=CONNECT4_TEXT, game_name="connect4")
+        return PlayManager(
+            provider=default_provider,
+            history=MatchHistory(tmp_path / "matches"),
+            seed=42,
+            custom=registry,
+            adaptive=AdaptiveController(),
+        )
+
+    def test_adaptive_start_does_not_raise_for_custom_game(self, manager) -> None:
+        """``adaptive=true``（对话开局默认）对自定义游戏必须能开局."""
+        session = manager.start("connect4", "p_black", "easy", adaptive_enabled=True)
+        assert session.spec.game_id == "connect4"
+        assert session.adaptive_active is True
+        # 自适应对自定义游戏无历史数据 → 回落到该 spec 自己的 normal 档
+        assert session.ai_strength == 800
+
+    def test_explicit_adaptive_tier_also_safe(self, manager) -> None:
+        session = manager.start("connect4", "p_black", "adaptive")
+        assert session.ai_strength == 800
+
+    def test_adaptive_controller_still_strict_for_unknown_game(self) -> None:
+        """控制器本身仍对未知游戏报错（红线在会话层兜底，不在控制器里静默）."""
+        from layer4_interface.difficulty.adaptive import AdaptiveController
+
+        with pytest.raises(ValueError, match="未知游戏"):
+            AdaptiveController().pick_budget("some-custom-id", "adaptive", [])
+
+    def test_grid_family_caps_search_time(self) -> None:
+        """自定义网格游戏的求解器必须带时间上限（大棋盘不再一步几十秒）."""
+        from layer4_interface.frontend.platform.families import grid
+
+        rules = load_rules("stochastic_gomoku")
+        spec = grid.build_spec("connect4", rules)
+        engine = spec.create_engine(42)
+        for difficulty, expected in (("easy", 1.5), ("normal", 3.0), ("hard", 6.0)):
+            solver = spec.create_solver(default_provider, engine, 42, 200, difficulty=difficulty)
+            assert solver.config.time_limit == expected, difficulty
+
+    def test_start_stream_pushes_board_before_ai_opens(self, manager) -> None:
+        """AI 先手时，第一帧必须是**空局面**（界面立刻出现），AI 落子随后补帧."""
+        frames: list[dict] = []
+        # seat_options[1] = p_white → ai_opens True（AI 先手）
+        session = manager.start("connect4", "p_white", "easy", on_progress=frames.append)
+        assert frames, "开局必须立刻推一帧，否则对话页没有棋盘可渲染"
+        first = frames[0]
+        assert not any(v for v in first["board"]), "第一帧应是空局面（AI 还没落子）"
+        assert len(frames) >= 2, "AI 落子后应再推一帧"
+        assert any(v for v in frames[-1]["board"]), "最后一帧应看到 AI 的落子"
+        assert session.snapshot()["family"] == "grid"

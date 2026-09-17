@@ -538,6 +538,120 @@ class TestCompleteStream:
         assert "connection refused" in str(excinfo.value)
 
 
+class TestReasoningBudgetExhaustion:
+    """推理模型把输出预算烧在思维链上时，必须报出可操作的原因.
+
+    实测（deepseek-flash + 规则翻译）：``max_tokens=8192`` 全部被
+    ``reasoning_tokens`` 吃掉、``content`` 为空 —— 旧实现只留给调用方一句
+    「未返回内容」，用户看到的是「创建游戏失败」而不知道要调预算。
+    """
+
+    def _body(self, *, content: str, finish_reason: str, reasoning_tokens: int) -> bytes:
+        return json.dumps(
+            {
+                "choices": [
+                    {
+                        "message": {"content": content, "reasoning_content": "先想…" * 20},
+                        "finish_reason": finish_reason,
+                    }
+                ],
+                "usage": {
+                    "completion_tokens": 8192,
+                    "completion_tokens_details": {"reasoning_tokens": reasoning_tokens},
+                },
+            }
+        ).encode("utf-8")
+
+    def test_length_truncated_reasoning_only_records_actionable_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        body = self._body(content="", finish_reason="length", reasoning_tokens=8192)
+
+        def fake_urlopen(req, timeout=None):
+            return _FakeResponse(body)
+
+        monkeypatch.setattr("layer2_engine.core.llm.urllib.request.urlopen", fake_urlopen)
+        client = LLMClient()
+        assert client.complete([{"role": "user", "content": "hi"}], max_tokens=8192) == ""
+        message = str(client.last_error)
+        assert "预算" in message and "8192" in message
+        assert "LLM_MAX_TOKENS" in message  # 可操作：告诉用户改哪个旋钮
+
+    def test_fail_hard_raises_on_reasoning_only_reply(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        body = self._body(content="", finish_reason="length", reasoning_tokens=8192)
+
+        def fake_urlopen(req, timeout=None):
+            return _FakeResponse(body)
+
+        monkeypatch.setattr("layer2_engine.core.llm.urllib.request.urlopen", fake_urlopen)
+        with pytest.raises(LLMClientError):
+            LLMClient(fail_hard=True).complete([{"role": "user", "content": "hi"}], max_tokens=8192)
+
+    def test_tool_call_reply_without_content_not_treated_as_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        body = json.dumps(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "reasoning_content": "想想",
+                            "tool_calls": [{"function": {"name": "play", "arguments": "{}"}}],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            }
+        ).encode("utf-8")
+
+        def fake_urlopen(req, timeout=None):
+            return _FakeResponse(body)
+
+        monkeypatch.setattr("layer2_engine.core.llm.urllib.request.urlopen", fake_urlopen)
+        client = LLMClient()
+        reply = client.complete_tools([{"role": "user", "content": "hi"}], tools=[{"type": "function"}])
+        assert len(reply.tool_calls) == 1
+        assert client.last_error is None
+
+
+class TestTokenBudgetDownshift:
+    """端点以 HTTP 400 拒绝 ``max_tokens`` 时自动降档重试（老模型上限 8192）."""
+
+    def test_retries_with_fallback_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen: list[int | None] = []
+
+        def fake_urlopen(req, timeout=None):
+            payload = json.loads(req.data.decode("utf-8"))
+            seen.append(payload.get("max_tokens"))
+            if payload.get("max_tokens", 0) > 8192:
+                raise _http_error(req.full_url, 400, '{"error": {"message": "max_tokens is too large"}}')
+            return _FakeResponse(json.dumps({"choices": [{"message": {"content": "规则 JSON"}}]}).encode("utf-8"))
+
+        monkeypatch.setattr("layer2_engine.core.llm.urllib.request.urlopen", fake_urlopen)
+        client = LLMClient()
+        assert client.complete([{"role": "user", "content": "hi"}], max_tokens=32768) == "规则 JSON"
+        assert seen == [32768, 8192]
+        assert client.last_error is None
+
+    def test_other_http_400_not_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = {"n": 0}
+
+        def fake_urlopen(req, timeout=None):
+            calls["n"] += 1
+            raise _http_error(req.full_url, 400, '{"error": {"message": "invalid model"}}')
+
+        monkeypatch.setattr("layer2_engine.core.llm.urllib.request.urlopen", fake_urlopen)
+        client = LLMClient()
+        assert client.complete([{"role": "user", "content": "hi"}], max_tokens=32768) == ""
+        assert calls["n"] == 1
+        assert "invalid model" in str(client.last_error)
+
+    def test_fail_hard_still_raises_after_budget_exhausted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_urlopen(req, timeout=None):
+            raise _http_error(req.full_url, 400, '{"error": {"message": "max_tokens is too large"}}')
+
+        monkeypatch.setattr("layer2_engine.core.llm.urllib.request.urlopen", fake_urlopen)
+        with pytest.raises(LLMClientError):
+            LLMClient(fail_hard=True).complete([{"role": "user", "content": "hi"}], max_tokens=32768)
+
+
 class TestChatReplyReasoning:
     """非流式路径的思维链提取（complete_chat_reply → ChatReply.reasoning）."""
 

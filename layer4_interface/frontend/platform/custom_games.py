@@ -34,7 +34,7 @@ from typing import Any
 from layer1_translator import ValidationResult, translate_rules_json
 
 from ..engine_helpers import RULES_DIR
-from .families import detect_family
+from .families import detect_family, probe_playable
 from .games import GAMES, GameSpec
 
 #: game_id 白名单 — 仅小写字母数字、下划线、连字符（路径安全，对齐 history 审计项）。
@@ -205,6 +205,7 @@ class CustomGameRegistry:
         llm_client: Any | None = None,
         llm_model: str | None = None,
         llm_model_path: str | None = None,
+        on_stage: Any | None = None,
     ) -> dict:
         """Translate, validate, classify, spec-build and persist a game.
 
@@ -222,18 +223,24 @@ class CustomGameRegistry:
                 ``use_llm`` 走：显式要求 LLM 翻译 → 严格，API 错误/传输
                 失败如实上报，防止静默产出与描述不符的模板游戏。
             llm_client / llm_model_path: 透传给翻译器的 LLM 参数。
+            on_stage: 可选进度回调 ``(stage, detail)``——平台创建接口据此把
+                「正在模板翻译 / 正在用 LLM 翻译（约 1-3 分钟）/ 校验 / 注册」
+                推给前端，避免用户盯着转圈什么也看不到。
 
         Returns:
             The persisted registry entry dict.
 
         Raises:
-            CustomGameError: 校验失败 / 族不支持 / 参数缺失 / 变体翻译不可用。
+            CustomGameError: 校验失败 / 族不支持 / 不可玩 / 参数缺失 /
+                变体翻译不可用。
         """
         if strict_llm is None:
             strict_llm = use_llm
+        stage = on_stage if callable(on_stage) else (lambda _stage, _detail: None)
         if mode == "from_scratch":
             if not rule_text or not str(rule_text).strip():
                 raise CustomGameError("缺少规则文本 (rule_text)")
+            stage("translate", "正在用 LLM 翻译规则（推理模型通常需要 1-3 分钟）" if use_llm else "正在按模板翻译规则")
             response = translate_rules_json(
                 str(rule_text),
                 source_lang=source_lang,
@@ -252,6 +259,9 @@ class CustomGameRegistry:
             if not change_text or not str(change_text).strip():
                 raise CustomGameError("缺少变更文本 (change_text)")
             base_rules = self._base_template(str(base_game_id))
+            stage(
+                "translate", "正在用 LLM 翻译变体规则（推理模型通常需要 1-3 分钟）" if use_llm else "正在按模板翻译变体"
+            )
             response = self._translate_variant(
                 str(base_game_id),
                 str(change_text),
@@ -269,6 +279,7 @@ class CustomGameRegistry:
 
         rules = response.rules_json
         validation = response.validation
+        stage("validate", "正在做规则 schema + 引擎冒烟校验")
         if not rules or validation is None or not validation.valid:
             raise CustomGameError(
                 "规则校验未通过",
@@ -289,9 +300,23 @@ class CustomGameRegistry:
                 diff_summary=diff_summary,
             )
 
+        problems = probe_playable(family, rules)
+        if problems:
+            invalid = ValidationResult(
+                valid=False,
+                errors=[f"生成的规则在平台上无法对弈：{problem}" for problem in problems],
+                warnings=list(validation.warnings),
+            )
+            raise CustomGameError(
+                "生成的规则在平台上无法对弈（换个说法重试，或改为基于已有模板做变体）",
+                validation=invalid,
+                diff_summary=diff_summary,
+            )
+
         game_id = self._next_game_id(rules, game_name)
         spec = family.build_spec(game_id, rules)
         spec = self._with_display_name(spec, rules, game_name, game_id)
+        stage("register", "正在注册到大厅")
         entry = self._entry(game_id, spec, family.FAMILY_ID, rules, response.confidence, validation, diff_summary)
         self._store.save(entry)
         self._spec_cache[game_id] = spec
@@ -411,9 +436,7 @@ class CustomGameRegistry:
         return candidate
 
     @staticmethod
-    def _resolve_display_name(
-        rules: dict, game_name: str | None, game_id: str
-    ) -> str:
+    def _resolve_display_name(rules: dict, game_name: str | None, game_id: str) -> str:
         """人类可读展示名优先级：用户名 > meta.gameName > meta.gameId > game_id。
 
         修复前各族 ``build_spec`` 把 ``display_name`` 直接设成
@@ -425,9 +448,7 @@ class CustomGameRegistry:
         meta_id = meta.get("gameId") if isinstance(meta, dict) else None
         return str(game_name or meta_name or meta_id or game_id)
 
-    def _with_display_name(
-        self, spec: GameSpec, rules: dict, game_name: str | None, game_id: str
-    ) -> GameSpec:
+    def _with_display_name(self, spec: GameSpec, rules: dict, game_name: str | None, game_id: str) -> GameSpec:
         """Return ``spec`` with ``display_name`` set per :meth:`_resolve_display_name`.
 
         ``GameSpec`` is frozen; a non-matching resolved name rebuilds the spec

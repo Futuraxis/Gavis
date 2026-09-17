@@ -12,6 +12,7 @@ Run::
 from __future__ import annotations
 
 import argparse
+import re
 import time
 import urllib.parse
 from dataclasses import asdict
@@ -37,12 +38,12 @@ from ..common.http_utils import (
     send_sse_event,
     start_sse,
 )
+from ..engine_helpers import build_seat_names
 from .benchmark import SOLVER_OPTIONS, BenchmarkRunner
 from .chat import chat_turn, chat_turn_stream
 from .conversations import ConversationError, ConversationStore
 from .custom_games import CustomGameError, CustomGameRegistry, CustomGameStore
 from .game_knowledge import GAME_ALIASES
-from ..engine_helpers import build_seat_names
 from .games import GAMES, PlayError
 from .history import HistoryError, MatchHistory
 from .llm_settings import LLMSettingsStore, probe_llm, sync_env
@@ -52,6 +53,10 @@ ROOT = Path(__file__).resolve().parents[3]
 DIST_DIR = ROOT / "platform-frontend" / "dist"
 DEFAULT_DATA_DIR = ROOT / "data" / "matches"
 PORT = 8770
+
+#: `since` 查询参数的日期白名单（只接受 ISO-8601 日期/日期时间前缀；非法值忽略
+#: 而不是报错——筛选参数是「best effort」，坏参数不该让对局记录页 500）。
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ][0-9:.+\-Zz]*$|^\d{4}-\d{2}-\d{2}$")
 
 #: 平台 LLM 配置存储（make_handler 注入；None = 无平台配置，走 env/默认）。
 _LLM_SETTINGS: LLMSettingsStore | None = None
@@ -128,6 +133,185 @@ def _wants_stream(handler: SimpleHTTPRequestHandler) -> bool:
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(handler.path).query)
     raw = (query.get("stream") or [""])[-1].strip().lower()
     return raw in ("1", "true", "yes")
+
+
+def _soft_emitter(handler: SimpleHTTPRequestHandler) -> Any:
+    """Build a fail-soft SSE writer: once the client is gone, stop writing.
+
+    「关闭页面」是流式对局最常见的中断：客户端断开后 ``wfile.write`` 抛
+    ``BrokenPipeError``/``ConnectionResetError``（都是 ``OSError``）。若让
+    它冒泡，异常会从 ``on_progress`` 穿过 ``GameSession.run_ai`` 打断整个 AI
+    循环——人类行动已落地、AI 只走了半步，会话就停在半推进状态（玩家回到
+    页面看到的就是「一直卡着」）。所以这里把写失败吞掉并置位，之后只跳过
+    写操作，让对局照常跑完，状态始终自洽。
+
+    Returns:
+        ``emit(event, data)`` — 可安全重复调用；客户端断开后成为空操作。
+    """
+    closed = False
+
+    def emit(event: str, data: dict) -> None:
+        nonlocal closed
+        if closed:
+            return
+        try:
+            send_sse_event(handler, event, data)
+        except (OSError, ValueError):  # 断管 / 套接字已关闭
+            closed = True
+
+    return emit
+
+
+def _query_int(query: dict[str, list[str]], key: str, *, default: int, minimum: int, maximum: int) -> int:
+    """Read one integer query parameter, clamped (never raises).
+
+    历史记录这类只读筛选接口用「宽容解析」而不是 400：``?limit=abc`` /
+    ``?offset=-5`` 这类脏参数回落到默认值，页面不会因为一个坏链接整页报错。
+    """
+    raw = (query.get(key) or [""])[-1].strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, value))
+
+
+def _player_result(meta: dict) -> str:
+    """``win`` / ``lose`` / ``draw`` from the player's point of view.
+
+    Prefers the persisted ``won`` (``layer4_interface/result.player_won``,
+    which already resolves faction winners such as 卧底/狼人); old records
+    without it fall back to the pid comparison used by the UI.
+    """
+    won = meta.get("won")
+    if won is None:
+        won = bool(meta.get("winner")) and meta.get("winner") == meta.get("player_pid")
+    if meta.get("winner") is None:
+        return "draw"
+    return "win" if won else "lose"
+
+
+def _search_text(meta: dict) -> str:
+    """Lowercased haystack for the ``q`` filter (game id + seat names only).
+
+    Deliberately does not include raw pids: 记录页对用户只呈现中文座位称呼，
+    关键字搜索不该让人靠 ``p_white`` 这种内部 id 去命中。
+    """
+    parts = [str(meta.get("game_id") or "")]
+    seat_names = meta.get("seat_names")
+    if isinstance(seat_names, dict):
+        parts.extend(str(v) for v in seat_names.values() if v)
+    return " ".join(parts).lower()
+
+
+# ── 自定义游戏创建（JSON / SSE 共用）───────────────────────────────
+
+
+def _custom_create_result_payload(entry: dict) -> dict:
+    """Success envelope shared by the JSON and SSE create routes."""
+    return {
+        "ok": True,
+        "game_id": entry["game_id"],
+        "game": entry,
+        "confidence": entry["confidence"],
+        "family": entry["family"],
+        "diff_summary": entry.get("diff_summary"),
+        "validation": entry["validation"],
+        "llm_fallback": entry.get("llm_fallback"),
+    }
+
+
+def _custom_create_error_payload(exc: CustomGameError) -> dict:
+    """Failure envelope (400 / SSE ``error``) with the validation details."""
+    validation = (
+        {
+            "valid": exc.validation.valid,
+            "errors": list(exc.validation.errors),
+            "warnings": list(exc.validation.warnings),
+        }
+        if exc.validation is not None
+        else None
+    )
+    return {
+        "ok": False,
+        "error": str(exc),
+        "validation": validation,
+        "diff_summary": exc.diff_summary,
+    }
+
+
+def _summarize_custom_error(exc: CustomGameError, *, limit: int = 400) -> str:
+    """One-line reason from a creation failure (validation errors first)."""
+    if exc.validation is not None and exc.validation.errors:
+        reason = "；".join(exc.validation.errors)
+    else:
+        reason = str(exc)
+    reason = " ".join(reason.split())
+    return reason[:limit] + ("…" if len(reason) > limit else "")
+
+
+def _llm_preflight_error() -> str:
+    """Why the configured LLM endpoint cannot be used right now (``""`` = fine).
+
+    创建页勾了「LLM 生成」时先花 1-3 秒探测端点：不可达就**立即**说明原因
+    并走确定性降级，而不是让用户等一次 300s 的翻译超时后才看到失败。
+    """
+    if _LLM_SETTINGS is None:
+        return ""
+    base_url = _LLM_SETTINGS.effective_base_url() or ""
+    if LLMClient.available(base_url, _LLM_SETTINGS.effective_api_key()):
+        return ""
+    return f"LLM 端点不可达（{base_url or '未配置'}）——请检查「LLM 配置」页或 LLM_BASE_URL/LLM_API_KEY"
+
+
+def _create_custom_game(
+    custom: CustomGameRegistry,
+    create_kwargs: dict,
+    *,
+    use_llm: bool,
+    on_stage: Any | None = None,
+) -> dict:
+    """Create a custom game with the platform's creation-time UX policy.
+
+    ``use_llm=False`` → deterministic template translation only (fast path).
+
+    ``use_llm=True`` → LLM first, with two safety nets that keep the user from
+    staring at a spinner and ending up with nothing (「等了半天没见创建好的
+    游戏」):
+
+    1. **端点预检**：不可达立即降级（附真实原因），不浪费一次长超时；
+    2. **翻译失败即降级**：LLM 超时/输出过不了校验时用确定性模板再试一次，
+       成功则返回游戏并在 ``validation.warnings`` 首条 + ``llm_fallback``
+       字段里醒目说明「这是模板近似产物」——绝不静默冒充 LLM 成果。
+    """
+    if not use_llm:
+        return custom.create(**create_kwargs, use_llm=False, on_stage=on_stage)
+
+    llm_reason = _llm_preflight_error()
+    if not llm_reason:
+        try:
+            return custom.create(**create_kwargs, use_llm=True, strict_llm=True, on_stage=on_stage)
+        except CustomGameError as exc:
+            llm_reason = _summarize_custom_error(exc)
+
+    try:
+        entry = custom.create(**create_kwargs, use_llm=False, on_stage=on_stage)
+    except CustomGameError as exc:
+        fallback_reason = _summarize_custom_error(exc)
+        raise CustomGameError(
+            f"LLM 翻译失败（{llm_reason}）；确定性模板也生成不了（{fallback_reason}）",
+            validation=exc.validation,
+            diff_summary=exc.diff_summary,
+        ) from None
+
+    validation = entry.setdefault("validation", {"valid": True, "errors": [], "warnings": []})
+    warning = (
+        f"⚠️ LLM 翻译未生效（{llm_reason}），已用确定性模板生成近似规则："
+        "玩法细节可能与你的描述不完全一致，可改法再建一次。"
+    )
+    validation["warnings"] = [warning, *list(validation.get("warnings") or [])]
+    entry["llm_fallback"] = {"used": True, "reason": llm_reason}
+    return entry
 
 
 def make_handler(
@@ -382,55 +566,67 @@ def make_handler(
             send_json(self, HTTPStatus.OK, {"ok": True, "games": custom.list_games()})
 
         def _handle_custom_games_create(self) -> None:
-            """Create a custom game from a translation (from-scratch / variant)."""
+            """Create a custom game from a translation (from-scratch / variant).
+
+            两条响应形状（协商见 ``_wants_stream``）：
+            - SSE（前端创建页）：``stage{stage,detail}`` 进度事件 + 收口
+              ``result`` / ``error`` —— LLM 翻译要跑 1-3 分钟，必须让用户看到
+              「在做什么、等了多久」，而不是盯着转圈。
+            - JSON（旧前端 / 既有测试）：原有信封不变。
+
+            ``use_llm=True`` 的降级链（创建体验红线：绝不让用户空手而归）：
+            1. LLM 端点先做可达性预检——不可达就**立即**说明原因改走确定性
+               模板，而不是让用户等一次 300s 超时；
+            2. LLM 翻译失败（超时 / 输出过不了校验）→ 用确定性模板再试一次，
+               成功则照常返回游戏并附带醒目告警（绝不静默冒充 LLM 产物）。
+            """
             if custom is None:
+                if _wants_stream(self):
+                    start_sse(self)
+                    emit = _soft_emitter(self)
+                    emit("error", {"error": "自定义游戏注册表未启用"})
+                    emit("done", {})
+                    return
                 send_error_json(self, HTTPStatus.SERVICE_UNAVAILABLE, "自定义游戏注册表未启用")
                 return
             payload = read_json_body(self)
-            try:
-                entry = custom.create(
-                    mode=str(payload.get("mode", "from_scratch")),
-                    rule_text=payload.get("rule_text"),
-                    base_game_id=payload.get("base_game_id"),
-                    change_text=payload.get("change_text"),
-                    game_name=payload.get("game_name"),
-                    source_lang=str(payload.get("source_lang", "zh")),
-                    use_llm=bool(payload.get("use_llm", False)),
-                )
-            except CustomGameError as exc:
-                validation = (
-                    {
-                        "valid": exc.validation.valid,
-                        "errors": list(exc.validation.errors),
-                        "warnings": list(exc.validation.warnings),
-                    }
-                    if exc.validation is not None
-                    else None
-                )
-                send_json(
-                    self,
-                    HTTPStatus.BAD_REQUEST,
-                    {
-                        "ok": False,
-                        "error": str(exc),
-                        "validation": validation,
-                        "diff_summary": exc.diff_summary,
-                    },
-                )
+            mode = str(payload.get("mode", "from_scratch"))
+            use_llm = bool(payload.get("use_llm", False))
+            create_kwargs: dict[str, Any] = {
+                "mode": mode,
+                "rule_text": payload.get("rule_text"),
+                "base_game_id": payload.get("base_game_id"),
+                "change_text": payload.get("change_text"),
+                "game_name": payload.get("game_name"),
+                "source_lang": str(payload.get("source_lang", "zh")),
+            }
+            if _wants_stream(self):
+                start_sse(self)
+                emit = _soft_emitter(self)
+                try:
+                    entry = _create_custom_game(
+                        custom,
+                        create_kwargs,
+                        use_llm=use_llm,
+                        on_stage=lambda stage, detail: emit("stage", {"stage": stage, "detail": detail}),
+                    )
+                except CustomGameError as exc:
+                    emit("error", _custom_create_error_payload(exc))
+                    emit("done", {})
+                    return
+                except Exception as exc:  # noqa: BLE001 — 绝不能让 SSE 连接悬挂
+                    emit("error", {"error": f"创建失败：{exc}", "validation": None, "diff_summary": None})
+                    emit("done", {})
+                    return
+                emit("result", _custom_create_result_payload(entry))
+                emit("done", {})
                 return
-            send_json(
-                self,
-                HTTPStatus.OK,
-                {
-                    "ok": True,
-                    "game_id": entry["game_id"],
-                    "game": entry,
-                    "confidence": entry["confidence"],
-                    "family": entry["family"],
-                    "diff_summary": entry.get("diff_summary"),
-                    "validation": entry["validation"],
-                },
-            )
+            try:
+                entry = _create_custom_game(custom, create_kwargs, use_llm=use_llm)
+            except CustomGameError as exc:
+                send_json(self, HTTPStatus.BAD_REQUEST, _custom_create_error_payload(exc))
+                return
+            send_json(self, HTTPStatus.OK, _custom_create_result_payload(entry))
 
         def _handle_custom_game_delete(self, game_id: str) -> None:
             """Delete one custom game; 404 when it does not exist."""
@@ -485,17 +681,14 @@ def make_handler(
         def _handle_start_stream(self, **start_kwargs: object) -> None:
             """SSE 出口：``PlayManager.start`` 期间每步 AI 行动推一帧进度快照。"""
             start_sse(self)
+            emit = _soft_emitter(self)
             try:
-
-                def _on_progress(snap: dict) -> None:
-                    send_sse_event(self, "progress", {"session": snap})
-
-                session = manager.start(on_progress=_on_progress, **start_kwargs)
-                send_sse_event(self, "snapshot", {"session": session.snapshot()})
-                send_sse_event(self, "done", {})
+                session = manager.start(on_progress=lambda snap: emit("progress", {"session": snap}), **start_kwargs)
+                emit("snapshot", {"session": session.snapshot()})
+                emit("done", {})
             except Exception as exc:  # noqa: BLE001 — 绝不能让 SSE 连接悬挂
-                send_sse_event(self, "error", {"error": str(exc)})
-                send_sse_event(self, "done", {})
+                emit("error", {"error": str(exc)})
+                emit("done", {})
 
         def _handle_match_move(self) -> None:
             payload = read_json_body(self)
@@ -513,17 +706,14 @@ def make_handler(
         def _handle_move_stream(self, game_id: str, action: dict) -> None:
             """SSE 出口：move 期间人类行动 + 每步 AI 行动各推一帧进度快照。"""
             start_sse(self)
+            emit = _soft_emitter(self)
             try:
-
-                def _on_progress(snap: dict) -> None:
-                    send_sse_event(self, "progress", {"session": snap})
-
-                snapshot = manager.move(game_id, action, on_progress=_on_progress)
-                send_sse_event(self, "snapshot", {"session": snapshot})
-                send_sse_event(self, "done", {})
+                snapshot = manager.move(game_id, action, on_progress=lambda snap: emit("progress", {"session": snap}))
+                emit("snapshot", {"session": snapshot})
+                emit("done", {})
             except Exception as exc:  # noqa: BLE001 — 绝不能让 SSE 连接悬挂
-                send_sse_event(self, "error", {"error": str(exc)})
-                send_sse_event(self, "done", {})
+                emit("error", {"error": str(exc)})
+                emit("done", {})
 
         def _handle_match_state(self) -> None:
             payload = read_json_body(self)
@@ -590,6 +780,7 @@ def make_handler(
         def _handle_chat_stream(self, text: str, game_id: str | None, chat_history: Any) -> None:
             """SSE 出口：逐事件写 ``chat_turn_stream`` 的产出（编排异常兜 error+done）。"""
             start_sse(self)
+            emit = _soft_emitter(self)
             try:
                 for event in chat_turn_stream(
                     manager,
@@ -600,10 +791,10 @@ def make_handler(
                     history=chat_history if isinstance(chat_history, list) else None,
                     match_history=history,
                 ):
-                    send_sse_event(self, str(event["event"]), event["data"])
+                    emit(str(event["event"]), event["data"])
             except Exception as exc:  # noqa: BLE001 — 编排异常绝不能让连接悬挂
-                send_sse_event(self, "error", {"error": str(exc)})
-                send_sse_event(self, "done", {})
+                emit("error", {"error": str(exc)})
+                emit("done", {})
 
         def _handle_match_hint(self) -> None:
             payload = read_json_body(self)
@@ -715,32 +906,73 @@ def make_handler(
 
         def _handle_history_list(self) -> None:
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            limit = int(query.get("limit", ["100"])[0])
-            game_id = query.get("game_id", [None])[0]
-            matches = history.list_matches(limit=limit, game_id=game_id)
-            # 注入 seat_names：战绩卡用 player_pid 查座位称呼（旧记录缺省 → 前端兜底 pid）。
+            limit = _query_int(query, "limit", default=100, minimum=1, maximum=500)
+            offset = _query_int(query, "offset", default=0, minimum=0, maximum=1_000_000)
+            game_id = (query.get("game_id") or [""])[-1].strip() or None
+            # 结果过滤：玩家视角（win/lose/draw），口径与 meta.won 一致——
+            # 必须在 enrich（回填 won / 注入 seat_names）之后应用，否则旧记录
+            # 会因 won 尚未算出而被结果过滤误伤。
+            want_result = (query.get("result") or [""])[-1].strip().lower()
+            if want_result not in ("win", "lose", "draw"):
+                want_result = ""
+            keyword = (query.get("q") or [""])[-1].strip().lower()
+            since = (query.get("since") or [""])[-1].strip()
+            if since and not _ISO_DATE_RE.fullmatch(since):
+                since = ""
+            # 全量读出后再过滤/切片（见 MatchHistory.list_matches(limit=None)）；
+            # 单用户几百~几千局的量级下这一步仍是毫秒级 JSON 读取。
+            matches = history.list_matches(limit=None, game_id=game_id)
+            matches = self._enrich_history(matches)
+            if since:
+                matches = [m for m in matches if str(m.get("started_at") or "") >= since]
+            if want_result:
+                matches = [m for m in matches if _player_result(m) == want_result]
+            if keyword:
+                matches = [m for m in matches if keyword in _search_text(m)]
+            total = len(matches)
+            page = matches[offset : offset + limit]
+            send_json(
+                self,
+                HTTPStatus.OK,
+                {"ok": True, "matches": page, "total": total, "has_more": offset + len(page) < total},
+            )
+
+        def _enrich_history(self, matches: list[dict]) -> list[dict]:
+            """Inject ``seat_names`` and backfill ``won`` for old records.
+
+            Kept separate from the HTTP handler so filtering and pagination see
+            fully-enriched metadata（座位名 / 玩家视角胜负）而不是原始记录。
+            """
             for meta in matches:
-                if isinstance(meta, dict):
-                    meta["seat_names"] = self._seat_names_for(meta.get("game_id") or "")
-                    # 阵营胜者补齐 won：旧记录 meta 没有 won / final_roles，读全量记录
-                    # 最后一手快照解析（社交阵营胜者才能正确标注胜负，见
-                    # layer4_interface/result.py）；有 won（含 False）则跳过。
-                    if meta.get("won") is None and meta.get("winner"):
-                        try:
-                            full = history.get(str(meta.get("match_id") or ""))
-                            moves = full.get("moves") if isinstance(full, dict) else None
-                            snap = (
-                                moves[-1].get("snapshot")
-                                if isinstance(moves, list) and moves and isinstance(moves[-1], dict)
-                                else None
-                            )
-                            if isinstance(snap, dict):
-                                meta["won"] = player_won(
-                                    meta.get("winner"), meta.get("player_pid"), snap.get("winners"), snap
-                                )
-                        except Exception:
-                            pass
-            send_json(self, HTTPStatus.OK, {"ok": True, "matches": matches})
+                if not isinstance(meta, dict):
+                    continue
+                meta["seat_names"] = self._seat_names_for(meta.get("game_id") or "")
+                # 阵营胜者补齐 won：旧记录 meta 没有 won / final_roles，读全量记录
+                # 最后一手快照解析（社交阵营胜者才能正确标注胜负，见
+                # layer4_interface/result.py）；有 won（含 False）则跳过。
+                #
+                # 没有末手快照的旧记录也要回填：否则 meta.won 留在 None，前端只能
+                # 按 pid 猜——`?result=win` 已按 player_won 算成胜，前端却可能显示
+                # 「失败」，同一局两处口径打架。player_won 对 snap=None 是安全的
+                # （仅在 winner 与 winners 都不可判定时返回 None = 平局）。
+                if meta.get("won") is None and meta.get("winner"):
+                    snap: dict | None = None
+                    try:
+                        full = history.get(str(meta.get("match_id") or ""))
+                        moves = full.get("moves") if isinstance(full, dict) else None
+                        candidate = (
+                            moves[-1].get("snapshot")
+                            if isinstance(moves, list) and moves and isinstance(moves[-1], dict)
+                            else None
+                        )
+                        if isinstance(candidate, dict):
+                            snap = candidate
+                    except Exception:
+                        pass
+                    meta["won"] = player_won(
+                        meta.get("winner"), meta.get("player_pid"), snap.get("winners") if snap else None, snap
+                    )
+            return matches
 
         def _handle_history_get(self, match_id: str) -> None:
             record = history.get(urllib.parse.unquote(match_id))
@@ -924,12 +1156,9 @@ def main() -> None:
         persona = PERSONAS.get(persona_key)
         if persona is None:
             return None
-        llm = (
-            llm_settings.build_client()
-            if LLMClient.available(llm_settings.effective_base_url(), llm_settings.effective_api_key())
-            else None
-        )
-        return DialogueEngine(persona, llm=llm)
+        # 复用共享聊天客户端（带探测缓存）：每次都现探测 /v1/models 会给每局
+        # 开局多加 1-3s（实测月亮棋开局 3.5s 里 3s 是探测）。
+        return DialogueEngine(persona, llm=_get_chat_llm())
 
     manager = PlayManager(
         provider=default_provider,
@@ -940,6 +1169,10 @@ def main() -> None:
         adaptive=adaptive,
         agent_factory=_make_agent,
         custom=custom_registry,
+        # 陪伴发言后台生成：实测每步走子 16-33s 全花在陪伴 Agent 的 LLM 调用
+        # 上，走子请求被拖住 → 玩家点一下等半分钟。异步后走子立刻返回，前端
+        # 轮询 /api/match/state 收发言（见 session.GameSession.queue_agent_reply）。
+        agent_async=True,
     )
     benchmark = BenchmarkRunner(provider=default_provider, seed=42)
     if args.learning_interval > 0:

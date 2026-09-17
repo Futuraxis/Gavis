@@ -12,6 +12,7 @@ both are covered by the same OpenAI-compatible endpoint.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Protocol
 
 from layer2_engine.core.llm import LLMClient as _UnifiedLLMClient
@@ -23,6 +24,82 @@ logger = logging.getLogger(__name__)
 #: 规则翻译的 LLM 采样温度 —— 必须 0（确定性/可复现：同一规则文本跨次产出
 #: 相同 rules.json，"它就是能用" 的复现性前提；闲聊/发言等创作场景不受影响）。
 RULE_LLM_TEMPERATURE = 0.0
+
+#: 规则翻译的输出预算（tokens）。8192 对**推理模型**是不够的：思维链也计入
+#: ``max_tokens``，实测 deepseek-flash 一次规则翻译就能把 8192 全烧在
+#: reasoning 上、正文为空（``finish_reason=length``），表现为「LLM 不可用
+#: （未返回内容）」→ 创建游戏失败。32768 留出思考 + 完整 rules.json 的空间。
+#: 端点拒绝该预算时统一客户端会自动降档到 8192 重试（老模型上限）。
+#: 环境变量 ``LLM_MAX_TOKENS`` 可覆盖（无需改代码即可按模型调）。
+RULE_LLM_MAX_TOKENS = 32768
+
+#: 规则翻译的传输超时（秒）。默认 30s 是聊天尺度：推理模型生成一份完整
+#: rules.json 常需 1-3 分钟，30s 必然超时 → 用户等一分钟只拿到「端点不可达/
+#: 超时」。翻译路径单独用长超时。环境变量 ``LLM_TIMEOUT_S`` 可覆盖。
+RULE_LLM_TIMEOUT_S = 300.0
+
+#: 一次规则翻译的**总**预算（秒，含「校验失败 → 修复重试」的第二次调用）。
+#: 单次超时管不住总时长：修复重试会再来一次 300s，端点抽风时用户可能等上
+#: 十分钟（实测有一次 486s）。有了总预算，第二次调用只拿到剩余时间，超了就
+#: 停止重试、改走确定性模板（平台给出降级告警）。环境变量
+#: ``LLM_CREATE_DEADLINE_S`` 可覆盖。
+RULE_LLM_DEADLINE_S = 300.0
+
+#: 预算/超时的合法区间（防御坏环境变量把翻译打瘸）。
+_MIN_MAX_TOKENS = 1024
+_MAX_MAX_TOKENS = 262_144
+_MIN_TIMEOUT_S = 5.0
+_MAX_TIMEOUT_S = 3600.0
+_MIN_DEADLINE_S = 30.0
+_MAX_DEADLINE_S = 3600.0
+
+
+def _env_float(name: str, default: float, low: float, high: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("%s=%r 不是数字，忽略（用默认 %s）", name, raw, default)
+        return default
+    return min(high, max(low, value))
+
+
+def rule_llm_max_tokens() -> int:
+    """规则翻译的输出预算（``LLM_MAX_TOKENS`` 环境变量可覆盖）。"""
+    return int(_env_float("LLM_MAX_TOKENS", float(RULE_LLM_MAX_TOKENS), _MIN_MAX_TOKENS, _MAX_MAX_TOKENS))
+
+
+def rule_llm_timeout_s() -> float:
+    """规则翻译的传输超时秒数（``LLM_TIMEOUT_S`` 环境变量可覆盖）。"""
+    return _env_float("LLM_TIMEOUT_S", RULE_LLM_TIMEOUT_S, _MIN_TIMEOUT_S, _MAX_TIMEOUT_S)
+
+
+def rule_llm_deadline_s() -> float:
+    """一次规则翻译的总时间预算（``LLM_CREATE_DEADLINE_S`` 环境变量可覆盖）。"""
+    return _env_float("LLM_CREATE_DEADLINE_S", RULE_LLM_DEADLINE_S, _MIN_DEADLINE_S, _MAX_DEADLINE_S)
+
+
+def build_rule_llm_client(
+    *,
+    model: str | None = None,
+    temperature: float = RULE_LLM_TEMPERATURE,
+    fail_hard: bool = False,
+    timeout_s: float | None = None,
+) -> LLMClient:
+    """构造规则翻译用的统一客户端（temperature=0 + 长超时）。
+
+    超时必须在**构造时**给出：聊天尺度默认 30s 会让规则翻译必然超时。
+    ``timeout_s`` 显式给出时优先（修复重试只拿剩余预算，见
+    :func:`rule_llm_deadline_s`）。
+    """
+    return LLMClient(
+        model=model,
+        temperature=temperature,
+        fail_hard=fail_hard,
+        timeout_s=timeout_s if timeout_s is not None else rule_llm_timeout_s(),
+    )
 
 
 class RuleLLMClient(Protocol):
@@ -75,4 +152,17 @@ def complete_with_retry(
     return "", error
 
 
-__all__ = ["LLMClient", "LLMTranslatorError", "RULE_LLM_TEMPERATURE", "RuleLLMClient", "complete_with_retry"]
+__all__ = [
+    "LLMClient",
+    "LLMTranslatorError",
+    "RULE_LLM_DEADLINE_S",
+    "RULE_LLM_MAX_TOKENS",
+    "RULE_LLM_TEMPERATURE",
+    "RULE_LLM_TIMEOUT_S",
+    "RuleLLMClient",
+    "build_rule_llm_client",
+    "complete_with_retry",
+    "rule_llm_deadline_s",
+    "rule_llm_max_tokens",
+    "rule_llm_timeout_s",
+]

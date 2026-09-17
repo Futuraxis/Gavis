@@ -65,24 +65,38 @@ def resolve_all_chance(engine: GameEngine, state: dict) -> dict:
     return state
 
 
-def action_cell_index(action: ActionInstance, cols: int) -> int:
-    """Linear cell index of a grid action (``-1`` when unresolvable).
-
-    Prefers the materialized ``cell._index`` field, then falls back to
-    parsing the ``cell_{r}_{c}`` id; ``cols`` is the board width
-    (``constants.board_size``) used for the row-major id fallback.
-    """
-    cell = action.params.get("cell", {})
-    if not isinstance(cell, dict):
+def _cell_index_of(value: Any, cols: int) -> int:
+    """Linear cell index from one parameter value (``-1`` when unresolvable)."""
+    if not isinstance(value, dict):
         return -1
-    index = cell.get("_index")
+    index = value.get("_index")
     if isinstance(index, int) and index >= 0:
         return index
-    match = _CELL_ID_RE.match(str(cell.get("id", "")))
+    match = _CELL_ID_RE.match(str(value.get("id", "")))
     if match is None:
         return -1
     row, col = int(match.group(1)), int(match.group(2))
     return row * cols + col
+
+
+def action_cell_index(action: ActionInstance, cols: int) -> int:
+    """Linear cell index of a grid action (``-1`` when unresolvable).
+
+    Prefers the ``cell`` parameter (materialized ``_index`` field, then the
+    ``cell_{r}_{c}`` id), and otherwise scans every parameter for a cell-view
+    node: LLM-translated rules may name the placement parameter ``pos`` /
+    ``square`` / … while still binding it to the grid cell view.  Without
+    that fallback such a game is created successfully yet **every click is
+    rejected as illegal** (「创建好了玩不了」).
+    """
+    index = _cell_index_of(action.params.get("cell", {}), cols)
+    if index >= 0:
+        return index
+    for value in action.params.values():
+        index = _cell_index_of(value, cols)
+        if index >= 0:
+            return index
+    return -1
 
 
 def normalize_players(rules: dict[str, Any]) -> tuple[str, ...]:

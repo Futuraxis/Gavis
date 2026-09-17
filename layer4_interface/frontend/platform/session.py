@@ -107,6 +107,11 @@ class GameSession:
     #: 本局实际使用的随机种子（PlayManager 按 base+开局序号派生——首局等于
     #: base seed 保持既有测试确定性，第二局起牌墙不同，「再来一局」不再同牌）。
     seed: int = 42
+    #: 陪伴发言异步生成（平台开启；测试/无平台默认同步）。
+    #: 实测每次走子 16-33s **全部**花在陪伴 Agent 的 LLM 调用上（推理模型
+    #: 一次 8-15s × 每步 2 次），走子请求被拖住 → 玩家点一下等半分钟，
+    #: 体感就是「创建好了玩不了」。异步后走子立刻返回，发言由前端轮询快照收取。
+    agent_async: bool = field(default=False)
 
     def __post_init__(self) -> None:
         self.state = self.engine.create_initial_state()
@@ -226,21 +231,54 @@ class GameSession:
         """
         if self.agent is None:
             return
-        try:
-            ctx = Opponent.build(self.state, self.ai_pid, self.player_pid, self.engine, self.log)
-            msg = self.agent.reply(ctx, scenario, game_id=self.game_id)
-        except Exception:  # noqa: BLE001 — 对手通道 fail-soft
-            return
-        self.pending_chat.append(
-            {
-                "scenario": scenario,
-                "text": msg.text,
-                "mood": msg.mood,
-                "step": len(self.log),
-                "reasoning": msg.reasoning,
-                "speaker": self.speaker,
-            }
+        self.queue_agent_reply(
+            lambda: Opponent.build(self.state, self.ai_pid, self.player_pid, self.engine, self.log),
+            scenario,
         )
+
+    def queue_agent_reply(self, build_ctx: Callable[[], object], scenario: str) -> None:
+        """Queue one companion message; generate it inline or in a background thread.
+
+        ``agent_async`` (platform) → a daemon thread builds the context and calls
+        the LLM, so the move request returns immediately; the frontend picks the
+        text up by polling ``/api/match/state``.  Synchronous otherwise (tests,
+        non-platform callers) — the historical contract where a queued message
+        is present right after the call.
+        """
+        if self.agent is None:
+            return
+        if not self.agent_async:
+            entry = self._build_reply_entry(build_ctx, scenario)
+            if entry is not None:
+                self.pending_chat.append(entry)
+            return
+        threading.Thread(target=self._deliver_reply_async, args=(build_ctx, scenario), daemon=True).start()
+
+    def _deliver_reply_async(self, build_ctx: Callable[[], object], scenario: str) -> None:
+        """Background-thread delivery: build + generate, then append under the lock."""
+        entry = self._build_reply_entry(build_ctx, scenario)
+        if entry is None:
+            return
+        with self.lock:
+            self.pending_chat.append(entry)
+
+    def _build_reply_entry(self, build_ctx: Callable[[], object], scenario: str) -> dict | None:
+        """One ``pending_chat`` entry, or ``None`` when the channel fails (fail-soft)."""
+        if self.agent is None:
+            return None
+        try:
+            ctx = build_ctx()
+            msg = self.agent.reply(ctx, scenario, game_id=self.game_id)  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001 — 陪伴通道 fail-soft
+            return None
+        return {
+            "scenario": scenario,
+            "text": msg.text,
+            "mood": msg.mood,
+            "step": len(self.log),
+            "reasoning": msg.reasoning,
+            "speaker": self.speaker,
+        }
 
     def _log_entry(self, actor: str, action: ActionInstance) -> dict:
         return {
@@ -307,6 +345,7 @@ class PlayManager:
         adaptive: AdaptiveController | None = None,
         agent_factory: Callable[[str], DialogueEngine | None] | None = None,
         custom: CustomGameRegistry | None = None,
+        agent_async: bool = False,
     ) -> None:
         self._provider = provider
         self._history = history
@@ -317,6 +356,10 @@ class PlayManager:
         self._adaptive = adaptive
         self._agent_factory = agent_factory
         self._custom = custom
+        #: 陪伴发言后台生成（平台服务开启）：走子请求不再被陪伴 Agent 的
+        #: LLM 调用拖住（实测每步 16-33s），前端轮询 ``/api/match/state``
+        #: 收消息。默认关闭 → 既有同步契约（测试与非平台调用方）不变。
+        self._agent_async = agent_async
         self._sessions: dict[str, GameSession] = {}
         self._lock = threading.Lock()
         # 开局序号：每局 seed = base + 序号（首局 = base，与旧行为一致）。
@@ -423,6 +466,7 @@ class PlayManager:
             # payload 的自适应开关二选一都算自适应局。
             adaptive_active=difficulty == "adaptive" or adaptive_enabled,
             seed=seed,
+            agent_async=self._agent_async,
         )
         if self._learning is not None and self._learning.enabled(spec.game_id):
             # Wrap the solver in a recording handle and attach a
@@ -434,6 +478,12 @@ class PlayManager:
             # 通道的参考动作不被采集（防训练数据污染）。
             session.solver = self._learning.wrap_handle(session, session.solver)
         spec.resolve_start(session)
+        # 第一帧必须**在 AI 先手思考之前**推出去：流式开局原来只有「AI 每走一步
+        # 一帧」，AI 先行的棋类（或大棋盘搜索慢的对局）在第一手算完前前端拿不到
+        # 任何快照 → 对话里「玩X」说了、界面却一直调不出来（棋盘区根本不渲染）。
+        # 先推一帧空局面，界面立刻出现，AI 落子随后逐帧补上。
+        if on_progress is not None and spec.ai_opens(session):
+            on_progress(session.snapshot())
         if spec.ai_opens(session):
             session.run_ai(on_progress)
         if teaching:
@@ -474,6 +524,10 @@ class PlayManager:
             except PlayError:
                 self._say(session, "illegal")
                 raise
+            # 终局播报必须同步：会话马上从注册表移除，异步生成的收尾消息
+            # 没有人再来 drain（前端轮询会 404）。
+            if session.over:
+                session.agent_async = False
             self._chat_after_move(session)
             snapshot = session.snapshot()
             if session.over:
@@ -579,21 +633,12 @@ class PlayManager:
 
         上下文按陪伴身份分派（``_speak_ctx``）：教学→玩家投影、对手→AI
         投影、默认啦啦队→玩家投影。``pending_chat`` 条目带 ``speaker``。
+        平台（``agent_async``）在后台线程成文——走子请求立刻返回，见
+        :meth:`GameSession.queue_agent_reply`。
         """
         if session.agent is None:
             return
-        ctx = self._speak_ctx(session)
-        msg = session.agent.reply(ctx, scenario, game_id=session.game_id)
-        session.pending_chat.append(
-            {
-                "scenario": scenario,
-                "text": msg.text,
-                "mood": msg.mood,
-                "step": len(session.log),
-                "reasoning": msg.reasoning,
-                "speaker": session.speaker,
-            }
-        )
+        session.queue_agent_reply(lambda: self._speak_ctx(session), scenario)
 
     def _speak_ctx(self, session: GameSession) -> object:
         """按陪伴身份构建说话上下文（``say`` / ``_say`` / ``_chat_after_move`` 共用）.
@@ -675,8 +720,9 @@ class PlayManager:
         """
         if session.agent is None:
             return
-        ctx = Coach.build(session.state, session.player_pid, session.engine, None)
-        self._say_ctx(session, ctx, "teach_turn")
+        session.queue_agent_reply(
+            lambda: Coach.build(session.state, session.player_pid, session.engine, None), "teach_turn"
+        )
 
     def _say_ctx(self, session: GameSession, ctx: object, scenario: str) -> None:
         """Queue a message from a prebuilt context (avoid a second build).
@@ -684,26 +730,28 @@ class PlayManager:
         ``pending_chat`` 条目带 ``speaker``（与 ``_say`` / ``_queue_opp``
         对齐，前端按 speaker 渲染头像/名字）。
         """
-        msg = session.agent.reply(ctx, scenario, game_id=session.game_id)  # type: ignore[arg-type] — ctx is SkillContext
-        session.pending_chat.append(
-            {
-                "scenario": scenario,
-                "text": msg.text,
-                "mood": msg.mood,
-                "step": len(session.log),
-                "reasoning": msg.reasoning,
-                "speaker": session.speaker,
-            }
-        )
+        session.queue_agent_reply(lambda: ctx, scenario)
 
     def _pick_budget(self, spec: GameSpec, difficulty: str, pacing: str, adaptive_enabled: bool) -> int:
-        """Resolve the AI search budget (explicit tier / adaptive + pacing)."""
+        """Resolve the AI search budget (explicit tier / adaptive + pacing).
+
+        自定义游戏红线：``AdaptiveController`` 的预算表只登记内置 ``GAMES``，
+        对自定义 id 会抛 ``ValueError("未知游戏: …")``。对话开局默认
+        ``adaptive=true``（``battleConfig.ts`` 的表单初值），于是「对话里说
+        玩X」必然在开局阶段炸掉 —— 前端只看到一句「对局正在创建…」，界面
+        永远出不来（实测用户自定义的三子棋）。自适应对自定义游戏本来就没有
+        历史数据，这里回落到该 spec 自己的 normal 档，绝不因此拒绝开局。
+        """
         budgets = spec.difficulty_budgets
+        fallback = budgets.get("normal") or next(iter(budgets.values()))
         if difficulty == "adaptive" or adaptive_enabled:
             if self._adaptive is None:
-                base = budgets["normal"]
+                base = fallback
             else:
-                base = self._adaptive.pick_budget(spec.game_id, "adaptive", self._recent_matches(spec))
+                try:
+                    base = self._adaptive.pick_budget(spec.game_id, "adaptive", self._recent_matches(spec))
+                except ValueError:
+                    base = fallback
         else:
             base = budgets[difficulty]
         return max(1, int(base * pacing_scale(pacing)))

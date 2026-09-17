@@ -1429,3 +1429,131 @@ class TestPromptBuilderSanitizesExternalText:
         # x 序列 < 12000）
         assert "x" * 11_000 in content
         assert "x" * 12_000 not in content
+
+
+# ── LLM 创建游戏：接地提示词 / 预算 / 超时（「等半天没见游戏」根因）─────
+
+
+class TestGroundedFromScratchPrompt:
+    """从零翻译的系统提示必须带上 v5 方言说明 + 一份可运行参考示例.
+
+    没有这两样，模型自创方言（effects/phase 顶层键、hasFour(...) 伪函数），
+    产物永远过不了 engine_validator —— 用户等几分钟只拿到「规则校验未通过」。
+    """
+
+    def _messages(self):
+        from layer1_translator.prompt_builder import RulePromptBuilder
+
+        return RulePromptBuilder().build_initial_messages(
+            TranslateRequest(rule_text="8x8 棋盘，四子连珠获胜", game_name="四子棋")
+        )
+
+    def test_system_prompt_carries_dialect_guide(self) -> None:
+        system = self._messages()[0]["content"]
+        assert "Gavis v5 规则方言" in system
+        assert "effectRef" in system and "effectors" in system
+        assert "禁止使用示例里没出现过的函数名" in system
+
+    def test_system_prompt_carries_reference_example(self) -> None:
+        system = self._messages()[0]["content"]
+        assert '"gameId": "stochastic_gomoku"' in system
+        assert '"empty_cells"' in system  # 示例里的 queries 形状照搬可用
+
+    def test_user_message_still_index_one_and_carries_rule_text(self) -> None:
+        messages = self._messages()
+        assert len(messages) == 2
+        assert messages[1]["role"] == "user"
+        assert "8x8 棋盘" in messages[1]["content"]
+
+    def test_missing_reference_file_degrades_to_guide_only(self, tmp_path) -> None:
+        from layer1_translator.prompt_builder import RulePromptBuilder
+
+        builder = RulePromptBuilder(rules_dir=tmp_path)
+        assert builder.reference_example() is None
+        system = builder.build_initial_messages(TranslateRequest(rule_text="x"))[0]["content"]
+        assert "Gavis v5 规则方言" in system
+        assert '"gameId": "stochastic_gomoku"' not in system  # 无示例可挂时不假装有
+
+    def test_repair_prompt_keeps_grounding(self) -> None:
+        from layer1_translator.prompt_builder import RulePromptBuilder
+
+        builder = RulePromptBuilder()
+        messages = builder.build_repair_messages(
+            TranslateRequest(rule_text="x"), {"meta": {}}, ValidationResult(valid=False, errors=["缺字段"])
+        )
+        assert '"gameId": "stochastic_gomoku"' in messages[0]["content"]
+        assert "缺字段" in messages[1]["content"]
+
+
+class TestRuleLlmBudgetAndTimeout:
+    """规则翻译的输出预算/超时必须是「翻译尺度」而不是聊天尺度."""
+
+    def test_defaults_are_reasoning_model_sized(self) -> None:
+        from layer1_translator.local_client import (
+            RULE_LLM_MAX_TOKENS,
+            RULE_LLM_TIMEOUT_S,
+            rule_llm_max_tokens,
+            rule_llm_timeout_s,
+        )
+
+        assert RULE_LLM_MAX_TOKENS == 32768  # 8192 会被思维链吃光 → 正文为空
+        assert RULE_LLM_TIMEOUT_S == 300.0  # 默认 30s 对推理模型必然超时
+        assert rule_llm_max_tokens() == RULE_LLM_MAX_TOKENS
+        assert rule_llm_timeout_s() == RULE_LLM_TIMEOUT_S
+
+    def test_env_overrides_and_clamps(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from layer1_translator.local_client import rule_llm_max_tokens, rule_llm_timeout_s
+
+        monkeypatch.setenv("LLM_MAX_TOKENS", "65536")
+        monkeypatch.setenv("LLM_TIMEOUT_S", "600")
+        assert rule_llm_max_tokens() == 65536
+        assert rule_llm_timeout_s() == 600.0
+        monkeypatch.setenv("LLM_MAX_TOKENS", "1")  # 低于下限 → 夹到下限
+        monkeypatch.setenv("LLM_TIMEOUT_S", "not-a-number")  # 坏值 → 默认
+        assert rule_llm_max_tokens() == 1024
+        assert rule_llm_timeout_s() == 300.0
+
+    def test_default_client_gets_translation_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """默认客户端必须带长超时（30s 的聊天默认会让翻译必然失败）。"""
+        from layer1_translator.local_client import RULE_LLM_TIMEOUT_S
+        from layer1_translator.prompt_builder import RulePromptBuilder
+        from layer2_engine.core.llm import LLMClient
+
+        captured: dict = {}
+        real_init = LLMClient.__init__
+
+        def fake_init(self: LLMClient, *args: object, **kwargs: object) -> None:
+            captured["timeout_s"] = kwargs.get("timeout_s")
+            real_init(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        def fake_complete(self: LLMClient, messages: list, max_tokens: int | None = None) -> str:  # noqa: ANN001
+            captured["max_tokens"] = max_tokens
+            return ""
+
+        monkeypatch.setattr(LLMClient, "__init__", fake_init)
+        monkeypatch.setattr(LLMClient, "complete", fake_complete)
+        LLMRuleTranslator(
+            llm_model="qwen3:8b", run_engine_validation=False, prompt_builder=RulePromptBuilder()
+        ).translate(TranslateRequest(rule_text="9x9 五子棋"))
+        # 首次调用拿满剩余总预算（只差一个计时误差），总之不是聊天尺度的 30s
+        assert RULE_LLM_TIMEOUT_S - 5 <= captured["timeout_s"] <= RULE_LLM_TIMEOUT_S
+        assert captured["max_tokens"] == 32768
+
+    def test_repair_retry_skipped_when_deadline_exhausted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """总预算用尽 → 不再发起修复重试（用户不被拖到十几分钟）。"""
+        import time
+
+        calls: list[int] = []
+
+        class SlowInvalidClient:
+            def complete(self, messages, max_tokens=None):  # noqa: ANN001
+                calls.append(1)
+                time.sleep(0.2)
+                return json.dumps({"meta": {}})  # 校验必失败 → 本来会进修复重试
+
+        monkeypatch.setattr("layer1_translator.llm_translator.rule_llm_deadline_s", lambda: 1.0)
+        response = LLMRuleTranslator(SlowInvalidClient(), run_engine_validation=False).translate(
+            TranslateRequest(rule_text="随便什么规则")
+        )
+        assert calls == [1], "预算耗尽后不得再发起第二次 LLM 调用"
+        assert any("总预算" in warning for warning in response.validation.warnings)

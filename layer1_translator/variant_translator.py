@@ -33,11 +33,21 @@ import copy
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
 from .engine_validator import EngineValidator
-from .local_client import RULE_LLM_TEMPERATURE, LLMClient, LLMTranslatorError, RuleLLMClient, complete_with_retry
+from .local_client import (
+    RULE_LLM_TEMPERATURE,
+    LLMTranslatorError,
+    RuleLLMClient,
+    build_rule_llm_client,
+    complete_with_retry,
+    rule_llm_deadline_s,
+    rule_llm_max_tokens,
+    rule_llm_timeout_s,
+)
 from .prompt_builder import CONTROL_CHARS_RE, sanitize_rule_text
 from .protocol import TranslateResponse, ValidationResult
 from .rule_parser import ALIASES, TEMPLATE_FILES, RuleParser
@@ -48,7 +58,6 @@ logger = logging.getLogger(__name__)
 
 _RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
 _MAX_LLM_REPLY_LEN = 512_000
-_MAX_LLM_TOKENS = 8192
 # LLM 路径的模板尺寸护栏（字符）：超过即跳过 LLM 改写 —— 回复装不下完整
 # rules JSON 的模板注定解析失败（见 _try_llm 的 T3 注释）。
 _MAX_LLM_TEMPLATE_CHARS = 40_000
@@ -490,6 +499,9 @@ class VariantTranslator:
         template = self._load_template(template_id)
         template_size = len(json.dumps(template, ensure_ascii=False))
         use_patch = self.patch_mode if self.patch_mode is not None else template_size > _MAX_LLM_TEMPLATE_CHARS
+        # 总预算共享给补丁 / 全量改写两条 LLM 路径：端点抽风时用户不该等上
+        # 十几分钟（见 local_client.rule_llm_deadline_s）。
+        deadline_at = time.monotonic() + rule_llm_deadline_s()
         if use_patch:
             response, pw, pe = self._try_llm_patch(
                 template_id,
@@ -499,6 +511,7 @@ class VariantTranslator:
                 game_name=game_name,
                 llm_client=llm_client,
                 llm_model=llm_model,
+                deadline_at=deadline_at,
             )
             if response is not None:
                 return response, pw, pe
@@ -518,6 +531,23 @@ class VariantTranslator:
             llm_client=llm_client,
             llm_model=llm_model,
             template_size=template_size,
+            deadline_at=deadline_at,
+        )
+
+    def _budgeted_client(
+        self,
+        llm_client: RuleLLMClient | None,
+        llm_model: str | None,
+        remaining_s: float,
+    ) -> RuleLLMClient:
+        """注入的客户端原样返回；否则按剩余总预算构造默认客户端。"""
+        if llm_client is not None:
+            return llm_client
+        return build_rule_llm_client(
+            model=llm_model,
+            temperature=RULE_LLM_TEMPERATURE,
+            fail_hard=self.strict_llm,
+            timeout_s=min(rule_llm_timeout_s(), max(1.0, remaining_s)),
         )
 
     def _try_llm_rewrite(
@@ -531,14 +561,14 @@ class VariantTranslator:
         llm_client: RuleLLMClient | None,
         llm_model: str | None,
         template_size: int,
+        deadline_at: float,
     ) -> tuple[TranslateResponse | None, list[str], list[str]]:
         """Full-rewrite LLM path: the model reproduces the complete rules JSON."""
         warnings: list[str] = []
         errors: list[str] = []
         # T3 护栏：巨型模板（如 mahjong ≈87k 字符 ≈29k tokens）要求 LLM
-        # 原样复述改写后的完整 rules JSON，而回复上限 _MAX_LLM_TOKENS=8192
-        # —— 必然截断 → JSON 解析必然失败 → 白烧 LLM 调用与修复重试后
-        # 仍回退确定性路径。
+        # 原样复述改写后的完整 rules JSON —— 回复装不下就必然截断 →
+        # JSON 解析必然失败 → 白烧 LLM 调用与修复重试后仍回退确定性路径。
         if template_size > _MAX_LLM_TEMPLATE_CHARS:
             warnings.append(
                 f"基础模板 {template_id} 过大（{template_size} 字符 > {_MAX_LLM_TEMPLATE_CHARS}），"
@@ -548,16 +578,21 @@ class VariantTranslator:
         # P2-22 修复：规则翻译必须确定性 —— 默认客户端固定 temperature=0。
         # strict_llm=True 时默认客户端 fail_hard：API 错误/传输失败抛
         # LLMClientError，由 complete_with_retry 捕获并带真实原因上报。
-        client = llm_client or LLMClient(model=llm_model, temperature=RULE_LLM_TEMPERATURE, fail_hard=self.strict_llm)
+        # 超时按翻译尺度给（默认 30s 对推理模型必然超时，见 local_client）。
         messages = self._build_messages(
             template_id, change_text, template, source_lang=source_lang, game_name=game_name
         )
         attempts = self.max_repair_attempts + 1
         last_validation = ValidationResult(valid=False, errors=["LLM 未返回可验证的 rules JSON"])
         for attempt in range(attempts):
+            remaining = deadline_at - time.monotonic()
+            if attempt > 0 and remaining <= 1.0:
+                warnings.append("LLM 修复重试超出总预算，改用确定性变体翻译")
+                return None, warnings, errors
+            client = self._budgeted_client(llm_client, llm_model, remaining)
             # P2-23 修复：传输失败/空回复先立即重试一次（冷启动 Ollama 的
             # 典型形态），持久失败才回退确定性路径；"校验失败"仍进修复循环。
-            raw, transport_error = complete_with_retry(client, messages, _MAX_LLM_TOKENS)
+            raw, transport_error = complete_with_retry(client, messages, rule_llm_max_tokens())
             if transport_error is not None:
                 errors.append(f"LLM 生成失败: {type(transport_error).__name__}: {transport_error}")
                 warnings.append("LLM 生成失败（已重试），尝试确定性变体翻译")
@@ -614,6 +649,7 @@ class VariantTranslator:
         game_name: str | None,
         llm_client: RuleLLMClient | None,
         llm_model: str | None,
+        deadline_at: float,
     ) -> tuple[TranslateResponse | None, list[str], list[str]]:
         """Incremental-patch LLM path: the model emits ``{"patch": [...]}`` ops.
 
@@ -627,14 +663,18 @@ class VariantTranslator:
         errors: list[str] = []
         # P2-22 修复：规则翻译必须确定性 —— 默认客户端固定 temperature=0。
         # strict_llm=True → fail_hard（见 _try_llm_rewrite 注释）。
-        client = llm_client or LLMClient(model=llm_model, temperature=RULE_LLM_TEMPERATURE, fail_hard=self.strict_llm)
         messages = self._build_patch_messages(
             template_id, change_text, template, source_lang=source_lang, game_name=game_name
         )
         attempts = self.max_repair_attempts + 1
         last_validation = ValidationResult(valid=False, errors=["LLM 未返回可应用补丁"])
         for attempt in range(attempts):
-            raw, transport_error = complete_with_retry(client, messages, _MAX_LLM_TOKENS)
+            remaining = deadline_at - time.monotonic()
+            if attempt > 0 and remaining <= 1.0:
+                warnings.append("LLM 补丁修复重试超出总预算，改用确定性变体翻译")
+                return None, warnings, errors
+            client = self._budgeted_client(llm_client, llm_model, remaining)
+            raw, transport_error = complete_with_retry(client, messages, rule_llm_max_tokens())
             if transport_error is not None:
                 errors.append(f"LLM 生成失败: {type(transport_error).__name__}: {transport_error}")
                 warnings.append("LLM 生成失败（已重试），尝试确定性变体翻译")

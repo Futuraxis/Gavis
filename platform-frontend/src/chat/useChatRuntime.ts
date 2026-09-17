@@ -3,7 +3,8 @@
 // 主路径：POST /api/chat（后端 LLM function calling + schema 校验 + 正则兜底）
 // 返回 {intent, text, mood, params}；本 Hook 把意图翻译成平台动作：
 // play→开局配置卡、resume/move/restart→对局快照、history/review→战绩/复盘卡、
-// create→创建面板、benchmark/learning→进度卡、platform/settings→切回平台界面。
+// create→创建面板、benchmark/learning→进度卡、settings→对话里回执并写档案
+// （只有 params.open_page 才切到设置页）、platform→切回平台界面。
 //
 // 快速落子红线：棋盘/牌面点击直接走 /match/move，**不经 LLM**——LLM 只处理
 // 文本表达的动作（碰/跟注/打五条等），点击永远是即时快路径。
@@ -24,6 +25,10 @@ import {
   getConversation,
   listConversations,
   matchHint,
+  matchMoveStream,
+  matchStartStream,
+  matchStreamOrFallback,
+  patchProfile,
   updateConversation,
 } from '../api/client'
 import type {
@@ -32,6 +37,7 @@ import type {
   ConversationMeta,
   GameInfo,
   MatchMeta,
+  Profile,
   ReviewReport,
   Snapshot,
 } from '../types'
@@ -41,6 +47,7 @@ import { classifyLocal } from './intents'
 import { battleConfigFor } from './battleConfig'
 import { readConversationMirror, writeConversationMirror } from './conversationMirror'
 import { loadChatStore, openPlatform, saveChatStore } from './sessionStore'
+import { setStoredTheme } from '../settings'
 
 export interface StatsData {
   matches: MatchMeta[]
@@ -308,6 +315,39 @@ export function useChatRuntime(): ChatRuntime {
     [],
   )
 
+  /**
+   * 流式进度帧的统一落地：逐帧刷棋盘 + 落教练/陪伴增量消息。
+   *
+   * 服务端每推一帧就调一次（人类行动落地即一帧、AI 每走一步一帧）。
+   * ``snapshot()`` 里的 ``chat`` 是**已被服务端 drain 过的增量**，所以逐帧
+   * 落消息不会重复；棋盘则整体替换为最新玩家投影。
+   */
+  const applySnapshot = useCallback(
+    (snap: Snapshot) => {
+      setActiveSession(snap)
+      _drainSnapshot(snap)
+    },
+    [_drainSnapshot],
+  )
+
+  // 陪伴 Agent 发言在服务端后台生成（走子请求不再被 LLM 拖住：实测每步
+  // 16-33s 全花在陪伴成文上）。这里轮询权威快照把新发言收进对话流——
+  // 否则异步生成的消息永远没人取。busy 期间跳过，避免旧快照覆盖走子结果。
+  useEffect(() => {
+    if (!activeSession || activeSession.over) return
+    const sessionId = activeSession.game_id
+    const timer = window.setInterval(() => {
+      if (busyRef.current) return
+      apiPost<{ session: Snapshot }>('/match/state', { game_id: sessionId })
+        .then((d) => {
+          setActiveSession(d.session)
+          _drainSnapshot(d.session)
+        })
+        .catch(() => {})
+    }, 2500)
+    return () => window.clearInterval(timer)
+  }, [activeSession?.game_id, activeSession?.over, _drainSnapshot])
+
   const refreshSession = useCallback(async (gameId: string): Promise<void> => {
     const d = await apiPost<{ session: Snapshot }>('/match/state', { game_id: gameId })
     setActiveSession(d.session)
@@ -327,7 +367,7 @@ export function useChatRuntime(): ChatRuntime {
       setBusyState(true)
       setError(null)
       try {
-        const data = await apiPost<{ session: Snapshot }>('/match/start', {
+        const body = {
           game_id: gameId,
           player_pid: config.playerPid,
           difficulty: config.difficulty,
@@ -338,12 +378,23 @@ export function useChatRuntime(): ChatRuntime {
           pacing: config.pacing,
           adaptive: config.adaptive,
           teaching: config.teaching,
-        })
+        }
+        // 流式开局（全游戏通用）：AI 先行的对局（卧底/狼人杀开局若干 AI
+        // 发言、麻将 AI 先手、棋类 AI 先行）在开局期间逐帧推玩家投影，
+        // 前端实时上屏，不再等服务端把整段 AI 开场跑完才一次性看到。
+        const data = await matchStreamOrFallback(
+          (h) => matchStartStream(body, h),
+          () => apiPost<{ session: Snapshot }>('/match/start', body),
+          applySnapshot,
+        )
         setActiveSession(data.session)
         _drainSnapshot(data.session)
-        setActiveGameId(gameId)
+        // 存的必须是**会话 id**（`snapshot.game_id` = /match/state 的会话键），
+        // 不是游戏 id：原先存 gameId，刷新后按它去 /match/state 会 400，
+        // 用户以为「刚创建的游戏一刷新就没了/玩不了」。
+        setActiveGameId(data.session.game_id)
         // 新局默认看得见：把「专心对话」的收起状态置回展开（ChatPage 跟随重读）。
-        saveChatStore({ activeGameId: gameId, boardCollapsed: false })
+        saveChatStore({ activeGameId: data.session.game_id, boardCollapsed: false })
         const name = gamesRef.current.find((g) => g.game_id === gameId)?.display_name ?? gameId
         const teach = data.session.teaching ? '教学局：教练看得到你的牌，边打边讲。' : ''
         pushAgent(
@@ -366,11 +417,16 @@ export function useChatRuntime(): ChatRuntime {
       if (busyRef.current || !activeSession?.game_id) return
       setBusyState(true)
       setError(null)
+      const gameId = activeSession.game_id
       try {
-        const data = await apiPost<{ session: Snapshot }>('/match/move', {
-          game_id: activeSession.game_id,
-          action,
-        })
+        // 流式走子（全游戏通用）：人类行动落地即推一帧（落子/发言/出牌立刻
+        // 上屏），之后 AI 每走一步再推一帧——社交逐条发言、棋盘逐手落子，
+        // 「轮不到自己」的等待期里界面持续在动，而不是整轮跑完才刷新一次。
+        const data = await matchStreamOrFallback(
+          (h) => matchMoveStream(gameId, action, h),
+          () => apiPost<{ session: Snapshot }>('/match/move', { game_id: gameId, action }),
+          applySnapshot,
+        )
         setActiveSession(data.session)
         _drainSnapshot(data.session) // 教练讲评（teach_move）与导读（teach_turn）
         if (!data.session.over) setActiveGameId(data.session.game_id)
@@ -432,11 +488,13 @@ export function useChatRuntime(): ChatRuntime {
           // 直接快路径落子（外层 send 已置 busy，moveAction 自身的守卫会误拦，
           // 因此文本意图落子在这里直连 /match/move）。
           if (activeSession && !activeSession.over) {
+            const gameId = activeSession.game_id
             try {
-              const data = await apiPost<{ session: Snapshot }>('/match/move', {
-                game_id: activeSession.game_id,
-                action: params.action,
-              })
+              const data = await matchStreamOrFallback(
+                (h) => matchMoveStream(gameId, params.action, h),
+                () => apiPost<{ session: Snapshot }>('/match/move', { game_id: gameId, action: params.action }),
+                applySnapshot,
+              )
               setActiveSession(data.session)
               _drainSnapshot(data.session)
               if (!data.session.over) setActiveGameId(data.session.game_id)
@@ -539,11 +597,26 @@ export function useChatRuntime(): ChatRuntime {
           window.location.hash = '#/create'
           break
         }
-        case 'settings':
-          openPlatform()
-          window.location.hash = '#/settings'
+        case 'settings': {
+          // 对话里改偏好（"换成高冷竞技"）：先把话说清并回执，再把后端已按
+          // 白名单校验过的变更写进档案。**只有**用户明说"打开设置页"才切页
+          // —— 旧实现无论哪种情况都直接把页面甩到 #/settings 并吞掉回复
+          // （问题没答、设置一个没改、草稿永远停在 pending）。
+          const applied = params.applied as Partial<Profile> | undefined
+          pushAgent(text, mood, 'settings', params)
+          if (applied && Object.keys(applied).length > 0) {
+            if (applied.theme === 'light' || applied.theme === 'dark') setStoredTheme(applied.theme)
+            patchProfile(applied).catch((err) => setError(`设置没能写进档案：${(err as Error).message}`))
+          }
+          if (params.open_page === true) {
+            openPlatform()
+            window.location.hash = '#/settings'
+          }
           break
+        }
         case 'platform':
+          // 同样先落消息（旧实现只切界面，不留话）。
+          pushAgent(text, mood, 'platform', params)
           openPlatform()
           break
         case 'benchmark': {
@@ -581,7 +654,7 @@ export function useChatRuntime(): ChatRuntime {
           break
       }
     },
-    [activeSession, fetchStats, pushAgent, refreshGames, refreshSession, startSession],
+    [activeSession, applySnapshot, fetchStats, pushAgent, refreshGames, refreshSession, startSession],
   )
 
   const send = useCallback(

@@ -66,12 +66,18 @@ export default function BattlePage() {
   // 非法落子就地提示: 服务端拒绝后在对应格子上短暂闪烁, 随后自动清除
   const [invalidCell, setInvalidCell] = useState<number | null>(null)
   const invalidTimer = useRef<number | null>(null)
+  // busy 的 ref 镜像：轮询回调（定时器闭包）需要读最新值，state 闭包会过期。
+  const busyRef = useRef(false)
   const [muted, setMuted] = useState<boolean>(() => getStoredMuted())
   const navigate = useNavigate()
 
   const game = games.find((g) => g.game_id === gameId)
   const activeId = searchParams.get('game')
   const lastAgentMood: Mood | undefined = [...chat].reverse().find((m) => m.role === 'agent')?.mood
+
+  useEffect(() => {
+    busyRef.current = busy
+  }, [busy])
 
   useEffect(() => {
     apiGet<{ games: GameInfo[] }>('/games')
@@ -93,6 +99,25 @@ export default function BattlePage() {
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, session, setSearchParams])
+
+  // 陪伴 Agent 的发言在服务端**后台线程**生成（走子不再被 LLM 拖住：实测
+  // 每步 16-33s 的等待全花在陪伴成文上）。所以这里轮询权威快照把新发言收
+  // 进来——不轮询的话，异步生成的台词永远没人取，聊天区一直空着。
+  // busy 期间不轮询：走子请求自己会带回快照，避免旧快照覆盖新状态。
+  useEffect(() => {
+    if (!session || session.over) return
+    const sessionId = session.game_id
+    const timer = window.setInterval(() => {
+      if (busyRef.current) return
+      apiPost<{ session: Snapshot }>('/match/state', { game_id: sessionId })
+        .then((data) => {
+          setSession(data.session)
+          drainChat(data.session)
+        })
+        .catch(() => {})
+    }, 2500)
+    return () => window.clearInterval(timer)
+  }, [session?.game_id, session?.over])
 
   function pushAgent(text: string, mood: Mood) {
     setChat((prev) => [...prev, { id: uid(), role: 'agent', text, mood, ts: Date.now() }])
